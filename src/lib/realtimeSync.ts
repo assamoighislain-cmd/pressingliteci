@@ -25,6 +25,7 @@ let platformChannel: RealtimeChannel | null = null;
 let crossTabBc: BroadcastChannel | null = null;
 let engineInitialized = false;
 let lastBroadcastSentAt: Record<string, number> = {};
+let lastConnectParams: { tenantId: string | null; isSuperAdmin: boolean; userId: string | null } | null = null;
 
 function scheduleEmit(tables: string[]): void {
   for (const t of tables) pendingTables.add(t);
@@ -135,10 +136,17 @@ function ensureGlobalEngineInitialized(): void {
     // Ignore
   }
 
-  // Silent background refresh when user returns to tab or network reconnects
+  // Silent background refresh & WebSocket reconnect when network returns; pause sockets when offline
   window.addEventListener('online', () => {
+    if (lastConnectParams?.userId) {
+      connectRealtimeSync(lastConnectParams);
+    }
     invalidateAllCacheFreshness();
     scheduleEmit(['*']);
+  });
+
+  window.addEventListener('offline', () => {
+    disconnectRealtimeSync();
   });
 
   document.addEventListener('visibilitychange', () => {
@@ -171,10 +179,16 @@ export function connectRealtimeSync(params: {
   userId: string | null;
 }): () => void {
   ensureGlobalEngineInitialized();
+  lastConnectParams = params;
 
   const { tenantId, isSuperAdmin, userId } = params;
   if (!userId) {
     disconnectRealtimeSync();
+    return () => {};
+  }
+
+  // Do not open WebSocket retry loops while offline — cross-tab BroadcastChannel & local events still work!
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
     return () => {};
   }
 

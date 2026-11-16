@@ -215,3 +215,41 @@ self.addEventListener('message', (event) => {
     event.waitUntil(runSwQueueSync());
   }
 });
+
+// Unified Web Push Notification Handlers (integrated into Workbox SW so root scope '/' is never hijacked)
+self.addEventListener('push', (event) => {
+  let data = {};
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch {
+    data = { title: 'Notification', body: event.data && event.data.text ? event.data.text() : '' };
+  }
+
+  const title = data.title || 'PressingLite';
+  const options = {
+    body: data.body || '',
+    icon: '/pwa-192x192.png',
+    badge: '/pwa-192x192.png',
+    data: data.data || {},
+  };
+
+  event.waitUntil(self.registration.showNotification(title, options));
+
+  self.clients.matchAll({ type: 'window' }).then((clients) => {
+    clients.forEach((c) => c.postMessage({ type: 'PLAY_NOTIFICATION_SOUND' }));
+  });
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window' }).then((clients) => {
+      if (clients.length > 0) {
+        clients[0].focus();
+      } else {
+        self.clients.openWindow('/');
+      }
+    }),
+  );
+});
+

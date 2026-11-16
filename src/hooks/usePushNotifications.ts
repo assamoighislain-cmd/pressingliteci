@@ -51,15 +51,19 @@ export function usePushNotifications() {
     if (subscribedRef.current) return;
 
     async function subscribeToPush() {
-      if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+      if (typeof navigator === 'undefined' || !navigator.onLine) return;
+      if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return;
 
       try {
-        const permission = await Notification.requestPermission();
+        const permission =
+          Notification.permission === 'default'
+            ? await Notification.requestPermission()
+            : Notification.permission;
         if (permission !== 'granted') return;
 
-        // Register a dedicated push service worker (not the self-unregistering one)
-        const reg = await navigator.serviceWorker.register('/push-sw.js');
-        await navigator.serviceWorker.ready;
+        // IMPORTANT: Use the active Workbox PWA Service Worker (which imports bg-sync-sw.js).
+        // Never register a separate SW at scope '/' or it will evict Workbox offline caching!
+        const reg = await navigator.serviceWorker.ready;
         let subscription = await reg.pushManager.getSubscription();
 
         if (!subscription) {
@@ -93,7 +97,15 @@ export function usePushNotifications() {
       }
     }
 
-    subscribeToPush();
+    void subscribeToPush();
+
+    const handleOnline = () => {
+      if (!subscribedRef.current) {
+        void subscribeToPush();
+      }
+    };
+    window.addEventListener('online', handleOnline);
+    return () => window.removeEventListener('online', handleOnline);
   }, [pushTenantId]);
 
   // Listen for messages from service worker to play sound when push arrives

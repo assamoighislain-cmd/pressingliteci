@@ -30,9 +30,9 @@ import { useAuth } from '@/lib/auth';
 import { useI18n } from '@/lib/i18n';
 import { supabase } from '@/lib/supabase';
 import { setCurrentBoutiqueId, db } from '@/lib/db';
-import { isLikelyNetworkError } from '@/lib/readCache';
 import { connectRealtimeSync } from '@/lib/realtimeSync';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
+import { useOfflineStatus } from '@/hooks/useOfflineStatus';
 import { Loader2, Clock, LogOut, ShieldAlert, ShieldCheck } from 'lucide-react';
 
 type LicenceInfo = { statut: string; date_fin: string; type_licence: string };
@@ -86,8 +86,9 @@ function updateMetaTags(entreprise: { nom?: string; logo_url?: string | null } |
   }
 }
 
-function App() {
+function WorkspaceApp() {
   const { user, loading, membershipLoading, tenantId, isSuperAdmin, signOut, currentBoutique } = useAuth();
+  const { isOnline } = useOfflineStatus();
   const { t, lang } = useI18n();
   const [view, setViewRaw] = useState<View>(() => getInitialViewFromShortcut());
   const setView = (v: View) => {
@@ -95,16 +96,10 @@ function App() {
     window.scrollTo({ top: 0 });
   };
 
-  const [licenceStatus, setLicenceStatus] = useState<null | LicenceInfo | undefined>(undefined);
+  const [licenceStatus, setLicenceStatus] = useState<null | LicenceInfo | undefined>(() =>
+    tenantId ? readCachedLicence(tenantId) : undefined,
+  );
   const [entrepriseStatut, setEntrepriseStatut] = useState<string | null | undefined>(undefined);
-
-  // Client portal mode: URL like #/portal/3
-  const portalMatch = window.location.hash.match(/^#\/portal\/(\d+)$/);
-  const portalEntrepriseId = portalMatch ? parseInt(portalMatch[1]) : null;
-
-  if (portalEntrepriseId !== null) {
-    return <ClientPortal entrepriseId={portalEntrepriseId} />;
-  }
 
   useEffect(() => {
     if (isSuperAdmin && view === 'dashboard') {
@@ -114,18 +109,25 @@ function App() {
 
   const refreshEntrepriseAndLicenceSilently = () => {
     if (!user || !tenantId || isSuperAdmin) return;
-    db.getEntreprise().then((ent) => {
-      updateMetaTags(ent);
-      setEntrepriseStatut(ent?.statut ?? null);
-    });
+    db.getEntreprise()
+      .then((ent) => {
+        updateMetaTags(ent);
+        if (ent?.statut) setEntrepriseStatut(ent.statut);
+      })
+      .catch(() => {});
+
     if (typeof navigator !== 'undefined' && !navigator.onLine) return;
-    supabase.rpc('get_licence_status').then(({ data, error }) => {
-      if (error) return;
-      const rows = data as LicenceInfo[] | null;
-      const resolved = rows && rows.length > 0 ? rows[0] : null;
-      writeCachedLicence(tenantId, resolved);
-      setLicenceStatus(resolved);
-    });
+    supabase
+      .rpc('get_licence_status')
+      .then(({ data, error }) => {
+        // Never lock out on RPC/network/JWT errors — only update when server returns a valid response
+        if (error) return;
+        const rows = data as LicenceInfo[] | null;
+        const resolved = rows && rows.length > 0 ? rows[0] : null;
+        writeCachedLicence(tenantId, resolved);
+        setLicenceStatus(resolved);
+      })
+      .catch(() => {});
   };
 
   useEffect(() => {
@@ -140,10 +142,12 @@ function App() {
 
   useEffect(() => {
     if (user && tenantId && !isSuperAdmin) {
-      db.getEntreprise().then((ent) => {
-        updateMetaTags(ent);
-        setEntrepriseStatut(ent?.statut ?? null);
-      });
+      db.getEntreprise()
+        .then((ent) => {
+          updateMetaTags(ent);
+          setEntrepriseStatut(ent?.statut ?? null);
+        })
+        .catch(() => {});
     } else {
       updateMetaTags(null);
       setEntrepriseStatut(undefined);
@@ -159,21 +163,22 @@ function App() {
         return;
       }
 
-      supabase.rpc('get_licence_status').then(({ data, error }) => {
-        if (error) {
-          if (isLikelyNetworkError(error)) {
+      supabase
+        .rpc('get_licence_status')
+        .then(({ data, error }) => {
+          if (error) {
+            // Never set licenceStatus=null on error (e.g. offline, captive portal, expired JWT before refresh)
             setLicenceStatus(cachedLic !== undefined ? cachedLic : undefined);
             return;
           }
-          console.warn('get_licence_status:', error.message);
-          setLicenceStatus(cachedLic ?? null);
-        } else {
           const rows = data as LicenceInfo[] | null;
           const resolved = rows && rows.length > 0 ? rows[0] : null;
           writeCachedLicence(tenantId, resolved);
           setLicenceStatus(resolved);
-        }
-      });
+        })
+        .catch(() => {
+          setLicenceStatus(cachedLic !== undefined ? cachedLic : undefined);
+        });
     }
   }, [user, tenantId, isSuperAdmin]);
 
@@ -214,15 +219,17 @@ function App() {
               ? "Votre compte a été créé. Un administrateur de l'entreprise doit vous ajouter à son équipe pour que vous puissiez accéder aux données."
               : 'Your account has been created. A company administrator must add you to their team before you can access the data.'}
           </p>
-          <button
-            onClick={() => window.location.reload()}
-            className="mt-6 px-4 py-2.5 rounded-lg bg-sky-500 text-white text-sm font-medium hover:bg-sky-600 transition-colors"
-          >
-            {lang === 'fr' ? 'Recharger' : 'Reload'}
-          </button>
+          {isOnline && (
+            <button
+              onClick={() => window.location.reload()}
+              className="mt-6 px-4 py-2.5 rounded-lg bg-sky-500 text-white text-sm font-medium hover:bg-sky-600 transition-colors"
+            >
+              {lang === 'fr' ? 'Actualiser' : 'Refresh'}
+            </button>
+          )}
           <button
             onClick={() => signOut()}
-            className="mt-3 px-4 py-2.5 rounded-lg bg-red-50 border border-red-100 text-red-600 text-sm font-medium hover:bg-red-100 transition-colors flex items-center justify-center gap-2"
+            className="mt-3 mx-auto px-4 py-2.5 rounded-lg bg-red-50 border border-red-100 text-red-600 text-sm font-medium hover:bg-red-100 transition-colors flex items-center justify-center gap-2"
           >
             <LogOut className="w-4 h-4" />
             {t('nav.logout')}
@@ -246,15 +253,17 @@ function App() {
               ? "Votre entreprise a été créée. Un administrateur de la plateforme doit valider votre compte avant que vous puissiez accéder au logiciel. Vous recevrez un email dès que votre compte sera activé."
               : 'Your company has been created. A platform administrator must validate your account before you can access the software. You will receive an email once your account is activated.'}
           </p>
-          <button
-            onClick={() => window.location.reload()}
-            className="mt-6 px-4 py-2.5 rounded-lg bg-sky-500 text-white text-sm font-medium hover:bg-sky-600 transition-colors"
-          >
-            {lang === 'fr' ? 'Recharger' : 'Reload'}
-          </button>
+          {isOnline && (
+            <button
+              onClick={() => refreshEntrepriseAndLicenceSilently()}
+              className="mt-6 px-4 py-2.5 rounded-lg bg-sky-500 text-white text-sm font-medium hover:bg-sky-600 transition-colors"
+            >
+              {lang === 'fr' ? 'Vérifier le statut' : 'Check status'}
+            </button>
+          )}
           <button
             onClick={() => signOut()}
-            className="mt-3 px-4 py-2.5 rounded-lg bg-red-50 border border-red-100 text-red-600 text-sm font-medium hover:bg-red-100 transition-colors flex items-center justify-center gap-2"
+            className="mt-3 mx-auto px-4 py-2.5 rounded-lg bg-red-50 border border-red-100 text-red-600 text-sm font-medium hover:bg-red-100 transition-colors flex items-center justify-center gap-2"
           >
             <LogOut className="w-4 h-4" />
             {t('nav.logout')}
@@ -264,8 +273,8 @@ function App() {
     );
   }
 
-  // Licence check: block access if no active licence (not for super admin, not while loading or offline)
-  if (!isSuperAdmin && licenceStatus === null) {
+  // Licence check: block access ONLY when online and confirmed expired/revoked (never block offline work!)
+  if (!isSuperAdmin && isOnline && licenceStatus === null) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center px-4">
         <div className="max-w-md text-center">
@@ -280,7 +289,7 @@ function App() {
           </p>
           <button
             onClick={() => signOut()}
-            className="mt-6 px-4 py-2.5 rounded-lg bg-red-50 border border-red-100 text-red-600 text-sm font-medium hover:bg-red-100 transition-colors flex items-center justify-center gap-2"
+            className="mt-6 mx-auto px-4 py-2.5 rounded-lg bg-red-50 border border-red-100 text-red-600 text-sm font-medium hover:bg-red-100 transition-colors flex items-center justify-center gap-2"
           >
             <LogOut className="w-4 h-4" />
             {t('nav.logout')}
@@ -292,34 +301,53 @@ function App() {
 
   return (
     <Layout currentView={view} onNavigate={setView}>
-      {isSuperAdmin && view === 'superadmin' ? <SuperAdminPage /> : (
-        <div key={currentBoutique?.id ?? 'no-boutique'}>
-          {view === 'dashboard' && <Dashboard onNavigate={setView} />}
-          {view === 'depot' && <ErrorBoundary><DepotForm onDone={() => setView('dashboard')} /></ErrorBoundary>}
-          {view === 'retrait' && <RetraitView />}
-          {view === 'commande' && <CommandeView />}
-          {view === 'collecte' && <CollecteView />}
-          {view === 'livraison' && <LivraisonView />}
-          {view === 'planning' && <Planning />}
-          {view === 'historique' && <Historique />}
-          {view === 'journal' && <JournalReglements />}
-          {view === 'comptabilite' && <Comptabilite />}
-          {view === 'depenses' && <Depenses />}
-          {view === 'clients' && <Clients />}
-          {view === 'catalogue' && <Catalogue />}
-          {view === 'modes_reglement' && <ModesReglement />}
-          {view === 'bons_reduction' && <BonsReduction />}
-          {view === 'boutiques' && <BoutiquesPage />}
-          {view === 'releve' && <ReleveClient />}
-          {view === 'entreprise' && <EntreprisePage />}
-          {view === 'utilisateurs' && <TeamManagement />}
-          {view === 'consommables' && <ConsommablesPage />}
-          {view === 'inventaire' && <Inventaire />}
-          {view === 'presentation' && <Presentation />}
-        </div>
-      )}
+      <ErrorBoundary key={`${currentBoutique?.id ?? 'no-boutique'}:${view}`}>
+        {isSuperAdmin && view === 'superadmin' ? <SuperAdminPage /> : (
+          <div key={currentBoutique?.id ?? 'no-boutique'}>
+            {view === 'dashboard' && <Dashboard onNavigate={setView} />}
+            {view === 'depot' && <DepotForm onDone={() => setView('dashboard')} />}
+            {view === 'retrait' && <RetraitView />}
+            {view === 'commande' && <CommandeView />}
+            {view === 'collecte' && <CollecteView />}
+            {view === 'livraison' && <LivraisonView />}
+            {view === 'planning' && <Planning />}
+            {view === 'historique' && <Historique />}
+            {view === 'journal' && <JournalReglements />}
+            {view === 'comptabilite' && <Comptabilite />}
+            {view === 'depenses' && <Depenses />}
+            {view === 'clients' && <Clients />}
+            {view === 'catalogue' && <Catalogue />}
+            {view === 'modes_reglement' && <ModesReglement />}
+            {view === 'bons_reduction' && <BonsReduction />}
+            {view === 'boutiques' && <BoutiquesPage />}
+            {view === 'releve' && <ReleveClient />}
+            {view === 'entreprise' && <EntreprisePage />}
+            {view === 'utilisateurs' && <TeamManagement />}
+            {view === 'consommables' && <ConsommablesPage />}
+            {view === 'inventaire' && <Inventaire />}
+            {view === 'presentation' && <Presentation />}
+          </div>
+        )}
+      </ErrorBoundary>
     </Layout>
   );
 }
 
-export default App;
+export default function App() {
+  const [hash, setHash] = useState(() => window.location.hash);
+
+  useEffect(() => {
+    const onHashChange = () => setHash(window.location.hash);
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
+
+  const portalMatch = hash.match(/^#\/portal\/(\d+)$/);
+  const portalEntrepriseId = portalMatch ? parseInt(portalMatch[1], 10) : null;
+
+  if (portalEntrepriseId !== null) {
+    return <ClientPortal entrepriseId={portalEntrepriseId} />;
+  }
+
+  return <WorkspaceApp />;
+}

@@ -6,22 +6,48 @@ import './index.css';
 import { AuthProvider } from './lib/auth';
 import { I18nProvider } from './lib/i18n';
 import ErrorBoundary from './components/ErrorBoundary';
+import { isLikelyNetworkError } from './lib/readCache';
 
-// Register Workbox PWA Service Worker immediately for full offline caching & Background Sync.
-// push-sw.js is registered on its dedicated scope by usePushNotifications when needed.
-registerSW({
-  immediate: true,
-  onRegisteredSW(_swUrl, registration) {
-    if (registration) {
-      // Periodically check for app updates every hour when online
-      setInterval(() => {
-        if (navigator.onLine) {
-          registration.update().catch(() => {});
-        }
-      }, 60 * 60 * 1000);
-    }
-  },
+// Prevent stray offline fetch/WebSocket promise rejections from terminating mobile standalone PWAs
+window.addEventListener('unhandledrejection', (event) => {
+  if (isLikelyNetworkError(event.reason)) {
+    event.preventDefault();
+  }
 });
+
+// Clean up any legacy /push-sw.js registration that previously hijacked root scope '/',
+// then register the unified Workbox PWA Service Worker immediately for full offline support.
+async function initPwaServiceWorker() {
+  try {
+    if ('serviceWorker' in navigator) {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      for (const reg of registrations) {
+        const scriptUrl =
+          reg.active?.scriptURL || reg.waiting?.scriptURL || reg.installing?.scriptURL || '';
+        if (scriptUrl.endsWith('/push-sw.js')) {
+          await reg.unregister();
+        }
+      }
+    }
+  } catch {
+    // Ignore cleanup errors
+  }
+
+  registerSW({
+    immediate: true,
+    onRegisteredSW(_swUrl, registration) {
+      if (registration) {
+        setInterval(() => {
+          if (navigator.onLine) {
+            registration.update().catch(() => {});
+          }
+        }, 60 * 60 * 1000);
+      }
+    },
+  });
+}
+
+void initPwaServiceWorker();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

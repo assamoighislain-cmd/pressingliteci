@@ -55,14 +55,22 @@ export function isLikelyNetworkError(err: unknown): boolean {
   const lower = msg.toLowerCase();
   return (
     lower.includes('failed to fetch') ||
+    lower.includes('offline') ||
     lower.includes('networkerror') ||
     lower.includes('network request failed') ||
     lower.includes('load failed') ||
     lower.includes('fetch error') ||
+    lower.includes('hostname could not be found') ||
     lower.includes('err_internet_disconnected') ||
+    lower.includes('err_network_changed') ||
+    lower.includes('err_connection') ||
     lower.includes('err_name_not_resolved') ||
+    lower.includes('unexpected token') ||
+    lower.includes('jwt expired') ||
+    lower.includes('pgrst301') ||
     lower.includes('aborterror') ||
-    lower.includes('timeout')
+    lower.includes('timeout') ||
+    lower.includes('timed out')
   );
 }
 
@@ -219,12 +227,9 @@ export async function cachedRead<T>(
     const result = await fetcher();
     setCached(key, result);
     return result;
-  } catch (err) {
-    if (isLikelyNetworkError(err)) {
-      const cached = await getCachedAsync<T>(key);
-      if (cached !== null) return cached;
-      return fallback;
-    }
-    throw err;
+  } catch {
+    const cached = await getCachedAsync<T>(key);
+    if (cached !== null) return cached;
+    return fallback;
   }
 }

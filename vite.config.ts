@@ -127,6 +127,23 @@ export default defineConfig(() => {
                 },
               },
             },
+            {
+              urlPattern: ({ sameOrigin, request }) =>
+                sameOrigin &&
+                ['script', 'style', 'worker', 'font', 'image'].includes(request.destination),
+              handler: 'NetworkFirst',
+              options: {
+                cacheName: 'app-same-origin-runtime-cache',
+                networkTimeoutSeconds: 3,
+                expiration: {
+                  maxEntries: 250,
+                  maxAgeSeconds: 60 * 60 * 24 * 30,
+                },
+                cacheableResponse: {
+                  statuses: [0, 200],
+                },
+              },
+            },
           ],
         },
         devOptions: {

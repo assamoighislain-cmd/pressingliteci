@@ -17,10 +17,70 @@ export const supabaseAnonKey =
     ? envAnonKey
     : DEFAULT_SUPABASE_ANON_KEY;
 
+/**
+ * Offline-resilient fetch wrapper for Supabase:
+ * 1. Fails in 0ms when navigator.onLine === false so offline reads/writes never hang on OS socket timeouts.
+ * 2. Protects GoTrue token refresh (/auth/v1/token?grant_type=refresh_token) against captive portals
+ *    (e.g. mobile data exhausted returning HTML) and transient 5xx/timeout errors so Supabase Auth
+ *    NEVER deletes the user's session or closes the app while offline.
+ */
+const offlineSafeFetch: typeof fetch = async (input, init) => {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    throw new TypeError('Failed to fetch (offline)');
+  }
+
+  const url =
+    typeof input === 'string'
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+
+  const isRefreshTokenCall =
+    url.includes('/auth/v1/token') && url.includes('grant_type=refresh_token');
+
+  if (isRefreshTokenCall) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 6000);
+    try {
+      const res = await fetch(input, {
+        ...init,
+        signal: init?.signal ?? controller.signal,
+      });
+      const contentType = (res.headers.get('content-type') ?? '').toLowerCase();
+      // If a captive portal returns HTML or a gateway returns 5xx/408/429, treat as network failure
+      // so GoTrue does NOT revoke the stored session!
+      if (!contentType.includes('application/json') || res.status >= 500 || res.status === 408 || res.status === 429) {
+        throw new TypeError('Failed to fetch (transient auth network error)');
+      }
+      return res;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  return fetch(input, init);
+};
+
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     persistSession: true,
-    autoRefreshToken: true,
+    autoRefreshToken: typeof navigator === 'undefined' ? true : navigator.onLine,
     detectSessionInUrl: true,
   },
+  global: {
+    fetch: offlineSafeFetch,
+  },
 });
+
+if (typeof window !== 'undefined') {
+  if (!navigator.onLine) {
+    void supabase.auth.stopAutoRefresh();
+  }
+  window.addEventListener('offline', () => {
+    void supabase.auth.stopAutoRefresh();
+  });
+  window.addEventListener('online', () => {
+    void supabase.auth.startAutoRefresh();
+  });
+}

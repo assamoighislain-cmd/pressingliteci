@@ -9,9 +9,11 @@ import {
   markCacheRefreshedNow,
   OfflineNetworkError,
 } from '@/lib/readCache';
+import { readOfflineSessionBackup } from '@/lib/offlineSession';
 import {
   bKey,
   getScopedCached,
+  generateUuid,
   observeDepotNumeros,
   observeClientCodes,
   observeArticleCodes,
@@ -187,10 +189,19 @@ async function getTenantId(): Promise<string | null> {
   } catch {
     // Ignore
   }
-  const { data: { session } } = await supabase.auth.getSession();
-  const fallback = session?.user?.id ?? null;
-  if (fallback) setCachedTenantId(fallback);
-  return fallback;
+  const backupUser = readOfflineSessionBackup()?.user ?? null;
+  if (backupUser?.id) {
+    setCachedTenantId(backupUser.id);
+    return backupUser.id;
+  }
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const fallback = session?.user?.id ?? null;
+    if (fallback) setCachedTenantId(fallback);
+    return fallback;
+  } catch {
+    return null;
+  }
 }
 
 export function resetTenantCache(): void {
@@ -292,7 +303,7 @@ function ensureDeterministicRowIds(
 ): Record<string, unknown>[] {
   if (!QUEUEABLE_TABLES.has(table)) return rows;
   // entreprise uses integer identity PK; all QUEUEABLE_TABLES use UUID id PK
-  return rows.map((r) => (r.id ? r : { ...r, id: crypto.randomUUID() }));
+  return rows.map((r) => (r.id ? r : { ...r, id: generateUuid() }));
 }
 
 function enqueueOfflineInsert<T>(config: InsertConfig, rows: Record<string, unknown>[]): MutationResult<T> {
@@ -1049,9 +1060,17 @@ export const db = {
 
   // Entreprise (per-user, one row per authenticated user)
   async getCurrentMemberName(): Promise<string | null> {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.user) return null;
-    const cacheKey = `offline_member_name_${session.user.id}`;
+    let activeUser = readOfflineSessionBackup()?.user ?? null;
+    if (!activeUser && !isOffline()) {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        activeUser = session?.user ?? null;
+      } catch {
+        // Offline fallback
+      }
+    }
+    if (!activeUser) return null;
+    const cacheKey = `offline_member_name_${activeUser.id}`;
     const fallback = () => {
       try {
         const stored = localStorage.getItem(cacheKey);
@@ -1059,23 +1078,27 @@ export const db = {
       } catch {
         // Ignore
       }
-      return session.user.user_metadata?.full_name || session.user.email || null;
+      return activeUser?.user_metadata?.full_name || activeUser?.email || null;
     };
     if (isOffline()) return fallback();
     const tId = await getTenantId();
     if (!tId) return fallback();
-    const { data, error } = await supabase
-      .from('entreprise_members')
-      .select('full_name')
-      .eq('tenant_id', tId)
-      .eq('user_id', session.user.id)
-      .maybeSingle();
-    if (error && isLikelyNetworkError(error)) return fallback();
-    const resolved = data?.full_name || session.user.user_metadata?.full_name || session.user.email || null;
-    if (resolved) {
-      try { localStorage.setItem(cacheKey, resolved); } catch { /* ignore */ }
+    try {
+      const { data, error } = await supabase
+        .from('entreprise_members')
+        .select('full_name')
+        .eq('tenant_id', tId)
+        .eq('user_id', activeUser.id)
+        .maybeSingle();
+      if (error && isLikelyNetworkError(error)) return fallback();
+      const resolved = data?.full_name || activeUser.user_metadata?.full_name || activeUser.email || null;
+      if (resolved) {
+        try { localStorage.setItem(cacheKey, resolved); } catch { /* ignore */ }
+      }
+      return resolved;
+    } catch {
+      return fallback();
     }
-    return resolved;
   },
 
   async getEntreprise(): Promise<Entreprise | null> {
@@ -1100,8 +1123,15 @@ export const db = {
 
   async upsertEntreprise(row: Record<string, unknown>, userId?: string): Promise<string | null> {
     if (!userId) {
-      const { data: { session } } = await supabase.auth.getSession();
-      userId = session?.user?.id;
+      userId = readOfflineSessionBackup()?.user?.id;
+      if (!userId && !isOffline()) {
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          userId = session?.user?.id;
+        } catch {
+          // Ignore
+        }
+      }
     }
     if (!userId) return 'Non authentifié';
     const payload = { ...row, user_id: userId };
@@ -1580,41 +1610,54 @@ export const db = {
     });
     if (histErr.error) return histErr.error;
 
-    if (isOffline()) {
+    const applyOptimisticPoints = () => {
       const ptsMap = getScopedCached<Record<string, number>>('all_client_points', currentBoutiqueId) ?? {};
       const nextPts = (ptsMap[clientId] ?? 0) + points;
       setCached(bKey('all_client_points', currentBoutiqueId), { ...ptsMap, [clientId]: nextPts });
+    };
+
+    if (isOffline()) {
+      applyOptimisticPoints();
       return null;
     }
 
-    const existing = await supabase
-      .from('fidelite_points')
-      .select('id, total_points')
-      .eq('client_id', clientId)
-      .maybeSingle();
-
-    if (existing.error && isLikelyNetworkError(existing.error)) {
-      return null;
-    }
-
-    if (existing.data) {
-      const newTotal = Number((existing.data as { total_points: number }).total_points) + points;
-      const { error } = await supabase
+    try {
+      const existing = await supabase
         .from('fidelite_points')
-        .update({ total_points: newTotal, updated_at: new Date().toISOString() })
-        .eq('client_id', clientId);
-      return error?.message ?? null;
-    } else {
-      const res = await insert({
-        table: 'fidelite_points',
-        rows: {
-          client_id: clientId,
-          total_points: points,
-          tenant_id: tId,
-          boutique_id: currentBoutiqueId,
-        },
-      });
-      return res.error;
+        .select('id, total_points')
+        .eq('client_id', clientId)
+        .maybeSingle();
+
+      if (existing.error && isLikelyNetworkError(existing.error)) {
+        applyOptimisticPoints();
+        return null;
+      }
+
+      if (existing.data) {
+        const newTotal = Number((existing.data as { total_points: number }).total_points) + points;
+        const updRes = await update({
+          table: 'fidelite_points',
+          values: { total_points: newTotal, updated_at: new Date().toISOString() },
+          filters: [{ column: 'client_id', operator: 'eq', value: clientId }],
+        });
+        applyOptimisticPoints();
+        return updRes.error;
+      } else {
+        const res = await insert({
+          table: 'fidelite_points',
+          rows: {
+            client_id: clientId,
+            total_points: points,
+            tenant_id: tId,
+            boutique_id: currentBoutiqueId,
+          },
+        });
+        applyOptimisticPoints();
+        return res.error;
+      }
+    } catch {
+      applyOptimisticPoints();
+      return null;
     }
   },
 
