@@ -1,0 +1,6 @@
+{
+  "name": "PressingLite",
+  "description": "Application complète de gestion de pressing et blanchisserie : dépôts, retraits, portail client, planning, comptabilité et multi-boutiques.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
