@@ -3,11 +3,17 @@ import { db } from '@/lib/db';
 import { useAuth } from '@/lib/auth';
 import { useI18n } from '@/lib/i18n';
 import { Entreprise } from '@/types';
-import { Building2, Save, Check, Share2, ExternalLink, Truck, Phone, Filter, LayoutDashboard, MapPin, Navigation, Loader2, QrCode, Printer, Download, Upload, Trash2, Image as ImageIcon, Tags, Usb, Plug } from 'lucide-react';
+import { Building2, Save, Check, Share2, ExternalLink, Truck, Phone, Filter, LayoutDashboard, MapPin, Navigation, Loader2, QrCode, Printer, Download, Upload, Trash2, Image as ImageIcon, Tags, Usb, Plug, Monitor } from 'lucide-react';
 import QRCode from 'qrcode';
 import QRCodeImage from '@/components/QRCodeImage';
 import { supabase } from '@/lib/supabase';
 import { isSerialSupported, connectSerialPrinter, disconnectSerialPrinter, isPrinterConnected, printTestLabel } from '@/lib/serialPrinter';
+import {
+  getBillingPointCode,
+  setBillingPointCode,
+  formatDepotNumero,
+  normalizeBillingPointCode,
+} from '@/lib/dbOfflineHelpers';
 
 export default function EntreprisePage() {
   const { user } = useAuth();
@@ -49,6 +55,13 @@ export default function EntreprisePage() {
   const [serialConnecting, setSerialConnecting] = useState(false);
   const [serialConnected, setSerialConnected] = useState(false);
   const [serialError, setSerialError] = useState<string | null>(null);
+  const [billingPointCode, setBillingPointCodeState] = useState<string>(() => getBillingPointCode());
+
+  useEffect(() => {
+    const onPointChange = () => setBillingPointCodeState(getBillingPointCode());
+    window.addEventListener('pressinglite:billing-point-changed', onPointChange);
+    return () => window.removeEventListener('pressinglite:billing-point-changed', onPointChange);
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -974,6 +987,92 @@ export default function EntreprisePage() {
             </div>
           </div>
         ))}
+      </div>
+
+      {/* Deposit numbering & Offline multi-billing-point card */}
+      <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-6 space-y-4">
+        <div className="flex items-center gap-2">
+          <div className="w-9 h-9 rounded-lg bg-sky-50 flex items-center justify-center">
+            <Monitor className="w-4.5 h-4.5 text-sky-600" />
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-slate-900">
+              {lang === 'fr'
+                ? 'Numérotation des dépôts & Points de facturation (Hors-ligne)'
+                : 'Deposit numbering & Billing points (Offline)'}
+            </p>
+            <p className="text-xs text-slate-400">
+              {lang === 'fr'
+                ? 'Nomenclature D001-Année avec remise à 001 automatique chaque 1er janvier et protection anti-doublon multi-caisses.'
+                : 'D001-Year nomenclature with automatic reset to 001 every January 1st and multi-register duplicate protection.'}
+            </p>
+          </div>
+        </div>
+
+        <div className="rounded-lg bg-slate-50 border border-slate-100 p-3.5 space-y-1.5 text-xs text-slate-600">
+          <div className="flex items-center justify-between">
+            <span>{lang === 'fr' ? 'Format actif sur cet appareil :' : 'Active format on this device:'}</span>
+            <span className="font-mono font-bold text-sky-700 bg-sky-50 px-2.5 py-0.5 rounded border border-sky-200">
+              {formatDepotNumero(1, new Date().getFullYear(), billingPointCode)}
+            </span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span>{lang === 'fr' ? 'Au 1er janvier prochain :' : 'Next January 1st:'}</span>
+            <span className="font-mono font-semibold text-emerald-700">
+              {formatDepotNumero(1, new Date().getFullYear() + 1, billingPointCode)}
+            </span>
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <label className="block text-xs font-medium text-slate-700">
+            {lang === 'fr'
+              ? 'Code du point de facturation (spécifique à cet appareil / cette caisse)'
+              : 'Billing point code (specific to this device / register)'}
+          </label>
+          <div className="flex flex-wrap items-center gap-2">
+            {(['', 'C1', 'C2', 'C3', 'P1', 'P2'] as const).map((preset) => {
+              const active = billingPointCode === preset;
+              return (
+                <button
+                  key={preset || 'MAIN'}
+                  type="button"
+                  onClick={() => {
+                    const saved = setBillingPointCode(preset);
+                    setBillingPointCodeState(saved);
+                  }}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                    active
+                      ? 'bg-sky-500 text-white border-sky-500 shadow-sm'
+                      : 'bg-white text-slate-600 border-slate-200 hover:border-sky-300'
+                  }`}
+                >
+                  {preset
+                    ? `${preset} (${formatDepotNumero(1, new Date().getFullYear(), preset)})`
+                    : lang === 'fr'
+                      ? `Principal (${formatDepotNumero(1, new Date().getFullYear(), '')})`
+                      : `Main (${formatDepotNumero(1, new Date().getFullYear(), '')})`}
+                </button>
+              );
+            })}
+            <input
+              type="text"
+              value={billingPointCode}
+              onChange={(e) => {
+                const saved = setBillingPointCode(normalizeBillingPointCode(e.target.value));
+                setBillingPointCodeState(saved);
+              }}
+              maxLength={6}
+              placeholder={lang === 'fr' ? 'Code perso (ex: ABJ1)' : 'Custom (e.g. ABJ1)'}
+              className="w-40 px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-mono uppercase focus:outline-none focus:ring-2 focus:ring-sky-500"
+            />
+          </div>
+          <p className="text-xs text-slate-400">
+            {lang === 'fr'
+              ? "Astuce hors-ligne : si plusieurs boutiques sont créées dans « Boutiques », leurs compteurs sont déjà séparés. Si plusieurs caisses travaillent hors-ligne dans la MÊME boutique, donnez C1 au 1er poste et C2 au 2nd poste pour garantir zéro doublon sur les reçus et étiquettes."
+              : 'Offline tip: separate shops already have isolated counters. If multiple registers work offline in the SAME shop, assign C1 to register 1 and C2 to register 2 for zero duplicate receipts or labels.'}
+          </p>
+        </div>
       </div>
 
       {/* Portal link section */}

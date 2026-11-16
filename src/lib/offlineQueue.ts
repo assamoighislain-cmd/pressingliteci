@@ -12,6 +12,11 @@ import {
   setMetaValue,
 } from '@/lib/offlineStorage';
 import { isLikelyNetworkError } from '@/lib/readCache';
+import {
+  parseDepotNumeroInfo,
+  computeNextOnlineDepotNumero,
+  getBillingPointCode,
+} from '@/lib/dbOfflineHelpers';
 
 const QUEUE_KEY = 'offline_mutation_queue';
 const LAST_SYNC_KEY = 'offline_last_sync_at';
@@ -395,9 +400,29 @@ async function resolveDuplicateKeyAndMutateData(m: QueuedMutation): Promise<bool
   if (m.operation !== 'insert') return false;
   if (m.table === 'depots' && 'numero' in m.data) {
     const boutiqueId = (m.data.boutique_id as string | null) ?? null;
-    const { data, error } = await supabase.rpc('next_depot_numero', { p_boutique_id: boutiqueId });
-    if (!error && data) {
-      m.data = { ...m.data, numero: String(data) };
+    const parsed = parseDepotNumeroInfo(String(m.data.numero ?? ''));
+    const fallbackYear = m.data.date_depot
+      ? new Date(String(m.data.date_depot)).getFullYear() || new Date().getFullYear()
+      : new Date().getFullYear();
+    const year = parsed?.year ?? fallbackYear;
+    const pointCode = parsed ? parsed.pointCode : getBillingPointCode();
+    const pattern = pointCode ? `${pointCode}-D%-${year}` : `D%-${year}`;
+
+    let q = supabase.from('depots').select('numero').like('numero', pattern).limit(10000);
+    if (boutiqueId) {
+      q = q.eq('boutique_id', boutiqueId);
+    } else {
+      q = q.is('boutique_id', null);
+    }
+    const { data, error } = await q;
+    if (!error) {
+      const nextNumero = computeNextOnlineDepotNumero(
+        (data as Array<{ numero?: string | null }> | null) ?? [],
+        boutiqueId,
+        year,
+        pointCode,
+      );
+      m.data = { ...m.data, numero: nextNumero };
       return true;
     }
   }

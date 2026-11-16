@@ -51,6 +51,79 @@ export function generateUuid(): string {
   });
 }
 
+const BILLING_POINT_STORAGE_KEY = 'pressinglite_billing_point_code';
+const OFFLINE_QUEUE_STORAGE_KEY = 'offline_mutation_queue';
+
+export function normalizeBillingPointCode(raw: string | null | undefined): string {
+  if (!raw) return '';
+  return raw
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+    .slice(0, 6);
+}
+
+export function getBillingPointCode(): string {
+  try {
+    return normalizeBillingPointCode(localStorage.getItem(BILLING_POINT_STORAGE_KEY));
+  } catch {
+    return '';
+  }
+}
+
+export function setBillingPointCode(raw: string): string {
+  const clean = normalizeBillingPointCode(raw);
+  try {
+    if (clean) {
+      localStorage.setItem(BILLING_POINT_STORAGE_KEY, clean);
+    } else {
+      localStorage.removeItem(BILLING_POINT_STORAGE_KEY);
+    }
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('pressinglite:billing-point-changed', { detail: clean }));
+    }
+  } catch {
+    // Ignore storage errors
+  }
+  return clean;
+}
+
+/**
+ * Formats a deposit number using nomenclature `D001-YYYY` (or `<POINT>-D001-YYYY`
+ * when a multi-register billing point code is configured on this terminal).
+ * Every January 1st, `year` changes and `seq` starts back at `001`.
+ */
+export function formatDepotNumero(seq: number, year: number, pointCode = ''): string {
+  const cleanPoint = normalizeBillingPointCode(pointCode);
+  const safeSeq = Math.max(1, Math.floor(seq));
+  const base = `D${String(safeSeq).padStart(3, '0')}-${year}`;
+  return cleanPoint ? `${cleanPoint}-${base}` : base;
+}
+
+export interface ParsedDepotNumero {
+  seq: number;
+  year: number;
+  pointCode: string;
+}
+
+export function parseDepotNumeroInfo(numero: string | null | undefined): ParsedDepotNumero | null {
+  if (!numero) return null;
+  const trimmed = numero.trim().toUpperCase();
+  const match = trimmed.match(/^(?:([A-Z0-9]{1,6})-)?D(\d+)-(\d{4})$/);
+  if (!match) return null;
+  const pointCode = match[1] ? normalizeBillingPointCode(match[1]) : '';
+  const seq = parseInt(match[2], 10);
+  const year = parseInt(match[3], 10);
+  if (!Number.isFinite(seq) || seq <= 0 || !Number.isFinite(year) || year < 2000 || year > 2100) {
+    return null;
+  }
+  return { seq, year, pointCode };
+}
+
+function depotSeqKey(boutiqueId: string | null, year: number, pointCode: string): string {
+  const cleanPoint = normalizeBillingPointCode(pointCode);
+  return `depot_v2_${boutiqueId ?? 'global'}_${year}_${cleanPoint || 'MAIN'}`;
+}
+
 function parsePrefixedNumber(val: string | null | undefined, prefix: string): number {
   if (!val || !val.startsWith(prefix)) return 0;
   const numPart = val.slice(prefix.length).trim();
@@ -77,17 +150,66 @@ function setStoredMaxSeq(counterKey: string, value: number): void {
   }
 }
 
+function setExactStoredSeq(counterKey: string, value: number): void {
+  try {
+    localStorage.setItem(`offline_seq_${counterKey}`, String(Math.max(0, Math.floor(value))));
+  } catch {
+    // Ignore
+  }
+}
+
+export function getPendingOfflineQueueDepotMaxSeq(
+  boutiqueId: string | null,
+  year: number,
+  pointCode: string,
+): number {
+  const cleanPoint = normalizeBillingPointCode(pointCode);
+  try {
+    const raw = localStorage.getItem(OFFLINE_QUEUE_STORAGE_KEY);
+    if (!raw) return 0;
+    const items = JSON.parse(raw) as Array<{
+      table?: string;
+      operation?: string;
+      data?: Record<string, unknown>;
+    }>;
+    if (!Array.isArray(items)) return 0;
+    let max = 0;
+    for (const item of items) {
+      if (item.table !== 'depots' || item.operation !== 'insert' || !item.data) continue;
+      const itemBoutique = (item.data.boutique_id as string | null | undefined) ?? null;
+      if (boutiqueId && itemBoutique && itemBoutique !== boutiqueId) continue;
+      const parsed = parseDepotNumeroInfo(String(item.data.numero ?? ''));
+      if (parsed && parsed.year === year && parsed.pointCode === cleanPoint && parsed.seq > max) {
+        max = parsed.seq;
+      }
+    }
+    return max;
+  } catch {
+    return 0;
+  }
+}
+
 export function observeDepotNumeros(
   depots: Array<{ numero?: string | null }>,
   boutiqueId: string | null,
 ): void {
-  const key = `depot_${boutiqueId ?? 'global'}`;
-  let max = 0;
+  const maxByBucket = new Map<string, { year: number; pointCode: string; max: number }>();
   for (const d of depots) {
-    const n = parsePrefixedNumber(d.numero, 'D-');
-    if (n > max) max = n;
+    const parsed = parseDepotNumeroInfo(d.numero);
+    if (!parsed) continue;
+    const bucketKey = `${parsed.year}_${parsed.pointCode}`;
+    const existing = maxByBucket.get(bucketKey);
+    if (!existing || parsed.seq > existing.max) {
+      maxByBucket.set(bucketKey, {
+        year: parsed.year,
+        pointCode: parsed.pointCode,
+        max: parsed.seq,
+      });
+    }
   }
-  if (max > 0) setStoredMaxSeq(key, max);
+  for (const entry of maxByBucket.values()) {
+    setStoredMaxSeq(depotSeqKey(boutiqueId, entry.year, entry.pointCode), entry.max);
+  }
 }
 
 export function observeClientCodes(
@@ -130,19 +252,60 @@ export function observeTraitementCodes(
 }
 
 /**
- * Generates a sequential D-XXXX number strictly matching Postgres `next_depot_numero`
- * (`CAST(REPLACE(numero, 'D-', '') AS integer)`).
+ * Computes the next online deposit number (`D001-YYYY` or `<POINT>-D001-YYYY`),
+ * accounting for both live database rows and any still-flushing offline queue items,
+ * and primes the local sequence counter for seamless offline continuity.
  */
-export function generateOfflineDepotNumero(boutiqueId: string | null): string {
-  const key = `depot_${boutiqueId ?? 'global'}`;
+export function computeNextOnlineDepotNumero(
+  dbRows: Array<{ numero?: string | null }>,
+  boutiqueId: string | null,
+  targetYear?: number,
+  pointCodeOverride?: string,
+): string {
+  const year = targetYear ?? new Date().getFullYear();
+  const pointCode =
+    pointCodeOverride !== undefined ? normalizeBillingPointCode(pointCodeOverride) : getBillingPointCode();
+  let dbMax = 0;
+  for (const row of dbRows) {
+    const parsed = parseDepotNumeroInfo(row.numero);
+    if (parsed && parsed.year === year && parsed.pointCode === pointCode && parsed.seq > dbMax) {
+      dbMax = parsed.seq;
+    }
+  }
+  const queuedMax = getPendingOfflineQueueDepotMaxSeq(boutiqueId, year, pointCode);
+  const next = Math.max(dbMax, queuedMax) + 1;
+  setExactStoredSeq(depotSeqKey(boutiqueId, year, pointCode), next);
+  return formatDepotNumero(next, year, pointCode);
+}
+
+/**
+ * Generates a collision-free offline deposit number (`D001-YYYY` or `<POINT>-D001-YYYY`),
+ * automatically resetting to `001` every January 1st when the year changes.
+ */
+export function generateOfflineDepotNumero(
+  boutiqueId: string | null,
+  targetYear?: number,
+  pointCodeOverride?: string,
+): string {
+  const year = targetYear ?? new Date().getFullYear();
+  const pointCode =
+    pointCodeOverride !== undefined ? normalizeBillingPointCode(pointCodeOverride) : getBillingPointCode();
+  const key = depotSeqKey(boutiqueId, year, pointCode);
+
   const cachedAll = getScopedCached<DepotWithArticles[]>('all_depots', boutiqueId) ?? [];
   const cachedRecent = getScopedCached<DepotWithClient[]>('recent_depots', boutiqueId) ?? [];
+  const cachedRetrait = getScopedCached<DepotWithArticles[]>('depots_retrait', boutiqueId) ?? [];
+  const cachedPlanning = getScopedCached<DepotWithClient[]>('depots_planning', boutiqueId) ?? [];
   observeDepotNumeros(cachedAll, boutiqueId);
   observeDepotNumeros(cachedRecent, boutiqueId);
+  observeDepotNumeros(cachedRetrait, boutiqueId);
+  observeDepotNumeros(cachedPlanning, boutiqueId);
 
-  const next = getStoredMaxSeq(key) + 1;
+  const queuedMax = getPendingOfflineQueueDepotMaxSeq(boutiqueId, year, pointCode);
+  const currentMax = Math.max(getStoredMaxSeq(key), queuedMax);
+  const next = currentMax + 1;
   setStoredMaxSeq(key, next);
-  return `D-${String(next).padStart(4, '0')}`;
+  return formatDepotNumero(next, year, pointCode);
 }
 
 export function generateOfflineRpcCode(fnName: string, boutiqueId: string | null): string | null {

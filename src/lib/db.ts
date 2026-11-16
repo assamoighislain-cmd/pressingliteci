@@ -18,6 +18,8 @@ import {
   observeClientCodes,
   observeArticleCodes,
   observeTraitementCodes,
+  getBillingPointCode,
+  computeNextOnlineDepotNumero,
   generateOfflineDepotNumero,
   generateOfflineRpcCode,
   prepareOfflineInsertRows,
@@ -1157,23 +1159,41 @@ export const db = {
     return { value: (data as number) ?? null, error: null };
   },
 
-  async nextDepotNumero(): Promise<{ numero: string | null; error: string | null }> {
+  async nextDepotNumero(dateDepot?: Date): Promise<{ numero: string | null; error: string | null }> {
+    const targetYear = (dateDepot ?? new Date()).getFullYear();
+    const pointCode = getBillingPointCode();
+
     if (isOffline()) {
-      return { numero: generateOfflineDepotNumero(currentBoutiqueId), error: null };
+      return {
+        numero: generateOfflineDepotNumero(currentBoutiqueId, targetYear, pointCode),
+        error: null,
+      };
     }
+
     try {
-      const { data, error } = await supabase.rpc('next_depot_numero', { p_boutique_id: currentBoutiqueId });
+      const pattern = pointCode ? `${pointCode}-D%-${targetYear}` : `D%-${targetYear}`;
+      let q = supabase.from('depots').select('numero').like('numero', pattern).limit(10000);
+      if (currentBoutiqueId) {
+        q = q.eq('boutique_id', currentBoutiqueId);
+      }
+      const { data, error } = await q;
       if (error) {
         if (isLikelyNetworkError(error)) {
-          return { numero: generateOfflineDepotNumero(currentBoutiqueId), error: null };
+          return {
+            numero: generateOfflineDepotNumero(currentBoutiqueId, targetYear, pointCode),
+            error: null,
+          };
         }
         return { numero: null, error: error.message };
       }
-      const num = (data as string) ?? null;
-      if (num) observeDepotNumeros([{ numero: num }], currentBoutiqueId);
-      return { numero: num, error: null };
+      const rows = (data as Array<{ numero?: string | null }> | null) ?? [];
+      const numero = computeNextOnlineDepotNumero(rows, currentBoutiqueId, targetYear, pointCode);
+      return { numero, error: null };
     } catch {
-      return { numero: generateOfflineDepotNumero(currentBoutiqueId), error: null };
+      return {
+        numero: generateOfflineDepotNumero(currentBoutiqueId, targetYear, pointCode),
+        error: null,
+      };
     }
   },
 

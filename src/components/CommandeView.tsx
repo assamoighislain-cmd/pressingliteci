@@ -76,20 +76,29 @@ export default function CommandeView() {
     if (!paymentDepot) return;
     setConvertingId(paymentDepot.id);
     try {
-      const { error } = await supabase.rpc('valider_commande', { depot_id: paymentDepot.id });
-      if (error) throw error;
+      const now = new Date();
+      const numeroResult = await db.nextDepotNumero(now);
+      if (numeroResult.error || !numeroResult.numero) {
+        throw new Error(
+          numeroResult.error ??
+            (lang === 'fr' ? 'Erreur lors de la génération du numéro' : 'Error generating deposit number'),
+        );
+      }
 
       const avance = parseFloat(paymentAmount) || 0;
       const modeValue = paymentMode || null;
+      const updatePayload: Record<string, unknown> = {
+        statut: 'EN_COURS',
+        date_depot: now.toISOString(),
+        numero: numeroResult.numero,
+      };
       if (modeValue || avance > 0) {
-        await supabase
-          .from('depots')
-          .update({
-            mode_reglement: modeValue,
-            avance_amount: avance > 0 ? avance : null,
-          })
-          .eq('id', paymentDepot.id);
+        updatePayload.mode_reglement = modeValue;
+        updatePayload.avance_amount = avance > 0 ? avance : null;
       }
+
+      const updateErr = await db.updateDepot(paymentDepot.id, updatePayload);
+      if (updateErr) throw new Error(updateErr);
 
       notifyRealtimeMutation('depots');
       closePaymentModal();

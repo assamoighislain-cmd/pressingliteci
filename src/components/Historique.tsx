@@ -288,7 +288,7 @@ export default function Historique() {
       const depotStatut = validStatuts.includes(statut) ? statut : 'EN_COURS';
 
       // Generate depot number
-      const numeroResult = await db.nextDepotNumero();
+      const numeroResult = await db.nextDepotNumero(dateDepot);
       if (numeroResult.error || !numeroResult.numero) {
         errors.push(`${ref}: ${lang === 'fr' ? 'erreur compteur' : 'counter error'}`);
         continue;

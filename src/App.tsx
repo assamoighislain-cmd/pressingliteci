@@ -117,8 +117,7 @@ function WorkspaceApp() {
       .catch(() => {});
 
     if (typeof navigator !== 'undefined' && !navigator.onLine) return;
-    supabase
-      .rpc('get_licence_status')
+    Promise.resolve(supabase.rpc('get_licence_status'))
       .then(({ data, error }) => {
         // Never lock out on RPC/network/JWT errors — only update when server returns a valid response
         if (error) return;
@@ -163,8 +162,7 @@ function WorkspaceApp() {
         return;
       }
 
-      supabase
-        .rpc('get_licence_status')
+      Promise.resolve(supabase.rpc('get_licence_status'))
         .then(({ data, error }) => {
           if (error) {
             // Never set licenceStatus=null on error (e.g. offline, captive portal, expired JWT before refresh)

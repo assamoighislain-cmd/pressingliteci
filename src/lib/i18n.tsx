@@ -187,7 +187,7 @@ const fr: Dict = {
   // RetraitView
   'retrait.title': 'Retrait d\'un dépôt',
   'retrait.subtitle': 'Recherchez par numéro de dépôt ou nom du client pour vérifier et retirer.',
-  'retrait.searchPlaceholder': 'Ex: D-0001 ou Aïcha…',
+  'retrait.searchPlaceholder': 'Ex: D001-2026 ou Aïcha…',
   'retrait.searching': 'Recherche…',
   'retrait.noResult': 'Aucun dépôt trouvé pour « {term} ».',
   'retrait.startTyping': 'Commencez à taper pour rechercher un dépôt.',
@@ -639,7 +639,7 @@ const en: Dict = {
   // RetraitView
   'retrait.title': 'Pickup a deposit',
   'retrait.subtitle': 'Search by deposit number or client name to check and pick up.',
-  'retrait.searchPlaceholder': 'Ex: D-0001 or Aïcha…',
+  'retrait.searchPlaceholder': 'Ex: D001-2026 or Aïcha…',
   'retrait.searching': 'Searching…',
   'retrait.noResult': 'No deposit found for "{term}".',
   'retrait.startTyping': 'Start typing to search for a deposit.',

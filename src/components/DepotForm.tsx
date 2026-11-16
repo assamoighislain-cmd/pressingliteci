@@ -33,10 +33,17 @@ import {
   PlusCircle,
   Ticket,
   Tags,
+  Monitor,
 } from 'lucide-react';
 import PrintableReceipt, { PrintFormat } from '@/components/PrintableReceipt';
 import PrintableLabels from '@/components/PrintableLabels';
 import { printWithFormat, printDepotLabels } from '@/lib/print';
+import {
+  getBillingPointCode,
+  setBillingPointCode,
+  formatDepotNumero,
+  normalizeBillingPointCode,
+} from '@/lib/dbOfflineHelpers';
 import { Entreprise, buildWhatsAppMessage, buildWhatsAppUrl, getModeReglementLabel, applyPhonePrefix } from '@/types';
 
 interface ArticleDraft {
@@ -166,6 +173,14 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
   const [entreprise, setEntreprise] = useState<Entreprise | null>(null);
   const [printFormat, setPrintFormat] = useState<PrintFormat>('a5');
   const [previewMode, setPreviewMode] = useState<'receipt' | 'labels'>('receipt');
+  const [billingPointCode, setBillingPointCodeState] = useState<string>(() => getBillingPointCode());
+  const [showBillingPointPicker, setShowBillingPointPicker] = useState(false);
+
+  useEffect(() => {
+    const onPointChange = () => setBillingPointCodeState(getBillingPointCode());
+    window.addEventListener('pressinglite:billing-point-changed', onPointChange);
+    return () => window.removeEventListener('pressinglite:billing-point-changed', onPointChange);
+  }, []);
 
   // Load treatment types and catalog
   useEffect(() => {
@@ -452,7 +467,7 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
     setError(null);
 
     try {
-      const numeroResult = await db.nextDepotNumero();
+      const numeroResult = await db.nextDepotNumero(dateDepotEffective);
       if (numeroResult.error || !numeroResult.numero) {
         throw new Error(numeroResult.error ?? t('depot.errorCounter'));
       }
@@ -952,6 +967,84 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
             </div>
           );
         })}
+      </div>
+
+      {/* Point de facturation / Caisse (anti-doublon hors-ligne) */}
+      <div className="bg-white rounded-xl border border-slate-100 shadow-sm px-4 py-2.5 space-y-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-xs text-slate-600">
+            <Monitor className="w-3.5 h-3.5 text-sky-600 shrink-0" />
+            <span>
+              {lang === 'fr' ? 'Point de facturation :' : 'Billing point:'}{' '}
+              <strong className="text-slate-900">
+                {billingPointCode
+                  ? `${lang === 'fr' ? 'Poste' : 'Register'} ${billingPointCode}`
+                  : lang === 'fr'
+                    ? 'Principal'
+                    : 'Main'}
+              </strong>
+            </span>
+            <span className="px-2 py-0.5 rounded bg-sky-50 text-sky-700 font-mono font-semibold">
+              {formatDepotNumero(1, dateDepotEffective.getFullYear(), billingPointCode)}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowBillingPointPicker((v) => !v)}
+            className="text-xs font-medium text-sky-600 hover:text-sky-700"
+          >
+            {showBillingPointPicker
+              ? lang === 'fr'
+                ? 'Fermer'
+                : 'Close'
+              : lang === 'fr'
+                ? 'Multi-caisses / Changer'
+                : 'Multi-register / Change'}
+          </button>
+        </div>
+
+        {showBillingPointPicker && (
+          <div className="pt-2 border-t border-slate-100 space-y-2">
+            <p className="text-xs text-slate-500">
+              {lang === 'fr'
+                ? 'Si plusieurs appareils facturent en même temps hors-ligne dans la même boutique, attribuez un code unique à chaque appareil (ex: C1, C2) pour éviter tout doublon de numéro.'
+                : 'If multiple devices bill offline simultaneously in the same shop, assign a unique code per device (e.g. C1, C2) to prevent duplicate deposit numbers.'}
+            </p>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {(['', 'C1', 'C2', 'C3', 'P1', 'P2'] as const).map((preset) => {
+                const active = billingPointCode === preset;
+                return (
+                  <button
+                    key={preset || 'MAIN'}
+                    type="button"
+                    onClick={() => {
+                      const saved = setBillingPointCode(preset);
+                      setBillingPointCodeState(saved);
+                    }}
+                    className={`px-2.5 py-1 rounded-md text-xs font-medium border transition-colors ${
+                      active
+                        ? 'bg-sky-500 text-white border-sky-500'
+                        : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-sky-300'
+                    }`}
+                  >
+                    {preset || (lang === 'fr' ? 'Principal (D001)' : 'Main (D001)')}
+                  </button>
+                );
+              })}
+              <input
+                type="text"
+                value={billingPointCode}
+                onChange={(e) => {
+                  const saved = setBillingPointCode(normalizeBillingPointCode(e.target.value));
+                  setBillingPointCodeState(saved);
+                }}
+                maxLength={6}
+                placeholder={lang === 'fr' ? 'Code perso…' : 'Custom…'}
+                className="w-28 px-2.5 py-1 rounded-md border border-slate-200 text-xs font-mono uppercase focus:outline-none focus:ring-2 focus:ring-sky-500"
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       {error && (
