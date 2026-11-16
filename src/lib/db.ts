@@ -1,11 +1,13 @@
 import { supabase } from '@/lib/supabase';
 import { enqueueMutation, onPostSync } from '@/lib/offlineQueue';
+import { notifyRealtimeMutation } from '@/lib/realtimeSync';
 import {
   cachedRead,
   setCached,
   isLikelyNetworkError,
   throwIfNetworkError,
   markCacheRefreshedNow,
+  OfflineNetworkError,
 } from '@/lib/readCache';
 import {
   bKey,
@@ -266,6 +268,33 @@ export function isOffline(): boolean {
   return typeof navigator !== 'undefined' && !navigator.onLine;
 }
 
+const FAST_WRITE_TIMEOUT_MS = 4500;
+
+async function withWriteTimeout<R>(promiseLike: PromiseLike<R>): Promise<R> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      Promise.resolve(promiseLike),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new OfflineNetworkError('Write timeout — continuing in background'));
+        }, FAST_WRITE_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function ensureDeterministicRowIds(
+  table: TableName,
+  rows: Record<string, unknown>[],
+): Record<string, unknown>[] {
+  if (!QUEUEABLE_TABLES.has(table)) return rows;
+  // entreprise uses integer identity PK; all QUEUEABLE_TABLES use UUID id PK
+  return rows.map((r) => (r.id ? r : { ...r, id: crypto.randomUUID() }));
+}
+
 function enqueueOfflineInsert<T>(config: InsertConfig, rows: Record<string, unknown>[]): MutationResult<T> {
   const { dbRows, optimisticRows } = prepareOfflineInsertRows(config.table, rows);
   for (const r of dbRows) {
@@ -277,6 +306,7 @@ function enqueueOfflineInsert<T>(config: InsertConfig, rows: Record<string, unkn
       buildMutationLabel(config.table, 'insert', r),
     );
   }
+  notifyRealtimeMutation(config.table);
   const result = rows.length === 1 ? optimisticRows[0] : optimisticRows;
   return { data: (result as T) ?? null, error: null };
 }
@@ -296,6 +326,8 @@ export async function insert<T = Record<string, unknown>>(config: InsertConfig):
     }
   }
 
+  rows = ensureDeterministicRowIds(config.table, rows);
+
   if (isOffline() && QUEUEABLE_TABLES.has(config.table)) {
     return enqueueOfflineInsert<T>(config, rows);
   }
@@ -306,13 +338,16 @@ export async function insert<T = Record<string, unknown>>(config: InsertConfig):
     if (config.select || config.table === 'articles' || config.table === 'bons_reduction') {
       q = q.select();
     }
-    const { data, error } = await q;
+    const { data, error } = QUEUEABLE_TABLES.has(config.table)
+      ? await withWriteTimeout<{ data: unknown; error: { message: string } | null }>(q)
+      : await q;
     if (error) {
       if (QUEUEABLE_TABLES.has(config.table) && isLikelyNetworkError(error)) {
         return enqueueOfflineInsert<T>(config, rows);
       }
       return { data: null, error: error.message };
     }
+    notifyRealtimeMutation(config.table, config.table === 'entreprise');
     const result = Array.isArray(data) && !Array.isArray(config.rows) ? data[0] : data;
     return { data: (result as T) ?? null, error: null };
   } catch (err) {
@@ -332,6 +367,7 @@ export async function update<T = Record<string, unknown>>(config: UpdateConfig):
       config.filters as unknown as Record<string, unknown>[],
       buildMutationLabel(config.table, 'update', config.values),
     );
+    notifyRealtimeMutation(config.table);
     return { data: null, error: null } as MutationResult<T>;
   };
 
@@ -345,13 +381,16 @@ export async function update<T = Record<string, unknown>>(config: UpdateConfig):
       q = q[f.operator](f.column, f.value);
     }
     if (config.select) q = q.select();
-    const { data, error } = await q;
+    const { data, error } = QUEUEABLE_TABLES.has(config.table)
+      ? await withWriteTimeout<{ data: unknown; error: { message: string } | null }>(q)
+      : await q;
     if (error) {
       if (QUEUEABLE_TABLES.has(config.table) && isLikelyNetworkError(error)) {
         return queueOffline();
       }
       return { data: null, error: error.message };
     }
+    notifyRealtimeMutation(config.table, config.table === 'entreprise');
     return { data: (data as T) ?? null, error: null };
   } catch (err) {
     if (QUEUEABLE_TABLES.has(config.table) && isLikelyNetworkError(err)) {
@@ -370,6 +409,7 @@ export async function remove(config: DeleteConfig): Promise<{ error: string | nu
       config.filters as unknown as Record<string, unknown>[],
       buildMutationLabel(config.table, 'delete', {}),
     );
+    notifyRealtimeMutation(config.table);
     return { error: null };
   };
 
@@ -382,9 +422,14 @@ export async function remove(config: DeleteConfig): Promise<{ error: string | nu
       // @ts-expect-error - dynamic operator
       q = q[f.operator](f.column, f.value);
     }
-    const { error } = await q;
+    const { error } = QUEUEABLE_TABLES.has(config.table)
+      ? await withWriteTimeout<{ error: { message: string } | null }>(q)
+      : await q;
     if (error && QUEUEABLE_TABLES.has(config.table) && isLikelyNetworkError(error)) {
       return queueOffline();
+    }
+    if (!error) {
+      notifyRealtimeMutation(config.table, config.table === 'entreprise');
     }
     return { error: error?.message ?? null };
   } catch (err) {
@@ -403,19 +448,24 @@ export async function upsert<T = Record<string, unknown>>(config: UpsertConfig):
   }
   const queueOffline = () => {
     enqueueMutation(config.table, 'upsert', row, undefined, buildMutationLabel(config.table, 'upsert', row));
+    notifyRealtimeMutation(config.table);
     return { data: (row as T) ?? null, error: null };
   };
   if (isOffline() && QUEUEABLE_TABLES.has(config.table)) {
     return queueOffline();
   }
   try {
-    const { data, error } = await supabase.from(config.table).upsert(row);
+    const req = supabase.from(config.table).upsert(row);
+    const { data, error } = QUEUEABLE_TABLES.has(config.table)
+      ? await withWriteTimeout<{ data: unknown; error: { message: string } | null }>(req)
+      : await req;
     if (error) {
       if (QUEUEABLE_TABLES.has(config.table) && isLikelyNetworkError(error)) {
         return queueOffline();
       }
       return { data: null, error: error.message };
     }
+    notifyRealtimeMutation(config.table, config.table === 'entreprise');
     return { data: (data as T) ?? null, error: null };
   } catch (err) {
     if (QUEUEABLE_TABLES.has(config.table) && isLikelyNetworkError(err)) {

@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { db, rpc } from '@/lib/db';
 import { useI18n } from '@/lib/i18n';
+import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 
 import { TypeTraitement, ArticleCatalog, ArticleVariant, formatPrice } from '@/types';
 import {
@@ -78,15 +79,17 @@ function ArticlesTab() {
   const [saving, setSaving] = useState(false);
   const [entreprise, setEntreprise] = useState<Entreprise | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     setArticles(await db.getArticles());
-    setLoading(false);
+    if (!silent) setLoading(false);
   }, []);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  useRealtimeSync(['articles', 'article_variants'], () => load(true));
 
   async function handleAdd() {
     if (!newDesignation.trim() || !newPrix) return;
@@ -671,15 +674,17 @@ function TraitementsTab() {
   const [newJours, setNewJours] = useState('1');
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     setTypes(await db.getTypesTraitement());
-    setLoading(false);
+    if (!silent) setLoading(false);
   }, []);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  useRealtimeSync(['types_traitement'], () => load(true));
 
   async function handleAdd() {
     if (!newLibelle.trim() || !newCoef || !newJours) return;

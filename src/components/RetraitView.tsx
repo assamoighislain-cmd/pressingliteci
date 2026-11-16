@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useI18n } from '@/lib/i18n';
 import { db } from '@/lib/db';
+import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import {
   DepotWithArticles,
   TypeTraitement,
@@ -83,14 +84,14 @@ export default function RetraitView() {
     })();
   }, []);
 
-  const search = useCallback(async (term: string) => {
+  const search = useCallback(async (term: string, silent = false) => {
     const trimmed = term.trim();
     if (trimmed.length < 1) {
       setResults([]);
       setError(null);
       return;
     }
-    setLoading(true);
+    if (!silent) setLoading(true);
     try {
       const mapped = await db.getDepotsForRetrait();
       const lower = trimmed.toLowerCase();
@@ -105,14 +106,23 @@ export default function RetraitView() {
       setResults([]);
       setError(err instanceof Error ? err.message : (lang === 'fr' ? 'Erreur de recherche' : 'Search error'));
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
-  }, []);
+  }, [lang]);
 
   useEffect(() => {
-    const timer = setTimeout(() => search(searchTerm), 250);
+    const timer = setTimeout(() => search(searchTerm, false), 250);
     return () => clearTimeout(timer);
   }, [searchTerm, search]);
+
+  useRealtimeSync(['depots', 'depot_articles', 'depot_avances', 'clients'], () => {
+    if (searchTerm.trim().length >= 1) {
+      void search(searchTerm, true);
+    }
+    if (selected?.id) {
+      void refreshSelected(selected.id);
+    }
+  });
 
   const detailReceiptData = selected ? buildReceiptData(selected, avances) : null;
 

@@ -31,6 +31,8 @@ import { useI18n } from '@/lib/i18n';
 import { supabase } from '@/lib/supabase';
 import { setCurrentBoutiqueId, db } from '@/lib/db';
 import { isLikelyNetworkError } from '@/lib/readCache';
+import { connectRealtimeSync } from '@/lib/realtimeSync';
+import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import { Loader2, Clock, LogOut, ShieldAlert, ShieldCheck } from 'lucide-react';
 
 type LicenceInfo = { statut: string; date_fin: string; type_licence: string };
@@ -109,6 +111,32 @@ function App() {
       setView('superadmin');
     }
   }, [isSuperAdmin]);
+
+  const refreshEntrepriseAndLicenceSilently = () => {
+    if (!user || !tenantId || isSuperAdmin) return;
+    db.getEntreprise().then((ent) => {
+      updateMetaTags(ent);
+      setEntrepriseStatut(ent?.statut ?? null);
+    });
+    if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+    supabase.rpc('get_licence_status').then(({ data, error }) => {
+      if (error) return;
+      const rows = data as LicenceInfo[] | null;
+      const resolved = rows && rows.length > 0 ? rows[0] : null;
+      writeCachedLicence(tenantId, resolved);
+      setLicenceStatus(resolved);
+    });
+  };
+
+  useEffect(() => {
+    return connectRealtimeSync({
+      tenantId: tenantId ?? null,
+      isSuperAdmin: Boolean(isSuperAdmin),
+      userId: user?.id ?? null,
+    });
+  }, [user?.id, tenantId, isSuperAdmin]);
+
+  useRealtimeSync(['entreprise', 'licences'], refreshEntrepriseAndLicenceSilently);
 
   useEffect(() => {
     if (user && tenantId && !isSuperAdmin) {

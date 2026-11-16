@@ -1,7 +1,8 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useI18n } from '@/lib/i18n';
 import { db } from '@/lib/db';
 import { useAuth } from '@/lib/auth';
+import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import {
   DepotWithArticles,
   DepotAvance,
@@ -66,21 +67,25 @@ export default function JournalReglements() {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [entreprise, setEntreprise] = useState<Entreprise | null>(null);
 
-  useEffect(() => {
-    (async () => {
-      const [depotsData, avancesData, modesData, entData] = await Promise.all([
-        db.getAllDepotsWithClient(),
-        db.getAllAvances(),
-        db.getModesReglement(),
-        db.getEntreprise(),
-      ]);
-      setDepots(depotsData);
-      setAvances(avancesData);
-      setModes(modesData);
-      setEntreprise(entData);
-      setLoading(false);
-    })();
+  const loadJournal = useCallback(async () => {
+    const [depotsData, avancesData, modesData, entData] = await Promise.all([
+      db.getAllDepotsWithClient(),
+      db.getAllAvances(),
+      db.getModesReglement(),
+      db.getEntreprise(),
+    ]);
+    setDepots(depotsData);
+    setAvances(avancesData);
+    setModes(modesData);
+    setEntreprise(entData);
+    setLoading(false);
   }, []);
+
+  useEffect(() => {
+    loadJournal();
+  }, [loadJournal]);
+
+  useRealtimeSync(['depots', 'depot_avances', 'clients', 'modes_reglement', 'entreprise'], loadJournal);
 
   const depotMap = useMemo(() => {
     const m = new Map<string, DepotWithArticles>();

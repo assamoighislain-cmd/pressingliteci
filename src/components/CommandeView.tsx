@@ -1,7 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { db } from '@/lib/db';
 import { useI18n } from '@/lib/i18n';
+import { useRealtimeSync } from '@/hooks/useRealtimeSync';
+import { notifyRealtimeMutation } from '@/lib/realtimeSync';
 import { DepotWithArticles, DepotArticle, ModeReglementRow, formatPrice, formatDate, getTraitementLabelById, TypeTraitement, getCoefficientById, computeDateRetraitPrevueById } from '@/types';
 import { ShoppingBag, MapPin, Truck, CalendarClock, Phone, Package, ArrowRightLeft, Loader2, Pencil, X, Plus, Trash2, Save, Wallet, Banknote, Check, Clock, CheckCircle2, Home, TrendingUp } from 'lucide-react';
 
@@ -37,7 +39,7 @@ export default function CommandeView() {
   const [convertError, setConvertError] = useState<string | null>(null);
   const [allDepots, setAllDepots] = useState<DepotWithArticles[]>([]);
 
-  async function loadDepots() {
+  const loadDepots = useCallback(async () => {
     const [all, types, modes] = await Promise.all([
       db.getAllDepotsWithClient(),
       db.getTypesTraitement(),
@@ -48,11 +50,13 @@ export default function CommandeView() {
     setDepots(all.filter((d) => d.statut === 'COMMANDE'));
     setAllDepots(all);
     setLoading(false);
-  }
+  }, []);
 
   useEffect(() => {
     loadDepots();
-  }, []);
+  }, [loadDepots]);
+
+  useRealtimeSync(['depots', 'depot_articles', 'clients', 'types_traitement', 'modes_reglement'], loadDepots);
 
   function openPaymentModal(depot: DepotWithArticles) {
     setPaymentDepot(depot);
@@ -87,6 +91,7 @@ export default function CommandeView() {
           .eq('id', paymentDepot.id);
       }
 
+      notifyRealtimeMutation('depots');
       closePaymentModal();
       await loadDepots();
     } catch (err) {

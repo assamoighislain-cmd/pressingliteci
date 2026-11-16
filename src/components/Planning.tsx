@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useI18n } from '@/lib/i18n';
 import { db } from '@/lib/db';
+import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import { DepotWithClient, DepotWithArticles, DepotAvance, TypeTraitement, ModeReglementRow, Entreprise, formatPrice, formatDate, formatDateShort, getTraitementLabelById, getModeReglementLabel, buildWhatsAppMessage, buildWhatsAppUrl } from '@/types';
 import { Calendar, Clock, Check, ChevronDown, ChevronRight, ArrowUpFromLine, RotateCcw, Package, MessageCircle, Printer } from 'lucide-react';
 import { PrintableReport, printReport, type ReportData } from '@/components/PrintableReport';
@@ -30,11 +31,13 @@ export default function Planning() {
   const [entreprise, setEntreprise] = useState<Entreprise | null>(null);
 
   useEffect(() => {
-    loadPlanning();
+    void loadPlanning(false);
   }, []);
 
-  async function loadPlanning() {
-    setLoading(true);
+  useRealtimeSync(['depots', 'depot_articles', 'depot_avances', 'clients'], () => loadPlanning(true));
+
+  async function loadPlanning(silent = false) {
+    if (!silent) setLoading(true);
     const [depotsData, typesData, modesData, entrepriseData] = await Promise.all([
       db.getDepotsForPlanning(),
       db.getTypesTraitement(),
@@ -45,7 +48,7 @@ export default function Planning() {
     setTypesTraitement(typesData);
     setModesReglement(modesData);
     setEntreprise(entrepriseData);
-    setLoading(false);
+    if (!silent) setLoading(false);
   }
 
   function buildWhatsAppLink(depot: DepotWithClient): string | null {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useI18n } from '@/lib/i18n';
 import { db } from '@/lib/db';
+import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import {
   DepotWithClient,
   ModeReglementRow,
@@ -202,11 +203,16 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    loadDashboard();
+    void loadDashboard(false);
   }, []);
 
-  async function loadDashboard() {
-    setLoading(true);
+  useRealtimeSync(
+    ['depots', 'depot_articles', 'depot_avances', 'clients', 'depenses', 'modes_reglement', 'relances'],
+    () => loadDashboard(true),
+  );
+
+  async function loadDashboard(silent = false) {
+    if (!silent) setLoading(true);
     const [statsData, recentData, modesData, revenue, clients, payments, articles, monthly, unpaidData, birthdayClients] = await Promise.all([
       db.getDashboardStats(),
       db.getDepotsWithClient(),

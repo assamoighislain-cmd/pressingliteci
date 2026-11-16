@@ -3,6 +3,8 @@ import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth';
 import { useI18n } from '@/lib/i18n';
 import { useOfflineStatus } from '@/hooks/useOfflineStatus';
+import { useRealtimeSync } from '@/hooks/useRealtimeSync';
+import { notifyRealtimeMutation } from '@/lib/realtimeSync';
 import { buildWhatsAppUrl } from '@/types';
 import { Building2, UserPlus, Crown, Loader2, X, Check, Shield, Mail, Users, ChevronDown, ChevronRight, Trash2, UserCog, Pencil, Phone, User, KeyRound, Calendar, Plus, Ban, Copy, TrendingUp, AlertTriangle, Clock, BarChart3, UserCheck, Search, Filter, ArrowUpDown, MapPin, Navigation, Activity, ShoppingBag, Package, Store, DollarSign, ArrowDownUp, MessageCircle, Send, ExternalLink } from 'lucide-react';
 
@@ -213,6 +215,12 @@ export default function SuperAdminPage() {
     }
   }, [isSuperAdmin]);
 
+  useRealtimeSync(['entreprise', 'licences', 'join_requests', 'entreprise_members'], () => {
+    if (!isSuperAdmin || !isOnline) return;
+    void loadEntreprises(true);
+    void loadJoinRequests();
+  });
+
   useEffect(() => {
     if (isSuperAdmin && activeTab === 'usage' && usageStats.length === 0) {
       loadUsageStats();
@@ -271,14 +279,18 @@ export default function SuperAdminPage() {
     );
   }
 
-  async function loadEntreprises() {
-    setLoading(true);
-    setError(null);
+  async function loadEntreprises(silent = false) {
+    if (!silent) {
+      setLoading(true);
+      setError(null);
+    }
     const { data, error } = await supabase.from('entreprise').select('*').order('nom');
     if (error) {
-      setError(error.message);
-      setEntreprises([]);
-      setLoading(false);
+      if (!silent) {
+        setError(error.message);
+        setEntreprises([]);
+        setLoading(false);
+      }
       return;
     }
 
@@ -322,7 +334,7 @@ export default function SuperAdminPage() {
     );
 
     setEntreprises(enriched);
-    setLoading(false);
+    if (!silent) setLoading(false);
   }
 
   async function handleCreateEntreprise() {
@@ -519,6 +531,7 @@ export default function SuperAdminPage() {
       if (updErr) {
         setError(updErr.message);
       } else {
+        notifyRealtimeMutation('entreprise', true);
         setEntreprises((prev) =>
           prev.map((ent) => (ent.id === entrepriseId ? { ...ent, telephone: trimmed } : ent)),
         );
@@ -545,6 +558,7 @@ export default function SuperAdminPage() {
       if (error) {
         setError(error.message);
       } else {
+        notifyRealtimeMutation('entreprise', true);
         const updatedStatut = newStatut as EntrepriseRow['statut'];
         setEntreprises((prev) =>
           prev.map((e) => (e.id === entrepriseId ? { ...e, statut: updatedStatut } : e)),
@@ -572,6 +586,7 @@ export default function SuperAdminPage() {
       if (error) {
         setError(error.message);
       } else {
+        notifyRealtimeMutation('entreprise', true);
         setSuccess(lang === 'fr' ? `« ${nom} » validée et activée` : `"${nom}" validated and activated`);
         const targetEnt = entreprises.find((e) => e.id === entrepriseId);
         setEntreprises((prev) =>
@@ -693,9 +708,10 @@ export default function SuperAdminPage() {
       if (error) {
         setError(error.message);
       } else {
+        notifyRealtimeMutation('licences', true);
         setSuccess(lang === 'fr' ? 'Licence générée avec succès' : 'License generated successfully');
         setShowLicenceModal(null);
-        await loadEntreprises();
+        await loadEntreprises(true);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : (lang === 'fr' ? 'Erreur lors de la génération' : 'Error during generation'));
@@ -713,8 +729,9 @@ export default function SuperAdminPage() {
       if (error) {
         setError(error.message);
       } else {
+        notifyRealtimeMutation('licences', true);
         setSuccess(lang === 'fr' ? 'Licence révoquée' : 'License revoked');
-        await loadEntreprises();
+        await loadEntreprises(true);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : (lang === 'fr' ? 'Erreur lors de la révocation' : 'Error during revocation'));
@@ -754,9 +771,10 @@ export default function SuperAdminPage() {
       if (error) {
         setError(error.message);
       } else {
+        notifyRealtimeMutation('licences', true);
         setSuccess(lang === 'fr' ? 'Licence modifiée avec succès' : 'License updated successfully');
         setEditLicence(null);
-        await loadEntreprises();
+        await loadEntreprises(true);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : (lang === 'fr' ? 'Erreur lors de la modification' : 'Error during update'));
@@ -774,8 +792,9 @@ export default function SuperAdminPage() {
       if (error) {
         setError(error.message);
       } else {
+        notifyRealtimeMutation('licences', true);
         setSuccess(lang === 'fr' ? 'Licence supprimée' : 'License deleted');
-        await loadEntreprises();
+        await loadEntreprises(true);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : (lang === 'fr' ? 'Erreur lors de la suppression' : 'Error during deletion'));

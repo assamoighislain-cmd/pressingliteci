@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { db } from '@/lib/db';
-import { supabase } from '@/lib/supabase';
 import { useI18n } from '@/lib/i18n';
+import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import { DepotWithArticles, formatPrice, formatDate, getTraitementLabelById, TypeTraitement } from '@/types';
 import { Truck, MapPin, CalendarClock, Phone, Navigation, Package, Clock, Check, ShoppingBag, Loader2, ChevronDown, Shirt } from 'lucide-react';
 
@@ -14,25 +14,31 @@ export default function CollecteView() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    (async () => {
-      const all = await db.getAllDepotsWithClient();
-      const types = await db.getTypesTraitement();
-      setTypesTraitement(types);
-      setDepots(all.filter((d) => d.pickup_requested && !d.collected_at));
-      setLoading(false);
-    })();
+  const loadCollectes = useCallback(async () => {
+    const [all, types] = await Promise.all([
+      db.getAllDepotsWithClient(),
+      db.getTypesTraitement(),
+    ]);
+    setTypesTraitement(types);
+    setDepots(all.filter((d) => d.pickup_requested && !d.collected_at));
+    setLoading(false);
   }, []);
+
+  useEffect(() => {
+    loadCollectes();
+  }, [loadCollectes]);
+
+  useRealtimeSync(['depots', 'depot_articles', 'clients', 'types_traitement'], loadCollectes);
 
   async function handleCollect(depotId: string) {
     setCollectingId(depotId);
     setError(null);
     try {
-      const { error: updateError } = await supabase
-        .from('depots')
-        .update({ collected_at: new Date().toISOString(), statut: 'EN_COURS' })
-        .eq('id', depotId);
-      if (updateError) throw updateError;
+      const updateError = await db.updateDepot(depotId, {
+        collected_at: new Date().toISOString(),
+        statut: 'EN_COURS',
+      });
+      if (updateError) throw new Error(updateError);
       setDepots((prev) => prev.filter((d) => d.id !== depotId));
     } catch (err) {
       setError(err instanceof Error ? err.message : (lang === 'fr' ? 'Erreur lors de la collecte' : 'Error during collection'));

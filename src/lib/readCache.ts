@@ -1,6 +1,6 @@
-// Offline read cache — stores results of database reads in both localStorage (fast sync access)
-// and IndexedDB (high-capacity fallback) so the app works seamlessly offline without corrupting
-// cached data when network drops mid-request.
+// Offline & Real-Time Read Cache (Stale-While-Revalidate + IndexedDB + Read-After-Write Consistency)
+// Serves cached data instantaneously (0ms) while revalidating silently in the background,
+// and guarantees immediate fresh reads after any local mutation or real-time WebSocket event.
 
 import { idbGet, idbPut, READ_CACHE_STORE } from '@/lib/offlineStorage';
 
@@ -8,10 +8,32 @@ const CACHE_PREFIX = 'offline_cache_';
 const CACHE_TIMESTAMP_KEY = 'offline_cache_timestamps';
 const LAST_CACHE_REFRESH_KEY = 'offline_last_cache_refresh';
 
+// Minimum age before a cached read triggers a silent background network check
+const SWR_REVALIDATE_AFTER_MS = 2500;
+
 interface CacheEntry<T> {
   key?: string;
   data: T;
   timestamp: number;
+}
+
+type CacheDiffListener = (key: string) => void;
+const cacheDiffListeners = new Set<CacheDiffListener>();
+const inFlightRevalidations = new Map<string, Promise<void>>();
+
+// Timestamp of the latest local write or incoming real-time server event.
+// Any cache entry older than this timestamp will bypass stale return and fetch fresh immediately.
+let lastInvalidatedAt = 0;
+
+export function onBackgroundCacheDiff(listener: CacheDiffListener): () => void {
+  cacheDiffListeners.add(listener);
+  return () => {
+    cacheDiffListeners.delete(listener);
+  };
+}
+
+export function invalidateAllCacheFreshness(): void {
+  lastInvalidatedAt = Date.now();
 }
 
 export class OfflineNetworkError extends Error {
@@ -56,15 +78,19 @@ function cacheKey(key: string): string {
   return `${CACHE_PREFIX}${key}`;
 }
 
-export function getCached<T>(key: string): T | null {
+function getCacheEntrySync<T>(key: string): CacheEntry<T> | null {
   try {
     const raw = localStorage.getItem(cacheKey(key));
     if (!raw) return null;
-    const entry = JSON.parse(raw) as CacheEntry<T>;
-    return entry.data;
+    return JSON.parse(raw) as CacheEntry<T>;
   } catch {
     return null;
   }
+}
+
+export function getCached<T>(key: string): T | null {
+  const entry = getCacheEntrySync<T>(key);
+  return entry ? entry.data : null;
 }
 
 export async function getCachedAsync<T>(key: string): Promise<T | null> {
@@ -78,7 +104,6 @@ export function setCached<T>(key: string, data: T): void {
   const now = Date.now();
   const entry: CacheEntry<T> = { key, data, timestamp: now };
 
-  // Persist asynchronously to IndexedDB (virtually unlimited storage)
   void idbPut(READ_CACHE_STORE, entry);
 
   try {
@@ -138,10 +163,39 @@ function pruneOldEntries(count: number): void {
   }
 }
 
+function revalidateInBackground<T>(key: string, fetcher: () => Promise<T>, prevData: T): void {
+  if (inFlightRevalidations.has(key)) return;
+
+  const task = (async () => {
+    try {
+      const fresh = await fetcher();
+      let changed = false;
+      try {
+        changed = JSON.stringify(fresh) !== JSON.stringify(prevData);
+      } catch {
+        changed = true;
+      }
+      setCached(key, fresh);
+      if (changed) {
+        cacheDiffListeners.forEach((fn) => fn(key));
+      }
+    } catch {
+      // Silent background revalidation: ignore transient network errors
+    } finally {
+      inFlightRevalidations.delete(key);
+    }
+  })();
+
+  inFlightRevalidations.set(key, task);
+}
+
 /**
- * If offline: returns cached result from localStorage or IndexedDB, or fallback.
- * If online: runs fetcher, caches result, and returns it.
- * If fetcher fails due to network loss: preserves and returns existing cache instead of overwriting with empty fallback!
+ * Stale-While-Revalidate + Read-After-Write Consistency:
+ * - Offline: returns cached result from localStorage or IndexedDB.
+ * - Online with valid cache (newer than lastInvalidatedAt): returns cached data in 0ms
+ *   and silently revalidates in the background if older than SWR_REVALIDATE_AFTER_MS.
+ * - Online after a mutation/realtime event (or cold cache): fetches fresh from server,
+ *   caches it, and falls back to existing cache on network drop.
  */
 export async function cachedRead<T>(
   key: string,
@@ -151,6 +205,14 @@ export async function cachedRead<T>(
   if (typeof navigator !== 'undefined' && !navigator.onLine) {
     const cached = await getCachedAsync<T>(key);
     return cached !== null ? cached : fallback;
+  }
+
+  const syncEntry = getCacheEntrySync<T>(key);
+  if (syncEntry !== null && syncEntry.timestamp >= lastInvalidatedAt) {
+    if (Date.now() - syncEntry.timestamp >= SWR_REVALIDATE_AFTER_MS) {
+      revalidateInBackground(key, fetcher, syncEntry.data);
+    }
+    return syncEntry.data;
   }
 
   try {

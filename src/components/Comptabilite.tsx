@@ -1,7 +1,8 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useI18n } from '@/lib/i18n';
 import { db } from '@/lib/db';
 import { useAuth } from '@/lib/auth';
+import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import {
   DepotWithArticles,
   DepotAvance,
@@ -74,23 +75,27 @@ export default function Comptabilite() {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [entreprise, setEntreprise] = useState<Entreprise | null>(null);
 
-  useEffect(() => {
-    (async () => {
-      const [depotsData, avancesData, depensesData, modesData, entData] = await Promise.all([
-        db.getAllDepotsWithClient(),
-        db.getAllAvances(),
-        db.getAllDepenses(),
-        db.getModesReglement(),
-        db.getEntreprise(),
-      ]);
-      setDepots(depotsData);
-      setAvances(avancesData);
-      setDepenses(depensesData);
-      setModes(modesData);
-      setEntreprise(entData);
-      setLoading(false);
-    })();
+  const loadComptabilite = useCallback(async () => {
+    const [depotsData, avancesData, depensesData, modesData, entData] = await Promise.all([
+      db.getAllDepotsWithClient(),
+      db.getAllAvances(),
+      db.getAllDepenses(),
+      db.getModesReglement(),
+      db.getEntreprise(),
+    ]);
+    setDepots(depotsData);
+    setAvances(avancesData);
+    setDepenses(depensesData);
+    setModes(modesData);
+    setEntreprise(entData);
+    setLoading(false);
   }, []);
+
+  useEffect(() => {
+    loadComptabilite();
+  }, [loadComptabilite]);
+
+  useRealtimeSync(['depots', 'depot_avances', 'depenses', 'clients', 'modes_reglement', 'entreprise'], loadComptabilite);
 
   const depotMap = useMemo(() => {
     const m = new Map<string, DepotWithArticles>();

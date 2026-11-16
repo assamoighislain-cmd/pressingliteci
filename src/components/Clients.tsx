@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { db, rpc } from '@/lib/db';
 import { useI18n } from '@/lib/i18n';
+import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 
 import { Client, formatDate, formatDateShort, formatPrice, applyPhonePrefix } from '@/types';
 import type { Entreprise } from '@/types';
@@ -122,8 +123,8 @@ export default function Clients() {
     setTimeout(() => setCopiedId(null), 2000);
   }
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     const clientsData = await db.getAllClients();
 
     const clientIds = clientsData.map((c) => c.id);
@@ -140,12 +141,17 @@ export default function Clients() {
     }));
 
     setClients(enriched);
-    setLoading(false);
+    if (!silent) setLoading(false);
   }, []);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  useRealtimeSync(['clients', 'depots', 'fidelite_points', 'entreprise'], () => {
+    void load(true);
+    db.getEntreprise().then(setEntreprise);
+  });
 
   async function generateClientCode(): Promise<string> {
     const { data, error } = await rpc<string>('generate_client_code');

@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useI18n } from '@/lib/i18n';
 import { db, rpc } from '@/lib/db';
 import { useAuth } from '@/lib/auth';
+import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import { DepotWithArticles, DepotAvance, TypeTraitement, Entreprise, formatPrice, formatDate, formatDateShort, getTraitementLabelById, applyPhonePrefix } from '@/types';
 import { CalendarDays, ChevronDown, ChevronRight, Clock, Check, Filter, TrendingUp, Package, Layers, Wallet, Trash2, AlertTriangle, Truck, CalendarClock, Tags, Printer } from 'lucide-react';
 import ImportExcel from '@/components/ImportExcel';
@@ -189,6 +190,8 @@ export default function Historique() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useRealtimeSync(['depots', 'depot_articles', 'depot_avances', 'clients', 'types_traitement'], load);
 
   async function handleImportDepots(rows: Record<string, string | number | null>[], onProgress?: (current: number, total: number) => void): Promise<{ success: number; errors: string[] }> {
     let success = 0;

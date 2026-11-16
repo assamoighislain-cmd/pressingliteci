@@ -9,6 +9,7 @@ import { usePushNotifications } from '@/hooks/usePushNotifications';
 import { useOfflineStatus } from '@/hooks/useOfflineStatus';
 import { enableAutoSync } from '@/lib/offlineQueue';
 import { getLastCacheRefreshAt } from '@/lib/readCache';
+import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import { useAuth } from '@/lib/auth';
 
 function playPickupSound() {
@@ -168,14 +169,27 @@ export default function Layout({ currentView, onNavigate, children }: LayoutProp
     }
   }
 
+  const refreshBrandingSilently = async () => {
+    const ent = await db.getEntreprise();
+    setEntreprise(ent);
+    if (ent?.nom) document.title = ent.nom;
+    setMemberName(await db.getCurrentMemberName());
+  };
+
   useEffect(() => {
-    (async () => {
-      const ent = await db.getEntreprise();
-      setEntreprise(ent);
-      if (ent?.nom) document.title = ent.nom;
-      setMemberName(await db.getCurrentMemberName());
-    })();
+    void refreshBrandingSilently();
   }, []);
+
+  useRealtimeSync(['entreprise', 'licences'], () => {
+    void refreshBrandingSilently();
+    if (tenantId && !isSuperAdmin && isOnline) {
+      supabase.rpc('get_licence_status').then(({ data, error }) => {
+        if (error) return;
+        const rows = data as { type_licence: string; date_fin: string; statut: string }[] | null;
+        setLicenceInfo(rows && rows.length > 0 ? rows[0] : null);
+      });
+    }
+  });
 
   useEffect(() => {
     if (tenantId && !isSuperAdmin) {
@@ -786,65 +800,39 @@ export default function Layout({ currentView, onNavigate, children }: LayoutProp
           </div>
         </div>
       )}
-      {/* Offline / background sync status bar */}
+      {/* Silent background sync: no intrusive bottom bar during normal online background sync; only show when offline or if an action failed */}
       {!isOnline ? (
-        <div className="fixed bottom-0 left-0 right-0 z-40 bg-amber-500 text-white px-4 py-2.5 flex items-center justify-center gap-3 text-xs sm:text-sm font-medium shadow-lg">
-          <WifiOff className="w-4 h-4 flex-shrink-0" />
+        <div className="fixed bottom-0 left-0 right-0 z-40 bg-amber-500/95 backdrop-blur-sm text-white px-4 py-2 flex items-center justify-center gap-3 text-xs font-medium shadow-md">
+          <WifiOff className="w-3.5 h-3.5 flex-shrink-0" />
           <span className="truncate">
             {totalQueueCount > 0
               ? (lang === 'fr'
-                  ? `Mode hors ligne actif — ${totalQueueCount} opération(s) enregistrée(s) localement`
-                  : `Offline mode — ${totalQueueCount} change(s) saved locally`)
+                  ? `Hors ligne — ${totalQueueCount} saisie(s) seront synchronisées automatiquement en arrière-plan`
+                  : `Offline — ${totalQueueCount} change(s) will sync automatically in background`)
               : (lang === 'fr'
-                  ? 'Mode hors ligne actif — consultation et saisie disponibles'
+                  ? 'Mode hors ligne actif — synchronisation automatique dès le retour réseau'
                   : t('nav.offline'))}
           </span>
           <button
             onClick={() => setShowSyncModal(true)}
-            className="px-2.5 py-1 rounded-md bg-white/20 hover:bg-white/30 text-xs font-semibold transition-colors flex-shrink-0"
-          >
-            {lang === 'fr' ? 'File d\'attente' : 'Queue'}
-          </button>
-        </div>
-      ) : isSyncing || pendingCount > 0 || failedCount > 0 ? (
-        <div
-          className={`fixed bottom-0 left-0 right-0 z-40 text-white px-4 py-2.5 flex items-center justify-center gap-3 text-xs sm:text-sm font-medium shadow-lg ${
-            failedCount > 0 ? 'bg-rose-600' : 'bg-sky-600'
-          }`}
-        >
-          {isSyncing ? (
-            <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" />
-          ) : failedCount > 0 ? (
-            <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-          ) : (
-            <RefreshCw className="w-4 h-4 flex-shrink-0" />
-          )}
-          <span className="truncate">
-            {isSyncing
-              ? (lang === 'fr'
-                  ? `Synchronisation en arrière-plan… (${syncedInBatch}/${totalInBatch || pendingCount})`
-                  : `Background sync… (${syncedInBatch}/${totalInBatch || pendingCount})`)
-              : failedCount > 0
-                ? (lang === 'fr'
-                    ? `${failedCount} opération(s) nécessitent une vérification`
-                    : `${failedCount} operation(s) need attention`)
-                : (lang === 'fr'
-                    ? `${pendingCount} opération(s) en attente de synchronisation`
-                    : `${pendingCount} pending sync(s)`)}
-          </span>
-          {!isSyncing && pendingCount > 0 && (
-            <button
-              onClick={() => void sync()}
-              className="px-2.5 py-1 rounded-md bg-white/20 hover:bg-white/30 text-xs font-semibold transition-colors flex-shrink-0"
-            >
-              {lang === 'fr' ? 'Synchroniser' : 'Sync now'}
-            </button>
-          )}
-          <button
-            onClick={() => setShowSyncModal(true)}
-            className="px-2.5 py-1 rounded-md bg-white/20 hover:bg-white/30 text-xs font-semibold transition-colors flex-shrink-0"
+            className="px-2 py-0.5 rounded bg-white/20 hover:bg-white/30 text-xs font-semibold transition-colors flex-shrink-0"
           >
             {lang === 'fr' ? 'Détails' : 'Details'}
+          </button>
+        </div>
+      ) : failedCount > 0 ? (
+        <div className="fixed bottom-4 right-4 z-40 bg-rose-600 text-white px-3.5 py-2 rounded-xl flex items-center gap-2.5 text-xs font-medium shadow-lg">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+          <span>
+            {lang === 'fr'
+              ? `${failedCount} opération(s) à vérifier`
+              : `${failedCount} operation(s) need review`}
+          </span>
+          <button
+            onClick={() => setShowSyncModal(true)}
+            className="px-2 py-0.5 rounded bg-white/20 hover:bg-white/30 text-xs font-semibold transition-colors"
+          >
+            {lang === 'fr' ? 'Voir' : 'View'}
           </button>
         </div>
       ) : null}

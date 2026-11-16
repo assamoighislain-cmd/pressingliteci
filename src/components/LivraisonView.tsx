@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { db } from '@/lib/db';
-import { supabase } from '@/lib/supabase';
 import { useI18n } from '@/lib/i18n';
+import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import { DepotWithArticles, formatPrice, formatDate, getTraitementLabelById, TypeTraitement } from '@/types';
 import { Truck, MapPin, Phone, Navigation, Package, Check, Loader2, Home, ChevronDown, Shirt, Clock, CheckCircle2 } from 'lucide-react';
 
@@ -13,26 +13,30 @@ export default function LivraisonView() {
   const [deliveringId, setDeliveringId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  useEffect(() => {
-    (async () => {
-      const [all, types] = await Promise.all([
-        db.getAllDepotsWithClient(),
-        db.getTypesTraitement(),
-      ]);
-      setTypesTraitement(types);
-      setDepots(all.filter((d) => d.delivery_requested && (d.statut === 'EN_COURS' || d.statut === 'COMMANDE')));
-      setLoading(false);
-    })();
+  const loadLivraisons = useCallback(async () => {
+    const [all, types] = await Promise.all([
+      db.getAllDepotsWithClient(),
+      db.getTypesTraitement(),
+    ]);
+    setTypesTraitement(types);
+    setDepots(all.filter((d) => d.delivery_requested && (d.statut === 'EN_COURS' || d.statut === 'COMMANDE')));
+    setLoading(false);
   }, []);
+
+  useEffect(() => {
+    loadLivraisons();
+  }, [loadLivraisons]);
+
+  useRealtimeSync(['depots', 'depot_articles', 'clients', 'types_traitement'], loadLivraisons);
 
   async function handleDelivered(depotId: string) {
     setDeliveringId(depotId);
     try {
-      const { error } = await supabase
-        .from('depots')
-        .update({ statut: 'RETIRE', date_retrait: new Date().toISOString() })
-        .eq('id', depotId);
-      if (error) throw error;
+      const updateError = await db.updateDepot(depotId, {
+        statut: 'RETIRE',
+        date_retrait: new Date().toISOString(),
+      });
+      if (updateError) throw new Error(updateError);
       setDepots((prev) => prev.filter((d) => d.id !== depotId));
     } catch {
       // ignore

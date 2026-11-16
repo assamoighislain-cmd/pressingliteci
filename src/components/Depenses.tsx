@@ -1,7 +1,8 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { db } from '@/lib/db';
 import { useI18n } from '@/lib/i18n';
 import { useAuth } from '@/lib/auth';
+import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import { Depense, DepenseCategory, ModeReglementRow, formatPrice, formatDateShort } from '@/types';
 import {
   Receipt,
@@ -77,21 +78,25 @@ export default function Depenses() {
   const [editingCatName, setEditingCatName] = useState('');
   const [catError, setCatError] = useState<string | null>(null);
 
-  useEffect(() => {
-    (async () => {
-      const [depensesData, catData, modesData, entData] = await Promise.all([
-        db.getAllDepenses(),
-        db.getAllDepenseCategories(),
-        db.getModesReglement(),
-        db.getEntreprise(),
-      ]);
-      setDepenses(depensesData);
-      setCategories(catData);
-      setModes(modesData);
-      setEntreprise(entData);
-      setLoading(false);
-    })();
+  const loadDepenses = useCallback(async () => {
+    const [depensesData, catData, modesData, entData] = await Promise.all([
+      db.getAllDepenses(),
+      db.getAllDepenseCategories(),
+      db.getModesReglement(),
+      db.getEntreprise(),
+    ]);
+    setDepenses(depensesData);
+    setCategories(catData);
+    setModes(modesData);
+    setEntreprise(entData);
+    setLoading(false);
   }, []);
+
+  useEffect(() => {
+    loadDepenses();
+  }, [loadDepenses]);
+
+  useRealtimeSync(['depenses', 'depense_categories', 'modes_reglement', 'entreprise'], loadDepenses);
 
   const { startDate, endDate, periodLabel } = useMemo(() => {
     const now = new Date();

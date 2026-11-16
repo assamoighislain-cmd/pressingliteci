@@ -259,6 +259,9 @@ export function enqueueMutation(
       persistQueue(queue);
       void requestBackgroundSync();
       broadcastQueueUpdated();
+      if (typeof navigator !== 'undefined' && navigator.onLine) {
+        scheduleRetry(120);
+      }
       return updated;
     }
 
@@ -281,6 +284,9 @@ export function enqueueMutation(
       persistQueue(queue);
       void requestBackgroundSync();
       broadcastQueueUpdated();
+      if (typeof navigator !== 'undefined' && navigator.onLine) {
+        scheduleRetry(120);
+      }
       return updated;
     }
   }
@@ -325,9 +331,9 @@ export function enqueueMutation(
   void requestBackgroundSync();
   broadcastQueueUpdated();
 
-  // If online right now, schedule a short debounced sync automatically
+  // If online right now, flush almost immediately in the background (120ms micro-batch)
   if (typeof navigator !== 'undefined' && navigator.onLine) {
-    scheduleRetry(800);
+    scheduleRetry(120);
   }
   return entry;
 }
@@ -494,9 +500,8 @@ async function runProcessQueueInternal(): Promise<{ processed: number; failed: n
     return { processed: 0, failed: memoryQueue.length };
   }
 
-  const reachable = await checkRealConnectivity();
-  if (!reachable) {
-    scheduleRetry(10000);
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    scheduleRetry(5000);
     return { processed: 0, failed: 0 };
   }
 
@@ -537,8 +542,8 @@ async function runProcessQueueInternal(): Promise<{ processed: number; failed: n
       syncedInBatchCount = processed;
       persistQueue([...workingQueue]);
     } else if (res.transient) {
-      // Transient network error: DO NOT drop or burn permanent retries! Stop FIFO batch & backoff.
-      const backoffMs = Math.min(Math.pow(2, Math.min(m.retries, 4)) * 2500, 45000);
+      // Transient network error: DO NOT drop or burn permanent retries! Stop FIFO batch & backoff quickly.
+      const backoffMs = Math.min(Math.pow(2, Math.min(m.retries, 4)) * 1200, 20000);
       workingQueue[i] = {
         ...m,
         status: 'pending',
@@ -626,7 +631,7 @@ export function enableAutoSync(): void {
     emitState();
     setTimeout(() => {
       void processQueue();
-    }, 800);
+    }, 150);
   });
 
   window.addEventListener('offline', () => {
@@ -670,10 +675,10 @@ export function enableAutoSync(): void {
     // Ignore
   }
 
-  // Adaptive heartbeat every 30s when online and pending mutations exist
+  // Fast adaptive heartbeat every 10s when online and pending mutations exist
   setInterval(() => {
     if (navigator.onLine && !isSyncingFlag && getPendingCount() > 0) {
       void processQueue();
     }
-  }, 30000);
+  }, 10000);
 }
