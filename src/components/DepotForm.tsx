@@ -42,6 +42,7 @@ import {
   getBillingPointCode,
   setBillingPointCode,
   formatDepotNumero,
+  formatClientCode,
   normalizeBillingPointCode,
 } from '@/lib/dbOfflineHelpers';
 import { Entreprise, buildWhatsAppMessage, buildWhatsAppUrl, getModeReglementLabel, applyPhonePrefix } from '@/types';
@@ -987,6 +988,9 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
             <span className="px-2 py-0.5 rounded bg-sky-50 text-sky-700 font-mono font-semibold">
               {formatDepotNumero(1, dateDepotEffective.getFullYear(), billingPointCode)}
             </span>
+            <span className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 font-mono font-semibold">
+              {formatClientCode(1, billingPointCode)}
+            </span>
           </div>
           <button
             type="button"
@@ -1007,8 +1011,8 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
           <div className="pt-2 border-t border-slate-100 space-y-2">
             <p className="text-xs text-slate-500">
               {lang === 'fr'
-                ? 'Si plusieurs appareils facturent en même temps hors-ligne dans la même boutique, attribuez un code unique à chaque appareil (ex: C1, C2) pour éviter tout doublon de numéro.'
-                : 'If multiple devices bill offline simultaneously in the same shop, assign a unique code per device (e.g. C1, C2) to prevent duplicate deposit numbers.'}
+                ? 'Si plusieurs appareils travaillent hors-ligne en même temps, attribuez un code unique à chaque appareil (ex: C1, C2) pour éviter tout doublon de numéro de dépôt ET de code client.'
+                : 'If multiple devices work offline simultaneously, assign a unique code per device (e.g. C1, C2) to prevent duplicate deposit numbers AND client codes.'}
             </p>
             <div className="flex flex-wrap items-center gap-1.5">
               {(['', 'C1', 'C2', 'C3', 'P1', 'P2'] as const).map((preset) => {

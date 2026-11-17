@@ -23,9 +23,16 @@ import {
   Cake,
   Store,
   Globe,
+  Monitor,
 } from 'lucide-react';
 import ImportExcel from '@/components/ImportExcel';
 import { PrintableReport, printReport, type ReportData } from '@/components/PrintableReport';
+import {
+  getBillingPointCode,
+  setBillingPointCode,
+  formatClientCode,
+  normalizeBillingPointCode,
+} from '@/lib/dbOfflineHelpers';
 
 interface ClientWithLastDepot extends Client {
   dernier_depot: string | null;
@@ -56,9 +63,17 @@ export default function Clients() {
 
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [entreprise, setEntreprise] = useState<Entreprise | null>(null);
+  const [billingPointCode, setBillingPointCodeState] = useState<string>(() => getBillingPointCode());
+  const [showBillingPointPicker, setShowBillingPointPicker] = useState(false);
 
   useEffect(() => {
     db.getEntreprise().then(setEntreprise);
+  }, []);
+
+  useEffect(() => {
+    const onPointChange = () => setBillingPointCodeState(getBillingPointCode());
+    window.addEventListener('pressinglite:billing-point-changed', onPointChange);
+    return () => window.removeEventListener('pressinglite:billing-point-changed', onPointChange);
   }, []);
 
   async function handleImportClients(rows: Record<string, string | number | null>[], onProgress?: (current: number, total: number) => void): Promise<{ success: number; errors: string[] }> {
@@ -369,7 +384,77 @@ export default function Clients() {
       {/* Add form */}
       {showAdd && (
         <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-5 space-y-3">
-          <h3 className="text-sm font-semibold text-slate-900">{lang === 'fr' ? 'Nouveau client' : 'New client'}</h3>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold text-slate-900">{lang === 'fr' ? 'Nouveau client' : 'New client'}</h3>
+            <div className="flex items-center gap-2 text-xs text-slate-600">
+              <Monitor className="w-3.5 h-3.5 text-sky-600 shrink-0" />
+              <span>
+                {lang === 'fr' ? 'Poste :' : 'Register:'}{' '}
+                <strong className="text-slate-900">
+                  {billingPointCode || (lang === 'fr' ? 'Principal' : 'Main')}
+                </strong>
+              </span>
+              <span className="px-2 py-0.5 rounded bg-sky-50 text-sky-700 font-mono font-semibold">
+                {formatClientCode(1, billingPointCode)}
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowBillingPointPicker((v) => !v)}
+                className="text-xs font-medium text-sky-600 hover:text-sky-700"
+              >
+                {showBillingPointPicker
+                  ? lang === 'fr'
+                    ? 'Fermer'
+                    : 'Close'
+                  : lang === 'fr'
+                    ? 'Changer'
+                    : 'Change'}
+              </button>
+            </div>
+          </div>
+
+          {showBillingPointPicker && (
+            <div className="rounded-lg bg-slate-50 border border-slate-100 p-3 space-y-2">
+              <p className="text-xs text-slate-500">
+                {lang === 'fr'
+                  ? 'Pour éviter tout doublon de code client hors-ligne entre plusieurs caisses ou boutiques, attribuez un code unique par appareil (ex: C1, C2).'
+                  : 'To avoid duplicate offline client codes across multiple registers or shops, assign a unique code per device (e.g. C1, C2).'}
+              </p>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {(['', 'C1', 'C2', 'C3', 'P1', 'P2'] as const).map((preset) => {
+                  const active = billingPointCode === preset;
+                  return (
+                    <button
+                      key={preset || 'MAIN'}
+                      type="button"
+                      onClick={() => {
+                        const saved = setBillingPointCode(preset);
+                        setBillingPointCodeState(saved);
+                      }}
+                      className={`px-2.5 py-1 rounded-md text-xs font-medium border transition-colors ${
+                        active
+                          ? 'bg-sky-500 text-white border-sky-500'
+                          : 'bg-white text-slate-600 border-slate-200 hover:border-sky-300'
+                      }`}
+                    >
+                      {preset || (lang === 'fr' ? 'Principal (C-0001)' : 'Main (C-0001)')}
+                    </button>
+                  );
+                })}
+                <input
+                  type="text"
+                  value={billingPointCode}
+                  onChange={(e) => {
+                    const saved = setBillingPointCode(normalizeBillingPointCode(e.target.value));
+                    setBillingPointCodeState(saved);
+                  }}
+                  maxLength={6}
+                  placeholder={lang === 'fr' ? 'Code perso…' : 'Custom…'}
+                  className="w-28 px-2.5 py-1 rounded-md border border-slate-200 bg-white text-xs font-mono uppercase focus:outline-none focus:ring-2 focus:ring-sky-500"
+                />
+              </div>
+            </div>
+          )}
           <div className="flex flex-col sm:flex-row gap-3">
             <input
               type="text"

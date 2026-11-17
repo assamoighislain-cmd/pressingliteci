@@ -15,7 +15,10 @@ import { isLikelyNetworkError } from '@/lib/readCache';
 import {
   parseDepotNumeroInfo,
   computeNextOnlineDepotNumero,
+  parseClientCodeInfo,
+  computeNextOnlineClientCode,
   getBillingPointCode,
+  optimisticPatchClient,
 } from '@/lib/dbOfflineHelpers';
 
 const QUEUE_KEY = 'offline_mutation_queue';
@@ -408,7 +411,12 @@ async function resolveDuplicateKeyAndMutateData(m: QueuedMutation): Promise<bool
     const pointCode = parsed ? parsed.pointCode : getBillingPointCode();
     const pattern = pointCode ? `${pointCode}-D%-${year}` : `D%-${year}`;
 
-    let q = supabase.from('depots').select('numero').like('numero', pattern).limit(10000);
+    let q = supabase.from('depots').select('numero').limit(10000);
+    if (year <= 2026) {
+      q = q.or(`numero.like.${pattern},numero.like.D-%`);
+    } else {
+      q = q.like('numero', pattern);
+    }
     if (boutiqueId) {
       q = q.eq('boutique_id', boutiqueId);
     } else {
@@ -427,9 +435,19 @@ async function resolveDuplicateKeyAndMutateData(m: QueuedMutation): Promise<bool
     }
   }
   if (m.table === 'clients' && 'code' in m.data) {
-    const { data, error } = await supabase.rpc('generate_client_code');
-    if (!error && data) {
-      m.data = { ...m.data, code: String(data) };
+    const parsed = parseClientCodeInfo(String(m.data.code ?? ''));
+    const pointCode = parsed ? parsed.pointCode : getBillingPointCode();
+    const boutiqueId = (m.data.boutique_id as string | null) ?? null;
+    const { data, error } = await supabase.from('clients').select('code').limit(10000);
+    if (!error) {
+      const nextCode = computeNextOnlineClientCode(
+        (data as Array<{ code?: string | null }> | null) ?? [],
+        pointCode,
+      );
+      m.data = { ...m.data, code: nextCode };
+      if (m.data.id) {
+        optimisticPatchClient(String(m.data.id), { code: nextCode }, boutiqueId);
+      }
       return true;
     }
   }

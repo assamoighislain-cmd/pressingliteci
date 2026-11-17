@@ -99,6 +99,8 @@ export function formatDepotNumero(seq: number, year: number, pointCode = ''): st
   return cleanPoint ? `${cleanPoint}-${base}` : base;
 }
 
+const LEGACY_DEPOT_TRANSITION_MAX_YEAR = 2026;
+
 export interface ParsedDepotNumero {
   seq: number;
   year: number;
@@ -119,10 +121,63 @@ export function parseDepotNumeroInfo(numero: string | null | undefined): ParsedD
   return { seq, year, pointCode };
 }
 
+/**
+ * Parses legacy pre-annual deposit numbers (`D-0001`, `D-0145`, `D0145`) so the
+ * transition year continues seamlessly from the last deposit number while
+ * resetting to `001` on January 1st of subsequent years.
+ */
+export function parseLegacyDepotSeq(numero: string | null | undefined): number {
+  if (!numero) return 0;
+  const trimmed = numero.trim().toUpperCase();
+  const match = trimmed.match(/^D-?(\d+)$/);
+  if (!match) return 0;
+  const seq = parseInt(match[1], 10);
+  return Number.isFinite(seq) && seq > 0 ? seq : 0;
+}
+
+/**
+ * Formats a client code using nomenclature `C-0001` (or `<POINT>-C-0001` when a
+ * multi-register billing point code is configured on this terminal to prevent
+ * offline duplicates across multiple billing points or boutiques).
+ */
+export function formatClientCode(seq: number, pointCode = ''): string {
+  const cleanPoint = normalizeBillingPointCode(pointCode);
+  const safeSeq = Math.max(1, Math.floor(seq));
+  const base = `C-${String(safeSeq).padStart(4, '0')}`;
+  return cleanPoint ? `${cleanPoint}-${base}` : base;
+}
+
+export interface ParsedClientCode {
+  seq: number;
+  pointCode: string;
+}
+
+export function parseClientCodeInfo(code: string | null | undefined): ParsedClientCode | null {
+  if (!code) return null;
+  const trimmed = code.trim().toUpperCase();
+  const match = trimmed.match(/^(?:([A-Z0-9]{1,6})-)?C-(\d+)$/);
+  if (!match) return null;
+  const pointCode = match[1] ? normalizeBillingPointCode(match[1]) : '';
+  const seq = parseInt(match[2], 10);
+  if (!Number.isFinite(seq) || seq <= 0) return null;
+  return { seq, pointCode };
+}
+
 function depotSeqKey(boutiqueId: string | null, year: number, pointCode: string): string {
   const cleanPoint = normalizeBillingPointCode(pointCode);
   return `depot_v2_${boutiqueId ?? 'global'}_${year}_${cleanPoint || 'MAIN'}`;
 }
+
+function depotLegacySeqKey(boutiqueId: string | null): string {
+  return `depot_v2_${boutiqueId ?? 'global'}_${LEGACY_DEPOT_TRANSITION_MAX_YEAR}_LEGACY`;
+}
+
+function clientSeqKey(pointCode: string): string {
+  const cleanPoint = normalizeBillingPointCode(pointCode);
+  return `client_v2_tenant_${cleanPoint || 'MAIN'}`;
+}
+
+const CLIENT_BASE_SEQ_KEY = 'client_v2_tenant_BASE';
 
 function parsePrefixedNumber(val: string | null | undefined, prefix: string): number {
   if (!val || !val.startsWith(prefix)) return 0;
@@ -178,8 +233,38 @@ export function getPendingOfflineQueueDepotMaxSeq(
       if (item.table !== 'depots' || item.operation !== 'insert' || !item.data) continue;
       const itemBoutique = (item.data.boutique_id as string | null | undefined) ?? null;
       if (boutiqueId && itemBoutique && itemBoutique !== boutiqueId) continue;
-      const parsed = parseDepotNumeroInfo(String(item.data.numero ?? ''));
+      const rawNum = String(item.data.numero ?? '');
+      const parsed = parseDepotNumeroInfo(rawNum);
       if (parsed && parsed.year === year && parsed.pointCode === cleanPoint && parsed.seq > max) {
+        max = parsed.seq;
+      } else if (year <= LEGACY_DEPOT_TRANSITION_MAX_YEAR) {
+        const leg = parseLegacyDepotSeq(rawNum);
+        if (leg > max) max = leg;
+      }
+    }
+    return max;
+  } catch {
+    return 0;
+  }
+}
+
+export function getPendingOfflineQueueClientMaxSeq(pointCode: string): number {
+  const cleanPoint = normalizeBillingPointCode(pointCode);
+  try {
+    const raw = localStorage.getItem(OFFLINE_QUEUE_STORAGE_KEY);
+    if (!raw) return 0;
+    const items = JSON.parse(raw) as Array<{
+      table?: string;
+      operation?: string;
+      data?: Record<string, unknown>;
+    }>;
+    if (!Array.isArray(items)) return 0;
+    let max = 0;
+    for (const item of items) {
+      if (item.table !== 'clients' || item.operation !== 'insert' || !item.data) continue;
+      const parsed = parseClientCodeInfo(String(item.data.code ?? ''));
+      if (!parsed) continue;
+      if ((parsed.pointCode === cleanPoint || parsed.pointCode === '') && parsed.seq > max) {
         max = parsed.seq;
       }
     }
@@ -194,35 +279,55 @@ export function observeDepotNumeros(
   boutiqueId: string | null,
 ): void {
   const maxByBucket = new Map<string, { year: number; pointCode: string; max: number }>();
+  let maxLegacy = 0;
   for (const d of depots) {
     const parsed = parseDepotNumeroInfo(d.numero);
-    if (!parsed) continue;
-    const bucketKey = `${parsed.year}_${parsed.pointCode}`;
-    const existing = maxByBucket.get(bucketKey);
-    if (!existing || parsed.seq > existing.max) {
-      maxByBucket.set(bucketKey, {
-        year: parsed.year,
-        pointCode: parsed.pointCode,
-        max: parsed.seq,
-      });
+    if (parsed) {
+      const bucketKey = `${parsed.year}_${parsed.pointCode}`;
+      const existing = maxByBucket.get(bucketKey);
+      if (!existing || parsed.seq > existing.max) {
+        maxByBucket.set(bucketKey, {
+          year: parsed.year,
+          pointCode: parsed.pointCode,
+          max: parsed.seq,
+        });
+      }
+    } else {
+      const leg = parseLegacyDepotSeq(d.numero);
+      if (leg > maxLegacy) maxLegacy = leg;
     }
   }
   for (const entry of maxByBucket.values()) {
     setStoredMaxSeq(depotSeqKey(boutiqueId, entry.year, entry.pointCode), entry.max);
   }
+  if (maxLegacy > 0) {
+    setStoredMaxSeq(depotLegacySeqKey(boutiqueId), maxLegacy);
+  }
 }
 
 export function observeClientCodes(
   clients: Array<{ code?: string | null }>,
-  boutiqueId: string | null,
+  _boutiqueId?: string | null,
 ): void {
-  const key = `client_${boutiqueId ?? 'global'}`;
-  let max = 0;
+  const maxByPoint = new Map<string, number>();
+  let maxBase = 0;
   for (const c of clients) {
-    const n = parsePrefixedNumber(c.code, 'C-');
-    if (n > max) max = n;
+    const parsed = parseClientCodeInfo(c.code);
+    if (!parsed) continue;
+    const prev = maxByPoint.get(parsed.pointCode) ?? 0;
+    if (parsed.seq > prev) {
+      maxByPoint.set(parsed.pointCode, parsed.seq);
+    }
+    if (parsed.pointCode === '' && parsed.seq > maxBase) {
+      maxBase = parsed.seq;
+    }
   }
-  if (max > 0) setStoredMaxSeq(key, max);
+  for (const [pointCode, max] of maxByPoint.entries()) {
+    setStoredMaxSeq(clientSeqKey(pointCode), max);
+  }
+  if (maxBase > 0) {
+    setStoredMaxSeq(CLIENT_BASE_SEQ_KEY, maxBase);
+  }
 }
 
 export function observeArticleCodes(
@@ -253,8 +358,8 @@ export function observeTraitementCodes(
 
 /**
  * Computes the next online deposit number (`D001-YYYY` or `<POINT>-D001-YYYY`),
- * accounting for both live database rows and any still-flushing offline queue items,
- * and primes the local sequence counter for seamless offline continuity.
+ * seamlessly continuing from existing legacy `D-XXXX` numbers in <=2026 while
+ * automatically resetting to `001` every January 1st for subsequent years.
  */
 export function computeNextOnlineDepotNumero(
   dbRows: Array<{ numero?: string | null }>,
@@ -266,21 +371,28 @@ export function computeNextOnlineDepotNumero(
   const pointCode =
     pointCodeOverride !== undefined ? normalizeBillingPointCode(pointCodeOverride) : getBillingPointCode();
   let dbMax = 0;
+  let legacyMax = 0;
   for (const row of dbRows) {
     const parsed = parseDepotNumeroInfo(row.numero);
     if (parsed && parsed.year === year && parsed.pointCode === pointCode && parsed.seq > dbMax) {
       dbMax = parsed.seq;
+    } else if (year <= LEGACY_DEPOT_TRANSITION_MAX_YEAR) {
+      const leg = parseLegacyDepotSeq(row.numero);
+      if (leg > legacyMax) legacyMax = leg;
     }
   }
+  if (legacyMax > 0) {
+    setStoredMaxSeq(depotLegacySeqKey(boutiqueId), legacyMax);
+  }
   const queuedMax = getPendingOfflineQueueDepotMaxSeq(boutiqueId, year, pointCode);
-  const next = Math.max(dbMax, queuedMax) + 1;
+  const next = Math.max(dbMax, legacyMax, queuedMax) + 1;
   setExactStoredSeq(depotSeqKey(boutiqueId, year, pointCode), next);
   return formatDepotNumero(next, year, pointCode);
 }
 
 /**
  * Generates a collision-free offline deposit number (`D001-YYYY` or `<POINT>-D001-YYYY`),
- * automatically resetting to `001` every January 1st when the year changes.
+ * continuing from legacy `D-XXXX` in <=2026 and resetting to `001` every January 1st.
  */
 export function generateOfflineDepotNumero(
   boutiqueId: string | null,
@@ -301,21 +413,80 @@ export function generateOfflineDepotNumero(
   observeDepotNumeros(cachedRetrait, boutiqueId);
   observeDepotNumeros(cachedPlanning, boutiqueId);
 
+  const legacyMax =
+    year <= LEGACY_DEPOT_TRANSITION_MAX_YEAR ? getStoredMaxSeq(depotLegacySeqKey(boutiqueId)) : 0;
   const queuedMax = getPendingOfflineQueueDepotMaxSeq(boutiqueId, year, pointCode);
-  const currentMax = Math.max(getStoredMaxSeq(key), queuedMax);
+  const currentMax = Math.max(getStoredMaxSeq(key), legacyMax, queuedMax);
   const next = currentMax + 1;
   setStoredMaxSeq(key, next);
   return formatDepotNumero(next, year, pointCode);
 }
 
+/**
+ * Computes the next online client code (`C-0001` or `<POINT>-C-0001`),
+ * continuing from the highest existing client code and priming offline counters.
+ */
+export function computeNextOnlineClientCode(
+  dbRows: Array<{ code?: string | null }>,
+  pointCodeOverride?: string,
+): string {
+  const pointCode =
+    pointCodeOverride !== undefined ? normalizeBillingPointCode(pointCodeOverride) : getBillingPointCode();
+  let dbPointMax = 0;
+  let dbBaseMax = 0;
+  for (const row of dbRows) {
+    const parsed = parseClientCodeInfo(row.code);
+    if (!parsed) continue;
+    if (parsed.pointCode === pointCode && parsed.seq > dbPointMax) {
+      dbPointMax = parsed.seq;
+    }
+    if (parsed.pointCode === '' && parsed.seq > dbBaseMax) {
+      dbBaseMax = parsed.seq;
+    }
+  }
+  if (dbBaseMax > 0) {
+    setStoredMaxSeq(CLIENT_BASE_SEQ_KEY, dbBaseMax);
+  }
+  const queuedMax = getPendingOfflineQueueClientMaxSeq(pointCode);
+  const next = Math.max(dbPointMax, dbBaseMax, queuedMax) + 1;
+  setExactStoredSeq(clientSeqKey(pointCode), next);
+  if (pointCode === '') {
+    setExactStoredSeq(CLIENT_BASE_SEQ_KEY, next);
+  }
+  return formatClientCode(next, pointCode);
+}
+
+/**
+ * Generates a collision-free offline client code (`C-0001` or `<POINT>-C-0001`)
+ * across multiple billing points and boutiques.
+ */
+export function generateOfflineClientCode(
+  boutiqueId: string | null,
+  pointCodeOverride?: string,
+): string {
+  const pointCode =
+    pointCodeOverride !== undefined ? normalizeBillingPointCode(pointCodeOverride) : getBillingPointCode();
+  const key = clientSeqKey(pointCode);
+
+  const cachedScoped = getScopedCached<Client[]>('all_clients', boutiqueId) ?? [];
+  const cachedGlobal = getCached<Client[]>('all_clients') ?? [];
+  observeClientCodes(cachedScoped, boutiqueId);
+  observeClientCodes(cachedGlobal, null);
+
+  const baseMax = getStoredMaxSeq(CLIENT_BASE_SEQ_KEY);
+  const queuedMax = getPendingOfflineQueueClientMaxSeq(pointCode);
+  const currentMax = Math.max(getStoredMaxSeq(key), baseMax, queuedMax);
+  const next = currentMax + 1;
+  setStoredMaxSeq(key, next);
+  if (pointCode === '') {
+    setStoredMaxSeq(CLIENT_BASE_SEQ_KEY, next);
+  }
+  return formatClientCode(next, pointCode);
+}
+
 export function generateOfflineRpcCode(fnName: string, boutiqueId: string | null): string | null {
   if (fnName === 'generate_client_code') {
-    const cached = getScopedCached<Client[]>('all_clients', boutiqueId) ?? [];
-    observeClientCodes(cached, boutiqueId);
-    const key = `client_${boutiqueId ?? 'global'}`;
-    const next = getStoredMaxSeq(key) + 1;
-    setStoredMaxSeq(key, next);
-    return `C-${String(next).padStart(4, '0')}`;
+    return generateOfflineClientCode(boutiqueId);
   }
   if (fnName === 'generate_article_code') {
     const cached = getScopedCached<ArticleCatalog[]>('articles', boutiqueId) ?? [];

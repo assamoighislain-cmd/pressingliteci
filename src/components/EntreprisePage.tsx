@@ -12,6 +12,7 @@ import {
   getBillingPointCode,
   setBillingPointCode,
   formatDepotNumero,
+  formatClientCode,
   normalizeBillingPointCode,
 } from '@/lib/dbOfflineHelpers';
 
@@ -998,27 +999,33 @@ export default function EntreprisePage() {
           <div>
             <p className="text-sm font-semibold text-slate-900">
               {lang === 'fr'
-                ? 'Numérotation des dépôts & Points de facturation (Hors-ligne)'
-                : 'Deposit numbering & Billing points (Offline)'}
+                ? 'Numérotation Dépôts & Codes Clients — Points de facturation (Hors-ligne)'
+                : 'Deposit & Client Code Numbering — Billing points (Offline)'}
             </p>
             <p className="text-xs text-slate-400">
               {lang === 'fr'
-                ? 'Nomenclature D001-Année avec remise à 001 automatique chaque 1er janvier et protection anti-doublon multi-caisses.'
-                : 'D001-Year nomenclature with automatic reset to 001 every January 1st and multi-register duplicate protection.'}
+                ? 'Suite continue des numéros existants, remise à 001 des dépôts au 1er janvier et protection anti-doublon hors-ligne (dépôts & clients).'
+                : 'Seamless continuation from existing numbers, deposit reset to 001 every January 1st, and offline duplicate protection (deposits & clients).'}
             </p>
           </div>
         </div>
 
         <div className="rounded-lg bg-slate-50 border border-slate-100 p-3.5 space-y-1.5 text-xs text-slate-600">
           <div className="flex items-center justify-between">
-            <span>{lang === 'fr' ? 'Format actif sur cet appareil :' : 'Active format on this device:'}</span>
+            <span>{lang === 'fr' ? 'Format Dépôt actif sur cet appareil :' : 'Active Deposit format on this device:'}</span>
             <span className="font-mono font-bold text-sky-700 bg-sky-50 px-2.5 py-0.5 rounded border border-sky-200">
               {formatDepotNumero(1, new Date().getFullYear(), billingPointCode)}
             </span>
           </div>
           <div className="flex items-center justify-between">
-            <span>{lang === 'fr' ? 'Au 1er janvier prochain :' : 'Next January 1st:'}</span>
-            <span className="font-mono font-semibold text-emerald-700">
+            <span>{lang === 'fr' ? 'Format Code Client actif sur cet appareil :' : 'Active Client Code format on this device:'}</span>
+            <span className="font-mono font-bold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded border border-emerald-200">
+              {formatClientCode(1, billingPointCode)}
+            </span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span>{lang === 'fr' ? 'Dépôts au 1er janvier prochain :' : 'Deposits next January 1st:'}</span>
+            <span className="font-mono font-semibold text-slate-700">
               {formatDepotNumero(1, new Date().getFullYear() + 1, billingPointCode)}
             </span>
           </div>

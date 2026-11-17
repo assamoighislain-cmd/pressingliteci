@@ -21,6 +21,8 @@ import {
   getBillingPointCode,
   computeNextOnlineDepotNumero,
   generateOfflineDepotNumero,
+  computeNextOnlineClientCode,
+  generateOfflineClientCode,
   generateOfflineRpcCode,
   prepareOfflineInsertRows,
   buildMutationLabel,
@@ -491,6 +493,10 @@ export async function upsert<T = Record<string, unknown>>(config: UpsertConfig):
 // ─── RPC (for code generation functions) ───────────────────
 
 export async function rpc<T = unknown>(fnName: string, args?: Record<string, unknown>): Promise<{ data: T | null; error: string | null }> {
+  if (fnName === 'generate_client_code') {
+    const res = await db.nextClientCode();
+    return { data: (res.code as T) ?? null, error: res.error };
+  }
   if (isOffline()) {
     const offlineCode = generateOfflineRpcCode(fnName, currentBoutiqueId);
     if (offlineCode !== null) return { data: offlineCode as T, error: null };
@@ -1159,6 +1165,38 @@ export const db = {
     return { value: (data as number) ?? null, error: null };
   },
 
+  async nextClientCode(): Promise<{ code: string | null; error: string | null }> {
+    const pointCode = getBillingPointCode();
+    if (isOffline()) {
+      return {
+        code: generateOfflineClientCode(currentBoutiqueId, pointCode),
+        error: null,
+      };
+    }
+    try {
+      // Query across the entire tenant (clients_code_tenant_idx is tenant-scoped across all boutiques)
+      const { data, error } = await supabase.from('clients').select('code').limit(10000);
+      if (error) {
+        if (isLikelyNetworkError(error)) {
+          return {
+            code: generateOfflineClientCode(currentBoutiqueId, pointCode),
+            error: null,
+          };
+        }
+        return { code: null, error: error.message };
+      }
+      const rows = (data as Array<{ code?: string | null }> | null) ?? [];
+      observeClientCodes(rows, currentBoutiqueId);
+      const code = computeNextOnlineClientCode(rows, pointCode);
+      return { code, error: null };
+    } catch {
+      return {
+        code: generateOfflineClientCode(currentBoutiqueId, pointCode),
+        error: null,
+      };
+    }
+  },
+
   async nextDepotNumero(dateDepot?: Date): Promise<{ numero: string | null; error: string | null }> {
     const targetYear = (dateDepot ?? new Date()).getFullYear();
     const pointCode = getBillingPointCode();
@@ -1172,7 +1210,12 @@ export const db = {
 
     try {
       const pattern = pointCode ? `${pointCode}-D%-${targetYear}` : `D%-${targetYear}`;
-      let q = supabase.from('depots').select('numero').like('numero', pattern).limit(10000);
+      let q = supabase.from('depots').select('numero').limit(10000);
+      if (targetYear <= 2026) {
+        q = q.or(`numero.like.${pattern},numero.like.D-%`);
+      } else {
+        q = q.like('numero', pattern);
+      }
       if (currentBoutiqueId) {
         q = q.eq('boutique_id', currentBoutiqueId);
       }
@@ -1907,6 +1950,9 @@ export const db = {
       db.getAllDepenseCategories(),
       db.getAllConsommables(),
       db.getBonsReduction(),
+      Promise.resolve(supabase.from('clients').select('code').limit(10000)).then(({ data }) => {
+        if (data) observeClientCodes(data as Array<{ code?: string | null }>, currentBoutiqueId);
+      }),
     ]);
     markCacheRefreshedNow();
   },
