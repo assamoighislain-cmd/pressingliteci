@@ -970,19 +970,15 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
         })}
       </div>
 
-      {/* Point de facturation / Caisse (anti-doublon hors-ligne) */}
+      {/* Préfixe du point de facturation (anti-doublon hors-ligne) */}
       <div className="bg-white rounded-xl border border-slate-100 shadow-sm px-4 py-2.5 space-y-2.5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2 text-xs text-slate-600">
             <Monitor className="w-3.5 h-3.5 text-sky-600 shrink-0" />
             <span>
-              {lang === 'fr' ? 'Point de facturation :' : 'Billing point:'}{' '}
+              {lang === 'fr' ? 'Préfixe point de facturation :' : 'Billing point prefix:'}{' '}
               <strong className="text-slate-900">
-                {billingPointCode
-                  ? `${lang === 'fr' ? 'Poste' : 'Register'} ${billingPointCode}`
-                  : lang === 'fr'
-                    ? 'Principal'
-                    : 'Main'}
+                {billingPointCode || (lang === 'fr' ? 'Aucun (Principal)' : 'None (Main)')}
               </strong>
             </span>
             <span className="px-2 py-0.5 rounded bg-sky-50 text-sky-700 font-mono font-semibold">
@@ -1002,8 +998,8 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
                 ? 'Fermer'
                 : 'Close'
               : lang === 'fr'
-                ? 'Multi-caisses / Changer'
-                : 'Multi-register / Change'}
+                ? 'Ajouter / Modifier le préfixe'
+                : 'Add / Edit prefix'}
           </button>
         </div>
 
@@ -1011,8 +1007,8 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
           <div className="pt-2 border-t border-slate-100 space-y-2">
             <p className="text-xs text-slate-500">
               {lang === 'fr'
-                ? 'Si plusieurs appareils travaillent hors-ligne en même temps, attribuez un code unique à chaque appareil (ex: C1, C2) pour éviter tout doublon de numéro de dépôt ET de code client.'
-                : 'If multiple devices work offline simultaneously, assign a unique code per device (e.g. C1, C2) to prevent duplicate deposit numbers AND client codes.'}
+                ? 'Ajoutez un préfixe propre à ce point de facturation (ex: C1, P1, ABJ1) pour différencier ses codes D- et C- et éviter tout doublon hors-ligne.'
+                : 'Add a prefix specific to this billing point (e.g. C1, P1, ABJ1) to differentiate its D- and C- codes and prevent offline duplicates.'}
             </p>
             <div className="flex flex-wrap items-center gap-1.5">
               {(['', 'C1', 'C2', 'C3', 'P1', 'P2'] as const).map((preset) => {
@@ -1031,7 +1027,7 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
                         : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-sky-300'
                     }`}
                   >
-                    {preset || (lang === 'fr' ? 'Principal (D001)' : 'Main (D001)')}
+                    {preset || (lang === 'fr' ? 'Sans préfixe (D-001)' : 'No prefix (D-001)')}
                   </button>
                 );
               })}
@@ -1042,9 +1038,9 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
                   const saved = setBillingPointCode(normalizeBillingPointCode(e.target.value));
                   setBillingPointCodeState(saved);
                 }}
-                maxLength={6}
-                placeholder={lang === 'fr' ? 'Code perso…' : 'Custom…'}
-                className="w-28 px-2.5 py-1 rounded-md border border-slate-200 text-xs font-mono uppercase focus:outline-none focus:ring-2 focus:ring-sky-500"
+                maxLength={8}
+                placeholder={lang === 'fr' ? 'Votre préfixe…' : 'Your prefix…'}
+                className="w-32 px-2.5 py-1 rounded-md border border-slate-200 text-xs font-mono uppercase focus:outline-none focus:ring-2 focus:ring-sky-500"
               />
             </div>
           </div>

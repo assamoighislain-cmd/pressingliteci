@@ -1,14 +1,12 @@
 /*
-  # Numérotation anti-doublon hors-ligne : Dépôts (Dnumero-Annee) & Codes Clients (C-XXXX)
+  # Numérotation anti-doublon hors-ligne : Dépôts (D-numero-Annee) & Codes Clients (C-XXXX)
 
   1. Dépôts (`public.next_depot_numero` & `public.valider_commande`) :
-     - Format : `D001-2026` (ou `<POSTE>-D001-2026` ex. `C1-D001-2026`).
-     - Continuité en 2026 avec les anciens numéros `D-XXXX` existants, puis remise à `001`
-       automatique chaque 1er janvier (`D001-2027`).
+     - Format sans préfixe : `D-001-2026` (continue après les anciens `D-XXXX` en 2026, puis repart à `D-001-2027` au 1er janvier).
+     - Format avec préfixe point de facturation (ex. `C1`, `P1`, `ABJ1`) : `C1-D-001-2026`.
   2. Clients (`public.generate_client_code`) :
-     - Format : `C-0001` (ou `<POSTE>-C-0001` ex. `C1-C-0001`).
-     - Continuité avec le dernier code client existant et séparation par point de facturation
-       pour éviter tout doublon en mode hors-ligne entre plusieurs caisses ou boutiques.
+     - Format sans préfixe : `C-0001`.
+     - Format avec préfixe point de facturation : `C1-C-0001`.
 */
 
 CREATE OR REPLACE FUNCTION public.next_depot_numero(
@@ -36,12 +34,12 @@ BEGIN
 
   v_year := COALESCE(p_year, EXTRACT(YEAR FROM now())::integer);
   v_clean_point := regexp_replace(upper(COALESCE(p_point_code, '')), '[^A-Z0-9]', '', 'g');
-  v_clean_point := substring(v_clean_point FROM 1 FOR 6);
+  v_clean_point := substring(v_clean_point FROM 1 FOR 8);
 
   IF v_clean_point <> '' THEN
-    v_regex := '^' || v_clean_point || '-D([0-9]+)-' || v_year::text || '$';
+    v_regex := '^' || v_clean_point || '-D-?([0-9]+)-' || v_year::text || '$';
   ELSE
-    v_regex := '^D([0-9]+)-' || v_year::text || '$';
+    v_regex := '^D-?([0-9]+)-' || v_year::text || '$';
   END IF;
 
   SELECT COALESCE(MAX((substring(upper(trim(numero)) FROM v_regex))::integer), 0)
@@ -72,9 +70,9 @@ BEGIN
   END IF;
 
   IF v_clean_point <> '' THEN
-    RETURN v_clean_point || '-D' || lpad((v_max_seq + 1)::text, 3, '0') || '-' || v_year::text;
+    RETURN v_clean_point || '-D-' || lpad((v_max_seq + 1)::text, 3, '0') || '-' || v_year::text;
   ELSE
-    RETURN 'D' || lpad((v_max_seq + 1)::text, 3, '0') || '-' || v_year::text;
+    RETURN 'D-' || lpad((v_max_seq + 1)::text, 3, '0') || '-' || v_year::text;
   END IF;
 END;
 $function$;
@@ -132,7 +130,7 @@ BEGIN
   END IF;
 
   v_clean_point := regexp_replace(upper(COALESCE(p_point_code, '')), '[^A-Z0-9]', '', 'g');
-  v_clean_point := substring(v_clean_point FROM 1 FOR 6);
+  v_clean_point := substring(v_clean_point FROM 1 FOR 8);
 
   SELECT COALESCE(MAX((substring(upper(trim(code)) FROM '^C-([0-9]+)$'))::integer), 0)
   INTO v_base_max

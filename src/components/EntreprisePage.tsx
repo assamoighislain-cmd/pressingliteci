@@ -1034,8 +1034,8 @@ export default function EntreprisePage() {
         <div className="space-y-2">
           <label className="block text-xs font-medium text-slate-700">
             {lang === 'fr'
-              ? 'Code du point de facturation (spécifique à cet appareil / cette caisse)'
-              : 'Billing point code (specific to this device / register)'}
+              ? 'Préfixe du point de facturation (spécifique à cet appareil / cette caisse)'
+              : 'Billing point prefix (specific to this device / register)'}
           </label>
           <div className="flex flex-wrap items-center gap-2">
             {(['', 'C1', 'C2', 'C3', 'P1', 'P2'] as const).map((preset) => {
@@ -1057,8 +1057,8 @@ export default function EntreprisePage() {
                   {preset
                     ? `${preset} (${formatDepotNumero(1, new Date().getFullYear(), preset)})`
                     : lang === 'fr'
-                      ? `Principal (${formatDepotNumero(1, new Date().getFullYear(), '')})`
-                      : `Main (${formatDepotNumero(1, new Date().getFullYear(), '')})`}
+                      ? `Sans préfixe (${formatDepotNumero(1, new Date().getFullYear(), '')})`
+                      : `No prefix (${formatDepotNumero(1, new Date().getFullYear(), '')})`}
                 </button>
               );
             })}
@@ -1069,15 +1069,15 @@ export default function EntreprisePage() {
                 const saved = setBillingPointCode(normalizeBillingPointCode(e.target.value));
                 setBillingPointCodeState(saved);
               }}
-              maxLength={6}
-              placeholder={lang === 'fr' ? 'Code perso (ex: ABJ1)' : 'Custom (e.g. ABJ1)'}
-              className="w-40 px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-mono uppercase focus:outline-none focus:ring-2 focus:ring-sky-500"
+              maxLength={8}
+              placeholder={lang === 'fr' ? 'Préfixe libre (ex: ABJ1)' : 'Custom prefix (e.g. ABJ1)'}
+              className="w-44 px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-mono uppercase focus:outline-none focus:ring-2 focus:ring-sky-500"
             />
           </div>
           <p className="text-xs text-slate-400">
             {lang === 'fr'
-              ? "Astuce hors-ligne : si plusieurs boutiques sont créées dans « Boutiques », leurs compteurs sont déjà séparés. Si plusieurs caisses travaillent hors-ligne dans la MÊME boutique, donnez C1 au 1er poste et C2 au 2nd poste pour garantir zéro doublon sur les reçus et étiquettes."
-              : 'Offline tip: separate shops already have isolated counters. If multiple registers work offline in the SAME shop, assign C1 to register 1 and C2 to register 2 for zero duplicate receipts or labels.'}
+              ? 'Sans préfixe : D-001-2026 / C-0001. Avec préfixe (ex: C1 ou ABJ1) : C1-D-001-2026 / C1-C-0001. Attribuez un préfixe différent sur chaque point de facturation pour éviter tout doublon hors-ligne.'
+              : 'Without prefix: D-001-2026 / C-0001. With prefix (e.g. C1 or ABJ1): C1-D-001-2026 / C1-C-0001. Assign a distinct prefix per billing point to avoid any offline duplicates.'}
           </p>
         </div>
       </div>

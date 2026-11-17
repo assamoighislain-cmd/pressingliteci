@@ -59,7 +59,7 @@ export function normalizeBillingPointCode(raw: string | null | undefined): strin
   return raw
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, '')
-    .slice(0, 6);
+    .slice(0, 8);
 }
 
 export function getBillingPointCode(): string {
@@ -88,14 +88,14 @@ export function setBillingPointCode(raw: string): string {
 }
 
 /**
- * Formats a deposit number using nomenclature `D001-YYYY` (or `<POINT>-D001-YYYY`
- * when a multi-register billing point code is configured on this terminal).
+ * Formats a deposit number using nomenclature `D-001-YYYY` (or `<PREFIX>-D-001-YYYY`
+ * when a billing-point prefix is configured on this terminal).
  * Every January 1st, `year` changes and `seq` starts back at `001`.
  */
 export function formatDepotNumero(seq: number, year: number, pointCode = ''): string {
   const cleanPoint = normalizeBillingPointCode(pointCode);
   const safeSeq = Math.max(1, Math.floor(seq));
-  const base = `D${String(safeSeq).padStart(3, '0')}-${year}`;
+  const base = `D-${String(safeSeq).padStart(3, '0')}-${year}`;
   return cleanPoint ? `${cleanPoint}-${base}` : base;
 }
 
@@ -110,7 +110,7 @@ export interface ParsedDepotNumero {
 export function parseDepotNumeroInfo(numero: string | null | undefined): ParsedDepotNumero | null {
   if (!numero) return null;
   const trimmed = numero.trim().toUpperCase();
-  const match = trimmed.match(/^(?:([A-Z0-9]{1,6})-)?D(\d+)-(\d{4})$/);
+  const match = trimmed.match(/^(?:([A-Z0-9]{1,8})-)?D-?(\d+)-(\d{4})$/);
   if (!match) return null;
   const pointCode = match[1] ? normalizeBillingPointCode(match[1]) : '';
   const seq = parseInt(match[2], 10);
@@ -136,9 +136,9 @@ export function parseLegacyDepotSeq(numero: string | null | undefined): number {
 }
 
 /**
- * Formats a client code using nomenclature `C-0001` (or `<POINT>-C-0001` when a
- * multi-register billing point code is configured on this terminal to prevent
- * offline duplicates across multiple billing points or boutiques).
+ * Formats a client code using nomenclature `C-0001` (or `<PREFIX>-C-0001` when a
+ * billing-point prefix is configured on this terminal to prevent offline duplicates
+ * across multiple billing points or boutiques).
  */
 export function formatClientCode(seq: number, pointCode = ''): string {
   const cleanPoint = normalizeBillingPointCode(pointCode);
@@ -155,7 +155,7 @@ export interface ParsedClientCode {
 export function parseClientCodeInfo(code: string | null | undefined): ParsedClientCode | null {
   if (!code) return null;
   const trimmed = code.trim().toUpperCase();
-  const match = trimmed.match(/^(?:([A-Z0-9]{1,6})-)?C-(\d+)$/);
+  const match = trimmed.match(/^(?:([A-Z0-9]{1,8})-)?C-(\d+)$/);
   if (!match) return null;
   const pointCode = match[1] ? normalizeBillingPointCode(match[1]) : '';
   const seq = parseInt(match[2], 10);

@@ -448,9 +448,9 @@ export default function Clients() {
                     const saved = setBillingPointCode(normalizeBillingPointCode(e.target.value));
                     setBillingPointCodeState(saved);
                   }}
-                  maxLength={6}
-                  placeholder={lang === 'fr' ? 'Code perso…' : 'Custom…'}
-                  className="w-28 px-2.5 py-1 rounded-md border border-slate-200 bg-white text-xs font-mono uppercase focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  maxLength={8}
+                  placeholder={lang === 'fr' ? 'Votre préfixe…' : 'Your prefix…'}
+                  className="w-32 px-2.5 py-1 rounded-md border border-slate-200 bg-white text-xs font-mono uppercase focus:outline-none focus:ring-2 focus:ring-sky-500"
                 />
               </div>
             </div>
