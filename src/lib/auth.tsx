@@ -1,8 +1,8 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import { supabase, supabaseUrl, supabaseAnonKey } from '@/lib/supabase';
-import { resetTenantCache, setCachedTenantId } from '@/lib/db';
-import { saveAuthSessionForSw } from '@/lib/offlineStorage';
+import { resetTenantCache, setCachedTenantId, setCurrentBoutiqueId } from '@/lib/db';
+import { saveAuthSessionForSw, getMetaValue, setMetaValue } from '@/lib/offlineStorage';
 import { isLikelyNetworkError } from '@/lib/readCache';
 import {
   readOfflineSessionBackup,
@@ -59,6 +59,7 @@ function writeCachedMembership(userId: string, data: CachedMembership): void {
   } catch {
     // Ignore
   }
+  void setMetaValue(`${MEMBERSHIP_CACHE_PREFIX}${userId}`, data);
 }
 
 function resolveInitialBoutiqueSelection(bsInput: Boutique[], memberBoutiqueId: string | null): {
@@ -97,6 +98,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   if (initialMembership?.tenantId) {
     setCachedTenantId(initialMembership.tenantId);
   }
+  if (initialBoutiqueState.selected?.id) {
+    setCurrentBoutiqueId(initialBoutiqueState.selected.id);
+  } else if (typeof window !== 'undefined' && !initialMembership) {
+    try {
+      const storedBoutiqueId = localStorage.getItem(BOUTIQUE_STORAGE_KEY);
+      if (storedBoutiqueId) setCurrentBoutiqueId(storedBoutiqueId);
+    } catch {
+      // Ignore
+    }
+  }
 
   const [user, setUser] = useState<User | null>(() => initialBackup?.user ?? null);
   const [session, setSession] = useState<Session | null>(() => initialBackup?.session ?? null);
@@ -119,6 +130,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { list, selected } = resolveInitialBoutiqueSelection(bsInput, memberBoutiqueId);
     setBoutiques(list);
     setCurrentBoutique(selected);
+    setCurrentBoutiqueId(selected?.id ?? null);
     if (selected) {
       try {
         localStorage.setItem(BOUTIQUE_STORAGE_KEY, selected.id);
@@ -185,9 +197,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       applyBoutiquesList(cached.boutiques ?? [], cached.memberBoutiqueId);
       return true;
     }
+    // Also attempt asynchronous restore from IndexedDB META_STORE in case localStorage was cleared
+    void getMetaValue<CachedMembership>(`${MEMBERSHIP_CACHE_PREFIX}${userId}`).then((idbCached) => {
+      if (!idbCached) return;
+      try {
+        localStorage.setItem(`${MEMBERSHIP_CACHE_PREFIX}${userId}`, JSON.stringify(idbCached));
+      } catch {
+        // Ignore
+      }
+      setRole(idbCached.role);
+      setTenantId(idbCached.tenantId);
+      setCachedTenantId(idbCached.tenantId);
+      setIsSuperAdmin(idbCached.isSuperAdmin);
+      applyBoutiquesList(idbCached.boutiques ?? [], idbCached.memberBoutiqueId);
+    });
     // Fallback if offline before membership cache was written: use stored tenant ID or user ID
     try {
       const fallbackTenant = localStorage.getItem('offline_last_tenant_id') || userId;
+      const storedBoutiqueId = localStorage.getItem(BOUTIQUE_STORAGE_KEY);
+      if (storedBoutiqueId) {
+        setCurrentBoutiqueId(storedBoutiqueId);
+      }
       if (fallbackTenant) {
         setRole('admin');
         setTenantId(fallbackTenant);

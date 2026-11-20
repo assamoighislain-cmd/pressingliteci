@@ -37,7 +37,17 @@ export function bKey(base: string, boutiqueId: string | null): string {
 export function getScopedCached<T>(base: string, boutiqueId: string | null): T | null {
   const scoped = getCached<T>(bKey(base, boutiqueId));
   if (scoped !== null) return scoped;
-  return getCached<T>(base);
+  const unscoped = getCached<T>(base);
+  if (unscoped !== null) return unscoped;
+  try {
+    const storedBoutiqueId = localStorage.getItem('app-current-boutique');
+    if (storedBoutiqueId && storedBoutiqueId !== boutiqueId) {
+      return getCached<T>(`${base}_${storedBoutiqueId}`);
+    }
+  } catch {
+    // Ignore
+  }
+  return null;
 }
 
 export function generateUuid(): string {

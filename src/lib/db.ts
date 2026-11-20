@@ -1,9 +1,10 @@
 import { supabase } from '@/lib/supabase';
-import { enqueueMutation, onPostSync } from '@/lib/offlineQueue';
+import { enqueueMutation, onPostSync, getPendingMutationsForTableAsync } from '@/lib/offlineQueue';
 import { notifyRealtimeMutation } from '@/lib/realtimeSync';
 import {
   cachedRead,
   setCached,
+  getCachedWithScopeFallbackAsync,
   isLikelyNetworkError,
   throwIfNetworkError,
   markCacheRefreshedNow,
@@ -523,6 +524,94 @@ export async function rpc<T = unknown>(fnName: string, args?: Record<string, unk
   }
 }
 
+// ─── Offline persistence guards & mutation overlay ─────────
+
+async function assertSafeToCacheEmptyList(cacheKey: string): Promise<void> {
+  const existing = await getCachedWithScopeFallbackAsync<unknown[]>(cacheKey);
+  if (!Array.isArray(existing) || existing.length === 0) return;
+
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const expiresAtMs = session?.expires_at ? session.expires_at * 1000 : 0;
+    const hasValidSession = Boolean(session?.access_token) && (!expiresAtMs || expiresAtMs > Date.now() + 5000);
+    if (!hasValidSession) {
+      throw new OfflineNetworkError('Session non vérifiée — conservation du cache hors-ligne');
+    }
+  } catch (err) {
+    if (err instanceof OfflineNetworkError) throw err;
+    throw new OfflineNetworkError('Impossible de vérifier la session — conservation du cache hors-ligne');
+  }
+}
+
+async function applyPendingClientMutations(
+  baseClients: Client[],
+  boutiqueId: string | null,
+): Promise<Client[]> {
+  const pending = await getPendingMutationsForTableAsync('clients');
+  if (pending.length === 0) return baseClients;
+
+  const byId = new Map<string, Client>();
+  for (const c of baseClients) {
+    if (c && c.id) byId.set(c.id, c);
+  }
+
+  let mutated = false;
+  for (const m of pending) {
+    if (m.operation === 'insert') {
+      const d = m.data;
+      const id = String(d.id ?? '');
+      if (!id) continue;
+      const rowBoutique = (d.boutique_id as string | null | undefined) ?? null;
+      if (boutiqueId && rowBoutique && rowBoutique !== boutiqueId) continue;
+      const existing = byId.get(id);
+      const merged: Client = {
+        ...(existing ?? ({} as Client)),
+        id,
+        code: String(d.code ?? existing?.code ?? ''),
+        nom: String(d.nom ?? existing?.nom ?? ''),
+        telephone: (d.telephone as string | null) ?? existing?.telephone ?? null,
+        taux_remise: Number(d.taux_remise ?? existing?.taux_remise ?? 0),
+        condition_remise:
+          d.condition_remise != null
+            ? Number(d.condition_remise)
+            : (existing?.condition_remise ?? null),
+        date_naissance: (d.date_naissance as string | null) ?? existing?.date_naissance ?? null,
+        portal_code: (d.portal_code as string | null) ?? existing?.portal_code ?? null,
+        created_at: String(d.created_at ?? existing?.created_at ?? m.createdAt),
+      };
+      byId.set(id, merged);
+      mutated = true;
+    } else if (m.operation === 'update') {
+      const idFilter = m.filters?.find((f) => f.column === 'id' && f.operator === 'eq');
+      const targetId = idFilter ? String(idFilter.value ?? '') : '';
+      if (!targetId) continue;
+      const existing = byId.get(targetId);
+      if (existing) {
+        byId.set(targetId, {
+          ...existing,
+          ...(m.data as Partial<Client>),
+          taux_remise:
+            m.data.taux_remise !== undefined ? Number(m.data.taux_remise) : existing.taux_remise,
+          condition_remise:
+            m.data.condition_remise !== undefined
+              ? (m.data.condition_remise != null ? Number(m.data.condition_remise) : null)
+              : existing.condition_remise,
+        });
+        mutated = true;
+      }
+    } else if (m.operation === 'delete') {
+      const idFilter = m.filters?.find((f) => f.column === 'id' && f.operator === 'eq');
+      const targetId = idFilter ? String(idFilter.value ?? '') : '';
+      if (targetId && byId.delete(targetId)) {
+        mutated = true;
+      }
+    }
+  }
+
+  if (!mutated) return baseClients;
+  return Array.from(byId.values()).sort((a, b) => (a.nom ?? '').localeCompare(b.nom ?? ''));
+}
+
 // ─── Typed convenience wrappers ────────────────────────────
 
 export const db = {
@@ -530,9 +619,8 @@ export const db = {
   async searchClients(term: string): Promise<Client[]> {
     if (!term.trim()) return [];
     const t = term.trim();
-    const searchFromCache = () => {
-      const cached = getScopedCached<Client[]>('all_clients', currentBoutiqueId);
-      if (!cached) return [];
+    const searchFromCache = async (): Promise<Client[]> => {
+      const cached = await db.getAllClients();
       const lower = t.toLowerCase();
       return cached
         .filter(
@@ -553,36 +641,47 @@ export const db = {
     if (currentBoutiqueId) q = q.eq('boutique_id', currentBoutiqueId);
     const { data, error } = await q;
     if (error) return isLikelyNetworkError(error) ? searchFromCache() : [];
-    return ((data as Record<string, unknown>[]) ?? []).map((r) => ({
+    const remote = ((data as Record<string, unknown>[]) ?? []).map((r) => ({
       ...r,
       taux_remise: Number(r.taux_remise),
       condition_remise: r.condition_remise != null ? Number(r.condition_remise) : null,
     })) as Client[];
+    return remote;
   },
 
   async getAllClients(): Promise<Client[]> {
-    return cachedRead(bKey('all_clients', currentBoutiqueId), async () => {
+    const cacheKey = bKey('all_clients', currentBoutiqueId);
+    const list = await cachedRead(cacheKey, async () => {
       let q = supabase.from('clients').select('*').order('nom');
       if (currentBoutiqueId) q = q.eq('boutique_id', currentBoutiqueId);
       const { data, error } = await q;
       throwIfNetworkError(error);
-      if (error) return [];
+      if (error) throw new Error(error.message);
       const mapped = ((data as Record<string, unknown>[]) ?? []).map((r) => ({
         ...r,
         taux_remise: Number(r.taux_remise),
         condition_remise: r.condition_remise != null ? Number(r.condition_remise) : null,
       })) as Client[];
+      if (mapped.length === 0) {
+        await assertSafeToCacheEmptyList(cacheKey);
+      }
       observeClientCodes(mapped, currentBoutiqueId);
       return mapped;
     }, []);
+    const merged = await applyPendingClientMutations(list, currentBoutiqueId);
+    if (merged.length > 0) {
+      observeClientCodes(merged, currentBoutiqueId);
+    }
+    return merged;
   },
 
   async getLastDepotDates(clientIds: string[]): Promise<Record<string, { date: string; total: number; count: number }>> {
     const map: Record<string, { date: string; total: number; count: number }> = {};
     if (clientIds.length === 0) return map;
-    const computeFromCache = () => {
+    const computeFromCache = async () => {
       const idSet = new Set(clientIds);
-      const cached = getScopedCached<DepotWithArticles[]>('all_depots', currentBoutiqueId) ?? [];
+      const cached =
+        (await getCachedWithScopeFallbackAsync<DepotWithArticles[]>(bKey('all_depots', currentBoutiqueId))) ?? [];
       for (const d of cached) {
         if (!idSet.has(d.client_id)) continue;
         if (!(d.client_id in map) || d.date_depot > map[d.client_id].date) {
@@ -649,17 +748,19 @@ export const db = {
 
   // Types traitement
   async getTypesTraitement(): Promise<TypeTraitement[]> {
-    return cachedRead(bKey('types_traitement', currentBoutiqueId), async () => {
+    const cacheKey = bKey('types_traitement', currentBoutiqueId);
+    return cachedRead(cacheKey, async () => {
       let q = supabase.from('types_traitement').select('*').order('coefficient');
       if (currentBoutiqueId) q = q.eq('boutique_id', currentBoutiqueId);
       const { data, error } = await q;
       throwIfNetworkError(error);
-      if (error) return [];
+      if (error) throw new Error(error.message);
       const mapped = ((data as Record<string, unknown>[]) ?? []).map((row) => ({
         ...row,
         coefficient: Number(row.coefficient),
         nb_jours: Number(row.nb_jours),
       })) as TypeTraitement[];
+      if (mapped.length === 0) await assertSafeToCacheEmptyList(cacheKey);
       observeTraitementCodes(mapped, currentBoutiqueId);
       return mapped;
     }, []);
@@ -682,16 +783,19 @@ export const db = {
 
   // Modes de règlement
   async getModesReglement(): Promise<ModeReglementRow[]> {
-    return cachedRead(bKey('modes_reglement', currentBoutiqueId), async () => {
+    const cacheKey = bKey('modes_reglement', currentBoutiqueId);
+    return cachedRead(cacheKey, async () => {
       let q = supabase.from('modes_reglement').select('*').order('designation');
       if (currentBoutiqueId) q = q.eq('boutique_id', currentBoutiqueId);
       const { data, error } = await q;
       throwIfNetworkError(error);
-      if (error) return [];
-      return ((data as Record<string, unknown>[]) ?? []).map((r) => ({
+      if (error) throw new Error(error.message);
+      const mapped = ((data as Record<string, unknown>[]) ?? []).map((r) => ({
         ...r,
         taux_remise: r.taux_remise != null ? Number(r.taux_remise) : 0,
       })) as ModeReglementRow[];
+      if (mapped.length === 0) await assertSafeToCacheEmptyList(cacheKey);
+      return mapped;
     }, []);
   },
 
@@ -712,17 +816,19 @@ export const db = {
 
   // Articles
   async getArticles(): Promise<ArticleCatalog[]> {
-    return cachedRead(bKey('articles', currentBoutiqueId), async () => {
+    const cacheKey = bKey('articles', currentBoutiqueId);
+    return cachedRead(cacheKey, async () => {
       let q = supabase.from('articles').select('*').order('designation');
       if (currentBoutiqueId) q = q.eq('boutique_id', currentBoutiqueId);
       const { data, error } = await q;
       throwIfNetworkError(error);
-      if (error) return [];
+      if (error) throw new Error(error.message);
       const mapped = ((data as Record<string, unknown>[]) ?? []).map((r) => ({
         ...r,
         prix_unitaire: Number(r.prix_unitaire),
         nb_pieces: Number(r.nb_pieces),
       })) as ArticleCatalog[];
+      if (mapped.length === 0) await assertSafeToCacheEmptyList(cacheKey);
       observeArticleCodes(mapped, currentBoutiqueId);
       return mapped;
     }, []);
@@ -778,7 +884,8 @@ export const db = {
   },
 
   async getAllVariants(): Promise<ArticleVariant[]> {
-    return cachedRead(bKey('all_variants', currentBoutiqueId), async () => {
+    const cacheKey = bKey('all_variants', currentBoutiqueId);
+    return cachedRead(cacheKey, async () => {
       let q = supabase
         .from('article_variants')
         .select('*')
@@ -786,7 +893,7 @@ export const db = {
       if (currentBoutiqueId) q = q.eq('boutique_id', currentBoutiqueId);
       const { data, error } = await q;
       throwIfNetworkError(error);
-      if (error) return [];
+      if (error) throw new Error(error.message);
       return ((data as Record<string, unknown>[]) ?? []).map((r) => ({
         ...r,
         prix_traitement: Number(r.prix_traitement),
@@ -811,7 +918,8 @@ export const db = {
 
   // Depots
   async getDepotsWithClient(): Promise<DepotWithClient[]> {
-    return cachedRead(bKey('recent_depots', currentBoutiqueId), async () => {
+    const cacheKey = bKey('recent_depots', currentBoutiqueId);
+    return cachedRead(cacheKey, async () => {
       let q = supabase
         .from('depots')
         .select('*, clients!inner(nom, telephone, portal_code)')
@@ -820,7 +928,7 @@ export const db = {
       if (currentBoutiqueId) q = q.eq('boutique_id', currentBoutiqueId);
       const { data, error } = await q;
       throwIfNetworkError(error);
-      if (error) return [];
+      if (error) throw new Error(error.message);
       const mapped = ((data as Record<string, unknown>[]) ?? []).map((r) => ({
         ...r,
         total: Number(r.total),
@@ -829,13 +937,15 @@ export const db = {
         taux_remise: r.taux_remise != null ? Number(r.taux_remise) : null,
         montant_remise: r.montant_remise != null ? Number(r.montant_remise) : null,
       })) as DepotWithClient[];
+      if (mapped.length === 0) await assertSafeToCacheEmptyList(cacheKey);
       observeDepotNumeros(mapped, currentBoutiqueId);
       return mapped;
     }, []);
   },
 
   async getDepotsForRetrait(): Promise<DepotWithArticles[]> {
-    return cachedRead(bKey('depots_retrait', currentBoutiqueId), async () => {
+    const cacheKey = bKey('depots_retrait', currentBoutiqueId);
+    return cachedRead(cacheKey, async () => {
       let q = supabase
         .from('depots')
         .select('*, clients(nom, telephone, portal_code), depot_articles(*)')
@@ -866,13 +976,15 @@ export const db = {
         })),
         client: depot.clients ?? null,
       })) as DepotWithArticles[];
+      if (mapped.length === 0) await assertSafeToCacheEmptyList(cacheKey);
       observeDepotNumeros(mapped, currentBoutiqueId);
       return mapped;
     }, []);
   },
 
   async getDepotsForPlanning(): Promise<DepotWithClient[]> {
-    return cachedRead(bKey('depots_planning', currentBoutiqueId), async () => {
+    const cacheKey = bKey('depots_planning', currentBoutiqueId);
+    return cachedRead(cacheKey, async () => {
       let q = supabase
         .from('depots')
         .select('*, clients!inner(nom, telephone, portal_code)')
@@ -880,7 +992,7 @@ export const db = {
       if (currentBoutiqueId) q = q.eq('boutique_id', currentBoutiqueId);
       const { data, error } = await q;
       throwIfNetworkError(error);
-      if (error) return [];
+      if (error) throw new Error(error.message);
       const mapped = ((data as Record<string, unknown>[]) ?? []).map((r) => ({
         ...r,
         total: Number(r.total),
@@ -889,13 +1001,15 @@ export const db = {
         taux_remise: r.taux_remise != null ? Number(r.taux_remise) : null,
         montant_remise: r.montant_remise != null ? Number(r.montant_remise) : null,
       })) as DepotWithClient[];
+      if (mapped.length === 0) await assertSafeToCacheEmptyList(cacheKey);
       observeDepotNumeros(mapped, currentBoutiqueId);
       return mapped;
     }, []);
   },
 
   async getAllDepotsWithClient(): Promise<DepotWithArticles[]> {
-    return cachedRead(bKey('all_depots', currentBoutiqueId), async () => {
+    const cacheKey = bKey('all_depots', currentBoutiqueId);
+    return cachedRead(cacheKey, async () => {
       let q = supabase
         .from('depots')
         .select('*, clients!inner(nom, telephone, portal_code), depot_articles(*)')
@@ -903,7 +1017,7 @@ export const db = {
       if (currentBoutiqueId) q = q.eq('boutique_id', currentBoutiqueId);
       const { data, error } = await q;
       throwIfNetworkError(error);
-      if (error) return [];
+      if (error) throw new Error(error.message);
       const mapped = ((data as Record<string, unknown>[]) ?? []).map((depot) => ({
         ...depot,
         total: Number(depot.total),
@@ -921,14 +1035,16 @@ export const db = {
         })),
         client: depot.clients ?? null,
       })) as DepotWithArticles[];
+      if (mapped.length === 0) await assertSafeToCacheEmptyList(cacheKey);
       observeDepotNumeros(mapped, currentBoutiqueId);
       return mapped;
     }, []);
   },
 
   async getDepotsForReleve(clientId: string): Promise<DepotWithArticles[]> {
-    const fromCache = () => {
-      const all = getScopedCached<DepotWithArticles[]>('all_depots', currentBoutiqueId) ?? [];
+    const fromCache = async () => {
+      const all =
+        (await getCachedWithScopeFallbackAsync<DepotWithArticles[]>(bKey('all_depots', currentBoutiqueId))) ?? [];
       return all
         .filter((d) => d.client_id === clientId)
         .sort((a, b) => a.date_depot.localeCompare(b.date_depot));
@@ -1337,24 +1453,28 @@ export const db = {
   },
 
   async getAllAvances(): Promise<DepotAvance[]> {
-    return cachedRead(bKey('all_avances', currentBoutiqueId), async () => {
+    const cacheKey = bKey('all_avances', currentBoutiqueId);
+    return cachedRead(cacheKey, async () => {
       let q = supabase
         .from('depot_avances')
         .select('*');
       if (currentBoutiqueId) q = q.eq('boutique_id', currentBoutiqueId);
       const { data, error } = await q;
       throwIfNetworkError(error);
-      if (error) return [];
-      return ((data as Record<string, unknown>[]) ?? []).map((r) => ({
+      if (error) throw new Error(error.message);
+      const mapped = ((data as Record<string, unknown>[]) ?? []).map((r) => ({
         ...r,
         montant: Number(r.montant),
       })) as DepotAvance[];
+      if (mapped.length === 0) await assertSafeToCacheEmptyList(cacheKey);
+      return mapped;
     }, []);
   },
 
   // Depenses
   async getAllDepenses(): Promise<Depense[]> {
-    return cachedRead(bKey('depenses', currentBoutiqueId), async () => {
+    const cacheKey = bKey('depenses', currentBoutiqueId);
+    return cachedRead(cacheKey, async () => {
       let q = supabase
         .from('depenses')
         .select('*')
@@ -1362,11 +1482,13 @@ export const db = {
       if (currentBoutiqueId) q = q.eq('boutique_id', currentBoutiqueId);
       const { data, error } = await q;
       throwIfNetworkError(error);
-      if (error) return [];
-      return ((data as Record<string, unknown>[]) ?? []).map((r) => ({
+      if (error) throw new Error(error.message);
+      const mapped = ((data as Record<string, unknown>[]) ?? []).map((r) => ({
         ...r,
         montant: Number(r.montant),
       })) as Depense[];
+      if (mapped.length === 0) await assertSafeToCacheEmptyList(cacheKey);
+      return mapped;
     }, []);
   },
 
@@ -1395,7 +1517,8 @@ export const db = {
 
   // Depense categories
   async getAllDepenseCategories(): Promise<DepenseCategory[]> {
-    return cachedRead(bKey('depense_categories', currentBoutiqueId), async () => {
+    const cacheKey = bKey('depense_categories', currentBoutiqueId);
+    return cachedRead(cacheKey, async () => {
       let q = supabase
         .from('depense_categories')
         .select('*')
@@ -1403,7 +1526,7 @@ export const db = {
       if (currentBoutiqueId) q = q.eq('boutique_id', currentBoutiqueId);
       const { data, error } = await q;
       throwIfNetworkError(error);
-      if (error) return [];
+      if (error) throw new Error(error.message);
       return (data as DepenseCategory[]) ?? [];
     }, []);
   },
@@ -1434,7 +1557,7 @@ export const db = {
       if (currentBoutiqueId) q = q.eq('boutique_id', currentBoutiqueId);
       const { data, error } = await q;
       throwIfNetworkError(error);
-      if (error || !data) return [];
+      if (error || !data) throw new Error(error?.message ?? 'Erreur lecture');
       const seen = new Set<string>();
       const result: string[] = [];
       for (const row of data as Record<string, unknown>[]) {
@@ -1457,8 +1580,10 @@ export const db = {
         .order('is_default', { ascending: false })
         .order('created_at', { ascending: true });
       throwIfNetworkError(error);
-      if (error) return [];
-      return (data as unknown as Boutique[]) ?? [];
+      if (error) throw new Error(error.message);
+      const mapped = (data as unknown as Boutique[]) ?? [];
+      if (mapped.length === 0) await assertSafeToCacheEmptyList('boutiques');
+      return mapped;
     }, []);
   },
 
@@ -1676,7 +1801,7 @@ export const db = {
       if (currentBoutiqueId) q = q.eq('boutique_id', currentBoutiqueId);
       const { data, error } = await q;
       throwIfNetworkError(error);
-      if (error || !data) return {};
+      if (error || !data) throw new Error(error?.message ?? 'Erreur lecture points');
       const map: Record<string, number> = {};
       for (const row of data as { client_id: string; total_points: number }[]) {
         map[row.client_id] = Number(row.total_points);
@@ -1838,18 +1963,21 @@ export const db = {
 
   // ─── Consommables (stock) ─────────────────────────────────
   async getAllConsommables(): Promise<Consommable[]> {
-    return cachedRead(bKey('consommables', currentBoutiqueId), async () => {
+    const cacheKey = bKey('consommables', currentBoutiqueId);
+    return cachedRead(cacheKey, async () => {
       let q = supabase.from('consommables').select('*').order('nom');
       if (currentBoutiqueId) q = q.eq('boutique_id', currentBoutiqueId);
       const { data, error } = await q;
       throwIfNetworkError(error);
-      if (error) return [];
-      return ((data as Record<string, unknown>[]) ?? []).map((r) => ({
+      if (error) throw new Error(error.message);
+      const mapped = ((data as Record<string, unknown>[]) ?? []).map((r) => ({
         ...r,
         quantite: Number(r.quantite),
         seuil_alerte: Number(r.seuil_alerte),
         prix_unitaire: Number(r.prix_unitaire),
       })) as Consommable[];
+      if (mapped.length === 0) await assertSafeToCacheEmptyList(cacheKey);
+      return mapped;
     }, []);
   },
 
@@ -1935,7 +2063,7 @@ export const db = {
       if (currentBoutiqueId) q = q.eq('boutique_id', currentBoutiqueId);
       const { data, error } = await q;
       throwIfNetworkError(error);
-      if (error) return [];
+      if (error) throw new Error(error.message);
       return ((data as Record<string, unknown>[]) ?? []).map((r) => {
         const client = r.clients as Record<string, unknown> | null;
         return {

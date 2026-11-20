@@ -193,11 +193,16 @@ function WorkspaceApp() {
   // Warm up essential offline caches automatically in the background when online
   useEffect(() => {
     if (!user || !tenantId || isSuperAdmin) return;
-    if (typeof navigator !== 'undefined' && !navigator.onLine) return;
-    const timer = setTimeout(() => {
+    const runWarmup = () => {
+      if (typeof navigator !== 'undefined' && !navigator.onLine) return;
       void db.prefetchOfflineData();
-    }, 1200);
-    return () => clearTimeout(timer);
+    };
+    const timer = setTimeout(runWarmup, 300);
+    window.addEventListener('online', runWarmup);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('online', runWarmup);
+    };
   }, [user, tenantId, isSuperAdmin, currentBoutique?.id]);
 
   setCurrentBoutiqueId(currentBoutique?.id ?? null);

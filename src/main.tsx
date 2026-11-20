@@ -6,7 +6,15 @@ import './index.css';
 import { AuthProvider } from './lib/auth';
 import { I18nProvider } from './lib/i18n';
 import ErrorBoundary from './components/ErrorBoundary';
-import { isLikelyNetworkError } from './lib/readCache';
+import { isLikelyNetworkError, hydrateReadCacheFromIdb } from './lib/readCache';
+
+// Hydrate IndexedDB offline read cache into RAM immediately at T=0ms
+void hydrateReadCacheFromIdb();
+
+// Ask browser for persistent storage so IndexedDB/localStorage are never auto-evicted
+if (typeof navigator !== 'undefined' && navigator.storage && typeof navigator.storage.persist === 'function') {
+  navigator.storage.persist().catch(() => {});
+}
 
 // Prevent stray offline fetch/WebSocket promise rejections from terminating mobile standalone PWAs
 window.addEventListener('unhandledrejection', (event) => {

@@ -191,6 +191,29 @@ export function onPostSync(callback: PostSyncCallback): () => void {
   };
 }
 
+/**
+ * Returns all queued offline mutations for a given table by merging memory/localStorage
+ * and IndexedDB (MUTATIONS_STORE), sorted chronologically.
+ * Used on cold offline startup to guarantee offline-created/edited records are never lost.
+ */
+export async function getPendingMutationsForTableAsync(table: string): Promise<QueuedMutation[]> {
+  const byId = new Map<string, QueuedMutation>();
+  for (const m of memoryQueue) {
+    if (m.table === table) byId.set(m.id, m);
+  }
+  try {
+    const idbItems = await idbGetAll<QueuedMutation>(MUTATIONS_STORE);
+    for (const m of idbItems) {
+      if (m && m.table === table && !byId.has(m.id)) {
+        byId.set(m.id, m);
+      }
+    }
+  } catch {
+    // Ignore IDB read errors; memoryQueue still returned
+  }
+  return Array.from(byId.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
 function genId(): string {
   return `offline_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 }
