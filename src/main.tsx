@@ -1,12 +1,12 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { registerSW } from 'virtual:pwa-register';
 import App from './App.tsx';
 import './index.css';
 import { AuthProvider } from './lib/auth';
 import { I18nProvider } from './lib/i18n';
 import ErrorBoundary from './components/ErrorBoundary';
 import { isLikelyNetworkError, hydrateReadCacheFromIdb } from './lib/readCache';
+import { initPwaAutoUpdate } from './lib/pwaAutoUpdate';
 
 // Hydrate IndexedDB offline read cache into RAM immediately at T=0ms
 void hydrateReadCacheFromIdb();
@@ -23,45 +23,8 @@ window.addEventListener('unhandledrejection', (event) => {
   }
 });
 
-// Clean up any legacy /push-sw.js registration that previously hijacked root scope '/',
-// then register the unified Workbox PWA Service Worker immediately for full offline support.
-async function initPwaServiceWorker() {
-  try {
-    if ('serviceWorker' in navigator) {
-      const registrations = await navigator.serviceWorker.getRegistrations();
-      for (const reg of registrations) {
-        const scriptUrl =
-          reg.active?.scriptURL || reg.waiting?.scriptURL || reg.installing?.scriptURL || '';
-        if (scriptUrl.endsWith('/push-sw.js')) {
-          await reg.unregister();
-        }
-      }
-    }
-  } catch {
-    // Ignore cleanup errors
-  }
-
-  registerSW({
-    immediate: true,
-    onRegisteredSW(_swUrl, registration) {
-      if (registration) {
-        const checkUpdate = () => {
-          if (navigator.onLine) {
-            registration.update().catch(() => {});
-          }
-        };
-        checkUpdate();
-        window.addEventListener('online', checkUpdate);
-        document.addEventListener('visibilitychange', () => {
-          if (document.visibilityState === 'visible') checkUpdate();
-        });
-        setInterval(checkUpdate, 15 * 60 * 1000);
-      }
-    },
-  });
-}
-
-void initPwaServiceWorker();
+// Register unified Workbox PWA Service Worker with automatic Vercel deployment updates
+void initPwaAutoUpdate();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

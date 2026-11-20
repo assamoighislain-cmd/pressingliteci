@@ -1,14 +1,47 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
+
+const BUILD_ID =
+  process.env.VERCEL_GIT_COMMIT_SHA ||
+  process.env.VERCEL_DEPLOYMENT_ID ||
+  `build-${Date.now()}`;
+
+function buildVersionPlugin(buildId: string): Plugin {
+  const payload = JSON.stringify({
+    buildId,
+    builtAt: new Date().toISOString(),
+  });
+  return {
+    name: 'pressinglite-build-version',
+    configureServer(server) {
+      server.middlewares.use('/version.json', (_req, res) => {
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.end(payload);
+      });
+    },
+    generateBundle() {
+      this.emitFile({
+        type: 'asset',
+        fileName: 'version.json',
+        source: payload,
+      });
+    },
+  };
+}
 
 export default defineConfig(() => {
   return {
+    define: {
+      __APP_BUILD_ID__: JSON.stringify(BUILD_ID),
+    },
     plugins: [
       react(),
       tailwindcss(),
+      buildVersionPlugin(BUILD_ID),
       VitePWA({
         registerType: 'autoUpdate',
         includeAssets: [
@@ -78,13 +111,20 @@ export default defineConfig(() => {
         },
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,webp,woff,woff2}'],
+          globIgnores: ['**/version.json'],
           maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
           cleanupOutdatedCaches: true,
           clientsClaim: true,
           skipWaiting: true,
           navigateFallback: '/index.html',
+          navigateFallbackDenylist: [/^\/version\.json$/, /^\/api\//],
           importScripts: ['/bg-sync-sw.js'],
           runtimeCaching: [
+            {
+              urlPattern: ({ sameOrigin, url }) =>
+                sameOrigin && url.pathname === '/version.json',
+              handler: 'NetworkOnly',
+            },
             {
               urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
               handler: 'CacheFirst',
@@ -128,8 +168,11 @@ export default defineConfig(() => {
               },
             },
             {
-              urlPattern: ({ sameOrigin, request }) =>
+              urlPattern: ({ sameOrigin, request, url }) =>
                 sameOrigin &&
+                url.pathname !== '/version.json' &&
+                !url.pathname.endsWith('/sw.js') &&
+                !url.pathname.endsWith('/bg-sync-sw.js') &&
                 ['script', 'style', 'worker', 'font', 'image'].includes(request.destination),
               handler: 'NetworkFirst',
               options: {

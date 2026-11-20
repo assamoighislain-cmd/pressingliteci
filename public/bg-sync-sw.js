@@ -240,7 +240,12 @@ self.addEventListener('periodicsync', (event) => {
 });
 
 self.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'TRIGGER_BG_SYNC') {
+  if (!event.data) return;
+  if (event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+    return;
+  }
+  if (event.data.type === 'TRIGGER_BG_SYNC') {
     event.waitUntil(runSwQueueSync());
   }
 });

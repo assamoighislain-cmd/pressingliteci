@@ -28,6 +28,7 @@ import BoutiquesPage from '@/components/BoutiquesPage';
 import ClientPortal from '@/components/ClientPortal';
 import ErrorBoundary from '@/components/ErrorBoundary';
 import DepotStartCounterModal from '@/components/DepotStartCounterModal';
+import PwaUpdateBanner from '@/components/PwaUpdateBanner';
 import { useAuth } from '@/lib/auth';
 import { useI18n } from '@/lib/i18n';
 import { supabase } from '@/lib/supabase';
@@ -363,8 +364,18 @@ export default function App() {
   const portalEntrepriseId = portalMatch ? parseInt(portalMatch[1], 10) : null;
 
   if (portalEntrepriseId !== null) {
-    return <ClientPortal entrepriseId={portalEntrepriseId} />;
+    return (
+      <>
+        <ClientPortal entrepriseId={portalEntrepriseId} />
+        <PwaUpdateBanner />
+      </>
+    );
   }
 
-  return <WorkspaceApp />;
+  return (
+    <>
+      <WorkspaceApp />
+      <PwaUpdateBanner />
+    </>
+  );
 }
