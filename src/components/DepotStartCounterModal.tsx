@@ -10,7 +10,7 @@ function setupDoneKey(tenantId: string, year: number): string {
 }
 
 export default function DepotStartCounterModal() {
-  const { user, role, tenantId, isSuperAdmin } = useAuth();
+  const { user, role, tenantId, isSuperAdmin, currentBoutique, reloadBoutiques } = useAuth();
   const { lang } = useI18n();
   const [open, setOpen] = useState(false);
   const [startInput, setStartInput] = useState('');
@@ -38,8 +38,11 @@ export default function DepotStartCounterModal() {
         ]);
         if (cancelled) return;
 
-        // Already configured at signup or in settings -> mark done silently
+        // Already configured at signup, on the boutique, or in settings -> mark done silently
         const hasConfiguredStart =
+          (currentBoutique?.depot_start_number != null &&
+            currentBoutique.depot_start_number >= 1 &&
+            (!currentBoutique.depot_start_year || currentBoutique.depot_start_year === currentYear)) ||
           (ent?.depot_start_number != null &&
             ent.depot_start_number >= 1 &&
             (!ent.depot_start_year || ent.depot_start_year === currentYear)) ||
@@ -112,6 +115,7 @@ export default function DepotStartCounterModal() {
         setError(saveErr);
         return;
       }
+      void reloadBoutiques();
       markDone();
     } finally {
       setSaving(false);
@@ -138,13 +142,13 @@ export default function DepotStartCounterModal() {
           <div>
             <h3 className="text-base font-bold text-slate-900">
               {lang === 'fr'
-                ? 'Compteur de départ des dépôts'
-                : 'Starting deposit counter'}
+                ? `Compteur de départ des dépôts${currentBoutique ? ` — ${currentBoutique.nom}` : ''}`
+                : `Starting deposit counter${currentBoutique ? ` — ${currentBoutique.nom}` : ''}`}
             </h3>
             <p className="text-xs text-slate-500 mt-1">
               {lang === 'fr'
-                ? "Lors de l'installation du logiciel, vous pouvez imposer le premier numéro de dépôt (utile pour poursuivre un carnet papier ou un ancien logiciel). Ce compteur sera appliqué sur tous vos postes."
-                : 'When installing the software, you can enforce the starting deposit number (useful when continuing a paper receipt book or previous software). This counter will apply across all devices.'}
+                ? "Lors de l'installation du logiciel, vous pouvez imposer le premier numéro de dépôt pour cette boutique (utile pour poursuivre un carnet papier ou un ancien logiciel). Chaque boutique peut avoir son propre compteur."
+                : 'When installing the software, you can enforce the starting deposit number for this boutique (useful when continuing a paper receipt book or previous software). Each boutique can have its own counter.'}
             </p>
           </div>
         </div>
@@ -210,8 +214,8 @@ export default function DepotStartCounterModal() {
 
         <p className="text-[11px] text-slate-400 text-center">
           {lang === 'fr'
-            ? 'Vous pourrez modifier ou réinitialiser ce compteur à tout moment dans Entreprise.'
-            : 'You can change or reset this counter anytime in Company settings.'}
+            ? 'Vous pourrez modifier ou réinitialiser le compteur de chaque boutique à tout moment dans Boutiques ou Entreprise.'
+            : 'You can change or reset each boutique counter anytime in Boutiques or Company settings.'}
         </p>
       </div>
     </div>

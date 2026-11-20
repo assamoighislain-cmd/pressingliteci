@@ -83,7 +83,7 @@ function makeDefaultArticle(): ArticleDraft {
 
 export default function DepotForm({ onDone }: { onDone: () => void }) {
   const { t, lang } = useI18n();
-  const { role } = useAuth();
+  const { role, currentBoutique, reloadBoutiques } = useAuth();
   const canManageCounter = !role || role === 'admin' || role === 'gerant';
   const [step, setStep] = useState<'client' | 'articles' | 'paiement'>('client');
 
@@ -389,7 +389,7 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
 
   useEffect(() => {
     refreshNextPreview();
-  }, [refreshNextPreview, billingPointCode, effectiveYear, success]);
+  }, [refreshNextPreview, billingPointCode, effectiveYear, success, currentBoutique?.id]);
 
   useEffect(() => {
     const onSyncChange = () => {
@@ -398,9 +398,11 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
     };
     window.addEventListener('pressinglite:billing-point-changed', onSyncChange);
     window.addEventListener('pressinglite:depot-start-seq-changed', onSyncChange);
+    window.addEventListener('pressinglite:boutique-changed', onSyncChange);
     return () => {
       window.removeEventListener('pressinglite:billing-point-changed', onSyncChange);
       window.removeEventListener('pressinglite:depot-start-seq-changed', onSyncChange);
+      window.removeEventListener('pressinglite:boutique-changed', onSyncChange);
     };
   }, [refreshNextPreview]);
 
@@ -1084,8 +1086,8 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
             <div className="pt-2 border-t border-slate-100 space-y-1.5">
               <p className="text-xs font-medium text-slate-700">
                 {lang === 'fr'
-                  ? `2. Compteur de départ des dépôts (${effectiveYear})`
-                  : `2. Starting deposit counter (${effectiveYear})`}
+                  ? `2. Compteur de départ des dépôts${currentBoutique ? ` — ${currentBoutique.nom}` : ''} (${effectiveYear})`
+                  : `2. Starting deposit counter${currentBoutique ? ` — ${currentBoutique.nom}` : ''} (${effectiveYear})`}
               </p>
               {canManageCounter ? (
                 <>
@@ -1107,6 +1109,7 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
                         const { saved } = await db.saveEnforcedDepotStartNumber(parsed, dateDepotEffective);
                         setDepotStartSeqState(saved);
                         refreshNextPreview();
+                        void reloadBoutiques();
                         setStartSeqSavedMsg(true);
                         setTimeout(() => setStartSeqSavedMsg(false), 2000);
                       }}
@@ -1122,6 +1125,7 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
                           setDepotStartSeqState(null);
                           setStartSeqInput('');
                           refreshNextPreview();
+                          void reloadBoutiques();
                         }}
                         className="px-2.5 py-1 rounded-md border border-slate-200 text-slate-600 text-xs hover:bg-slate-50 transition-colors"
                       >
@@ -1137,8 +1141,8 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
                   </div>
                   <p className="text-[11px] text-slate-400">
                     {lang === 'fr'
-                      ? 'Exemple : saisissez 250 pour que le prochain dépôt démarre à D-250-' + effectiveYear + ' sur tous les postes puis continue à 251, 252…'
-                      : 'Example: enter 250 so the next deposit starts at D-250-' + effectiveYear + ' across all devices and continues 251, 252…'}
+                      ? `Propre à ${currentBoutique ? `la boutique « ${currentBoutique.nom} »` : 'cette boutique'} : saisissez 250 pour que le prochain dépôt démarre à D-250-${effectiveYear} puis continue à 251, 252…`
+                      : `Specific to ${currentBoutique ? `"${currentBoutique.nom}"` : 'this boutique'}: enter 250 so the next deposit starts at D-250-${effectiveYear} and continues 251, 252…`}
                   </p>
                 </>
               ) : (
@@ -1147,8 +1151,8 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
                   <span>
                     {depotStartSeq !== null
                       ? (lang === 'fr'
-                          ? `Compteur imposé par l'administrateur à partir de ${formatDepotNumero(depotStartSeq, effectiveYear, billingPointCode)}.`
-                          : `Starting counter enforced by administrator from ${formatDepotNumero(depotStartSeq, effectiveYear, billingPointCode)}.`)
+                          ? `Compteur imposé pour ${currentBoutique?.nom ?? 'cette boutique'} à partir de ${formatDepotNumero(depotStartSeq, effectiveYear, billingPointCode)}.`
+                          : `Starting counter enforced for ${currentBoutique?.nom ?? 'this boutique'} from ${formatDepotNumero(depotStartSeq, effectiveYear, billingPointCode)}.`)
                       : (lang === 'fr'
                           ? "Seul l'administrateur ou le gérant peut imposer un compteur de départ."
                           : 'Only an administrator or manager can enforce a starting counter.')}

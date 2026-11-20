@@ -17,7 +17,7 @@ import {
 } from '@/lib/dbOfflineHelpers';
 
 export default function EntreprisePage() {
-  const { user } = useAuth();
+  const { user, currentBoutique, reloadBoutiques } = useAuth();
   const { t, lang } = useI18n();
   const [entreprise, setEntreprise] = useState<Entreprise | null>(null);
   const [loading, setLoading] = useState(true);
@@ -80,11 +80,13 @@ export default function EntreprisePage() {
     };
     window.addEventListener('pressinglite:billing-point-changed', onSyncChange);
     window.addEventListener('pressinglite:depot-start-seq-changed', onSyncChange);
+    window.addEventListener('pressinglite:boutique-changed', onSyncChange);
     return () => {
       window.removeEventListener('pressinglite:billing-point-changed', onSyncChange);
       window.removeEventListener('pressinglite:depot-start-seq-changed', onSyncChange);
+      window.removeEventListener('pressinglite:boutique-changed', onSyncChange);
     };
-  }, []);
+  }, [currentBoutique?.id]);
 
   useEffect(() => {
     (async () => {
@@ -1107,14 +1109,14 @@ export default function EntreprisePage() {
           <div className="flex flex-wrap items-center justify-between gap-2">
             <label className="block text-xs font-medium text-slate-700">
               {lang === 'fr'
-                ? `Imposer un compteur de départ des dépôts (${new Date().getFullYear()})`
-                : `Enforce starting deposit counter (${new Date().getFullYear()})`}
+                ? `Imposer un compteur de départ des dépôts${currentBoutique ? ` — ${currentBoutique.nom}` : ''} (${new Date().getFullYear()})`
+                : `Enforce starting deposit counter${currentBoutique ? ` — ${currentBoutique.nom}` : ''} (${new Date().getFullYear()})`}
             </label>
             {depotStartSeq !== null && (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-sky-50 border border-sky-200 text-[11px] font-semibold text-sky-700">
                 {lang === 'fr'
-                  ? `Imposé : ${formatDepotNumero(depotStartSeq, new Date().getFullYear(), billingPointCode)} (tous les postes)`
-                  : `Enforced: ${formatDepotNumero(depotStartSeq, new Date().getFullYear(), billingPointCode)} (all devices)`}
+                  ? `Imposé : ${formatDepotNumero(depotStartSeq, new Date().getFullYear(), billingPointCode)}${currentBoutique ? ` (${currentBoutique.nom})` : ''}`
+                  : `Enforced: ${formatDepotNumero(depotStartSeq, new Date().getFullYear(), billingPointCode)}${currentBoutique ? ` (${currentBoutique.nom})` : ''}`}
               </span>
             )}
           </div>
@@ -1136,6 +1138,7 @@ export default function EntreprisePage() {
                 const { saved } = await db.saveEnforcedDepotStartNumber(parsed);
                 setDepotStartSeqState(saved);
                 refreshNumberingPreview();
+                void reloadBoutiques();
                 setStartSeqSaved(true);
                 setTimeout(() => setStartSeqSaved(false), 2500);
               }}
@@ -1151,6 +1154,7 @@ export default function EntreprisePage() {
                   setDepotStartSeqState(null);
                   setStartSeqInput('');
                   refreshNumberingPreview();
+                  void reloadBoutiques();
                 }}
                 className="px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 text-xs font-medium hover:bg-slate-50 transition-colors"
               >
@@ -1160,14 +1164,16 @@ export default function EntreprisePage() {
             {startSeqSaved && (
               <span className="text-xs font-medium text-emerald-600 flex items-center gap-1">
                 <Check className="w-3.5 h-3.5" />
-                {lang === 'fr' ? 'Compteur imposé sur tous les postes !' : 'Counter enforced across all devices!'}
+                {lang === 'fr'
+                  ? `Compteur imposé${currentBoutique ? ` pour ${currentBoutique.nom}` : ''} !`
+                  : `Counter enforced${currentBoutique ? ` for ${currentBoutique.nom}` : ''}!`}
               </span>
             )}
           </div>
           <p className="text-xs text-slate-400">
             {lang === 'fr'
-              ? `Idéal lors de l'installation du logiciel pour continuer votre numérotation existante : le prochain dépôt démarrera exactement à ce numéro (ex: 250 → ${formatDepotNumero(250, new Date().getFullYear(), billingPointCode)}) et sera imposé à tous les utilisateurs de l'entreprise.`
-              : `Ideal when installing the software to continue your existing numbering: the next deposit will start at that exact number (e.g. 250 → ${formatDepotNumero(250, new Date().getFullYear(), billingPointCode)}) and will be enforced across all users.`}
+              ? `Chaque boutique dispose de son propre compteur de départ indépendant (ex: 250 → ${formatDepotNumero(250, new Date().getFullYear(), billingPointCode)}). Vous pouvez également régler le compteur de chaque boutique dans le menu Boutiques.`
+              : `Each boutique has its own independent starting counter (e.g. 250 → ${formatDepotNumero(250, new Date().getFullYear(), billingPointCode)}). You can also configure each boutique's counter in the Boutiques menu.`}
           </p>
         </div>
       </div>

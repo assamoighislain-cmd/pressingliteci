@@ -23,6 +23,10 @@ import {
   getBillingPointCode,
   getDepotStartSeq,
   setDepotStartSeq,
+  getBoutiqueDepotStartSeq,
+  setBoutiqueDepotStartSeq,
+  syncBoutiqueDepotStartSeqs,
+  getDefaultBoutiqueId,
   getCompanyDepotStartSeq,
   setCompanyDepotStartSeq,
   syncCompanyDepotStartSeqFromEntreprise,
@@ -1418,6 +1422,13 @@ export const db = {
     return getDepotStartSeq(currentBoutiqueId, targetYear, getBillingPointCode());
   },
 
+  getBoutiqueDepotStartNumber(boutiqueId: string, dateDepot?: Date): number | null {
+    const targetYear = (dateDepot ?? new Date()).getFullYear();
+    const direct = getBoutiqueDepotStartSeq(boutiqueId, targetYear);
+    if (direct !== null) return direct;
+    return getDepotStartSeq(boutiqueId, targetYear, getBillingPointCode());
+  },
+
   getCompanyEnforcedDepotStartNumber(dateDepot?: Date): number | null {
     const targetYear = (dateDepot ?? new Date()).getFullYear();
     return getCompanyDepotStartSeq(targetYear);
@@ -1429,13 +1440,117 @@ export const db = {
   },
 
   /**
-   * Enforces a starting deposit counter company-wide (persisted on `entreprise` AND cached locally)
-   * so all devices, billing points, and offline sessions respect it immediately.
+   * Saves and enforces a starting deposit counter specifically for one boutique
+   * (persisted on `boutiques` AND cached locally so all devices and offline sessions
+   * for that boutique honor it immediately without affecting other boutiques).
+   */
+  async saveBoutiqueDepotStartNumber(
+    boutiqueId: string,
+    startSeq: number | null,
+    dateDepot?: Date,
+  ): Promise<{ saved: number | null; error: string | null }> {
+    const targetYear = (dateDepot ?? new Date()).getFullYear();
+    const normalized =
+      startSeq !== null && Number.isFinite(startSeq) && startSeq >= 1
+        ? Math.max(1, Math.floor(startSeq))
+        : null;
+
+    setBoutiqueDepotStartSeq(boutiqueId, normalized, targetYear);
+
+    const isDefaultBoutique = boutiqueId === getDefaultBoutiqueId();
+    if (isDefaultBoutique && normalized === null) {
+      setCompanyDepotStartSeq(null, targetYear);
+    }
+
+    const updateValues = {
+      depot_start_number: normalized,
+      depot_start_year: normalized !== null ? targetYear : null,
+      updated_at: new Date().toISOString(),
+    };
+
+    // Update cached boutiques list optimistically
+    const cachedBoutiques = getCached<Boutique[]>('boutiques');
+    if (cachedBoutiques) {
+      setCached(
+        'boutiques',
+        cachedBoutiques.map((b) =>
+          b.id === boutiqueId ? { ...b, ...updateValues } : b,
+        ),
+      );
+    }
+
+    // If clearing default boutique counter, also clear legacy entreprise counter best-effort
+    if (isDefaultBoutique && normalized === null) {
+      const tenantId = await getTenantId();
+      const cachedEnt = getCached<Entreprise | null>('entreprise');
+      if (cachedEnt) {
+        setCached('entreprise', { ...cachedEnt, ...updateValues });
+      }
+      if (tenantId && !isOffline()) {
+        try {
+          await supabase.from('entreprise').update(updateValues).eq('user_id', tenantId);
+        } catch {
+          // Best-effort legacy sync
+        }
+      }
+    }
+
+    if (isOffline()) {
+      enqueueMutation(
+        'boutiques',
+        'update',
+        updateValues,
+        [{ column: 'id', operator: 'eq', value: boutiqueId }],
+        normalized !== null
+          ? `Compteur dépôt boutique : ${normalized}`
+          : 'Compteur dépôt boutique automatique',
+      );
+      return { saved: normalized, error: null };
+    }
+
+    try {
+      const { error } = await supabase
+        .from('boutiques')
+        .update(updateValues)
+        .eq('id', boutiqueId);
+      if (error) {
+        if (extractMissingSchemaColumn(error.message)) {
+          // Column not yet migrated in remote DB: local per-boutique enforcement still active
+          return { saved: normalized, error: null };
+        }
+        if (isLikelyNetworkError(error)) {
+          enqueueMutation(
+            'boutiques',
+            'update',
+            updateValues,
+            [{ column: 'id', operator: 'eq', value: boutiqueId }],
+            normalized !== null
+              ? `Compteur dépôt boutique : ${normalized}`
+              : 'Compteur dépôt boutique automatique',
+          );
+          return { saved: normalized, error: null };
+        }
+        return { saved: normalized, error: error.message };
+      }
+      notifyRealtimeMutation('boutiques', true);
+      return { saved: normalized, error: null };
+    } catch {
+      return { saved: normalized, error: null };
+    }
+  },
+
+  /**
+   * Enforces a starting deposit counter for the active boutique (or company-wide fallback
+   * when no boutique is selected), persisted remotely AND cached locally.
    */
   async saveEnforcedDepotStartNumber(
     startSeq: number | null,
     dateDepot?: Date,
   ): Promise<{ saved: number | null; error: string | null }> {
+    if (currentBoutiqueId) {
+      return this.saveBoutiqueDepotStartNumber(currentBoutiqueId, startSeq, dateDepot);
+    }
+
     const targetYear = (dateDepot ?? new Date()).getFullYear();
     const normalized =
       startSeq !== null && Number.isFinite(startSeq) && startSeq >= 1
@@ -1748,7 +1863,7 @@ export const db = {
 
   // Boutiques
   async getBoutiques(): Promise<Boutique[]> {
-    return cachedRead('boutiques', async () => {
+    const list = await cachedRead('boutiques', async () => {
       const { data, error } = await supabase
         .from('boutiques')
         .select('*')
@@ -1760,9 +1875,18 @@ export const db = {
       if (mapped.length === 0) await assertSafeToCacheEmptyList('boutiques');
       return mapped;
     }, []);
+    syncBoutiqueDepotStartSeqs(list);
+    return list;
   },
 
-  async insertBoutique(row: { nom: string; adresse?: string | null; ville?: string | null; telephone?: string | null }): Promise<{ data: Boutique | null; error: string | null }> {
+  async insertBoutique(row: {
+    nom: string;
+    adresse?: string | null;
+    ville?: string | null;
+    telephone?: string | null;
+    depot_start_number?: number | null;
+    depot_start_year?: number | null;
+  }): Promise<{ data: Boutique | null; error: string | null }> {
     let tId = await getTenantId();
     if (!tId) {
       resetTenantCache();
@@ -1771,17 +1895,100 @@ export const db = {
     if (!tId) {
       return { data: null, error: 'Unable to determine tenant' };
     }
-    const { data, error } = await supabase
+    const targetYear =
+      row.depot_start_year != null && Number.isFinite(row.depot_start_year) && row.depot_start_year >= 2000
+        ? Math.floor(row.depot_start_year)
+        : new Date().getFullYear();
+    const normalizedStart =
+      row.depot_start_number != null && Number.isFinite(row.depot_start_number) && row.depot_start_number >= 1
+        ? Math.max(1, Math.floor(row.depot_start_number))
+        : null;
+
+    let insertPayload: Record<string, unknown> = {
+      nom: row.nom,
+      adresse: row.adresse ?? null,
+      ville: row.ville ?? null,
+      telephone: row.telephone ?? null,
+      tenant_id: tId,
+      ...(normalizedStart !== null
+        ? { depot_start_number: normalizedStart, depot_start_year: targetYear }
+        : {}),
+    };
+
+    let { data, error } = await supabase
       .from('boutiques')
-      .insert({ ...row, tenant_id: tId })
+      .insert(insertPayload)
       .select('*')
       .single();
+
+    for (let retry = 0; retry < 3 && error; retry++) {
+      const missingCol = extractMissingSchemaColumn(error.message);
+      if (!missingCol || !(missingCol in insertPayload)) break;
+      insertPayload = stripColumnFromRow(insertPayload, missingCol);
+      ({ data, error } = await supabase
+        .from('boutiques')
+        .insert(insertPayload)
+        .select('*')
+        .single());
+    }
+
     if (error) return { data: null, error: error.message };
-    return { data: data as unknown as Boutique, error: null };
+    const created = data as unknown as Boutique;
+    if (created?.id && normalizedStart !== null) {
+      setBoutiqueDepotStartSeq(created.id, normalizedStart, targetYear);
+    }
+    return { data: created, error: null };
   },
 
-  async updateBoutique(id: string, values: { nom?: string; adresse?: string | null; ville?: string | null; telephone?: string | null; is_default?: boolean }): Promise<string | null> {
-    const result = await update({ table: 'boutiques', values, filters: [{ column: 'id', operator: 'eq', value: id }] });
+  async updateBoutique(
+    id: string,
+    values: {
+      nom?: string;
+      adresse?: string | null;
+      ville?: string | null;
+      telephone?: string | null;
+      is_default?: boolean;
+      depot_start_number?: number | null;
+      depot_start_year?: number | null;
+    },
+  ): Promise<string | null> {
+    const targetYear =
+      values.depot_start_year != null && Number.isFinite(values.depot_start_year) && values.depot_start_year >= 2000
+        ? Math.floor(values.depot_start_year)
+        : new Date().getFullYear();
+
+    const payload: Record<string, unknown> = {
+      ...values,
+      updated_at: new Date().toISOString(),
+    };
+
+    if ('depot_start_number' in values) {
+      const normalizedStart =
+        values.depot_start_number != null &&
+        Number.isFinite(values.depot_start_number) &&
+        values.depot_start_number >= 1
+          ? Math.max(1, Math.floor(values.depot_start_number))
+          : null;
+      payload.depot_start_number = normalizedStart;
+      payload.depot_start_year = normalizedStart !== null ? targetYear : null;
+      setBoutiqueDepotStartSeq(id, normalizedStart, targetYear);
+      if (id === getDefaultBoutiqueId() && normalizedStart === null) {
+        setCompanyDepotStartSeq(null, targetYear);
+        const tenantId = await getTenantId();
+        if (tenantId && !isOffline()) {
+          try {
+            await supabase
+              .from('entreprise')
+              .update({ depot_start_number: null, depot_start_year: null, updated_at: new Date().toISOString() })
+              .eq('user_id', tenantId);
+          } catch {
+            // Best-effort legacy sync
+          }
+        }
+      }
+    }
+
+    const result = await update({ table: 'boutiques', values: payload, filters: [{ column: 'id', operator: 'eq', value: id }] });
     return result.error;
   },
 

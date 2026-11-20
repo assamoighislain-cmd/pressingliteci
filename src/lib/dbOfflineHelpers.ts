@@ -237,6 +237,134 @@ function companyDepotStartSeqStorageKey(year: number): string {
   return `pressinglite_company_depot_start_seq_${year}`;
 }
 
+function boutiqueDepotStartSeqStorageKey(boutiqueId: string, year: number): string {
+  return `pressinglite_boutique_depot_start_seq_${boutiqueId}_${year}`;
+}
+
+const DEFAULT_BOUTIQUE_ID_STORAGE_KEY = 'pressinglite_default_boutique_id';
+
+export function getDefaultBoutiqueId(): string | null {
+  try {
+    return localStorage.getItem(DEFAULT_BOUTIQUE_ID_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setDefaultBoutiqueId(boutiqueId: string | null): void {
+  try {
+    if (boutiqueId) {
+      localStorage.setItem(DEFAULT_BOUTIQUE_ID_STORAGE_KEY, boutiqueId);
+    } else {
+      localStorage.removeItem(DEFAULT_BOUTIQUE_ID_STORAGE_KEY);
+    }
+  } catch {
+    // Ignore
+  }
+}
+
+export function getBoutiqueDepotStartSeq(
+  boutiqueId: string | null,
+  year: number = new Date().getFullYear(),
+): number | null {
+  if (!boutiqueId) return null;
+  try {
+    const raw = localStorage.getItem(boutiqueDepotStartSeqStorageKey(boutiqueId, year));
+    if (!raw) return null;
+    const parsed = parseInt(raw, 10);
+    return Number.isFinite(parsed) && parsed >= 1 ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export function setBoutiqueDepotStartSeq(
+  boutiqueId: string | null,
+  startSeq: number | null,
+  year: number = new Date().getFullYear(),
+): number | null {
+  if (!boutiqueId) return null;
+  const key = boutiqueDepotStartSeqStorageKey(boutiqueId, year);
+  const activePoint = getBillingPointCode();
+  const pointsToSync = activePoint ? [activePoint, ''] : [''];
+  try {
+    if (startSeq !== null && Number.isFinite(startSeq) && startSeq >= 1) {
+      const normalized = Math.max(1, Math.floor(startSeq));
+      localStorage.setItem(key, String(normalized));
+      for (const pt of pointsToSync) {
+        localStorage.setItem(depotStartSeqStorageKey(boutiqueId, year, pt), String(normalized));
+        localStorage.setItem(depotCustomProgStorageKey(boutiqueId, year, pt), String(normalized - 1));
+      }
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('pressinglite:depot-start-seq-changed', {
+            detail: { boutiqueId, startSeq: normalized, year },
+          }),
+        );
+      }
+      return normalized;
+    } else {
+      localStorage.removeItem(key);
+      for (const pt of pointsToSync) {
+        localStorage.removeItem(depotStartSeqStorageKey(boutiqueId, year, pt));
+        localStorage.removeItem(depotCustomProgStorageKey(boutiqueId, year, pt));
+      }
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('pressinglite:depot-start-seq-changed', {
+            detail: { boutiqueId, startSeq: null, year },
+          }),
+        );
+      }
+      return null;
+    }
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Hydrates per-boutique starting counters from loaded `boutiques` rows into localStorage
+ * so each boutique independently honors its configured counter across devices and offline.
+ */
+export function syncBoutiqueDepotStartSeqs(
+  boutiques: Array<{
+    id: string;
+    is_default?: boolean;
+    depot_start_number?: number | null;
+    depot_start_year?: number | null;
+  }>,
+): void {
+  if (!Array.isArray(boutiques) || boutiques.length === 0) return;
+  const currentYear = new Date().getFullYear();
+  const def = boutiques.find((b) => b.is_default) ?? boutiques[0];
+  if (def?.id) {
+    setDefaultBoutiqueId(def.id);
+  }
+  for (const b of boutiques) {
+    if (!b?.id) continue;
+    const rawNum = b.depot_start_number;
+    if (rawNum != null && Number.isFinite(Number(rawNum)) && Number(rawNum) >= 1) {
+      const targetYear =
+        b.depot_start_year != null &&
+        Number.isFinite(Number(b.depot_start_year)) &&
+        Number(b.depot_start_year) >= 2000
+          ? Math.floor(Number(b.depot_start_year))
+          : currentYear;
+      const normalized = Math.max(1, Math.floor(Number(rawNum)));
+      const existing = getBoutiqueDepotStartSeq(b.id, targetYear);
+      if (existing !== normalized) {
+        setBoutiqueDepotStartSeq(b.id, normalized, targetYear);
+      }
+    } else if (rawNum === null) {
+      // Only clear if server explicitly returned null (not undefined when migration hasn't run yet)
+      if (getBoutiqueDepotStartSeq(b.id, currentYear) !== null) {
+        setBoutiqueDepotStartSeq(b.id, null, currentYear);
+      }
+    }
+  }
+}
+
 export function getCompanyDepotStartSeq(year: number): number | null {
   try {
     const raw = localStorage.getItem(companyDepotStartSeqStorageKey(year));
@@ -306,6 +434,10 @@ export function getDepotStartSeq(
   pointCode?: string,
 ): number | null {
   const cleanPoint = pointCode !== undefined ? normalizeBillingPointCode(pointCode) : getBillingPointCode();
+  if (boutiqueId) {
+    const boutiqueStart = getBoutiqueDepotStartSeq(boutiqueId, year);
+    if (boutiqueStart !== null) return boutiqueStart;
+  }
   try {
     const raw = localStorage.getItem(depotStartSeqStorageKey(boutiqueId, year, cleanPoint));
     if (raw) {
@@ -315,7 +447,11 @@ export function getDepotStartSeq(
   } catch {
     // Ignore localStorage error
   }
-  return getCompanyDepotStartSeq(year);
+  const defaultBoutiqueId = getDefaultBoutiqueId();
+  if (!boutiqueId || (defaultBoutiqueId && boutiqueId === defaultBoutiqueId)) {
+    return getCompanyDepotStartSeq(year);
+  }
+  return null;
 }
 
 export function setDepotStartSeq(

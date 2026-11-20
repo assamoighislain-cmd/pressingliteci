@@ -9,7 +9,11 @@ import {
   writeOfflineSessionBackup,
   clearOfflineSessionBackup,
 } from '@/lib/offlineSession';
-import { setCompanyDepotStartSeq, setDepotStartSeq } from '@/lib/dbOfflineHelpers';
+import {
+  setCompanyDepotStartSeq,
+  setDepotStartSeq,
+  syncBoutiqueDepotStartSeqs,
+} from '@/lib/dbOfflineHelpers';
 import type { Boutique } from '@/types';
 
 export type UserRole = 'admin' | 'gerant' | 'commercial' | 'collecteur' | null;
@@ -128,6 +132,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   function applyBoutiquesList(bsInput: Boutique[], memberBoutiqueId: string | null) {
+    syncBoutiqueDepotStartSeqs(bsInput);
     const { list, selected } = resolveInitialBoutiqueSelection(bsInput, memberBoutiqueId);
     setBoutiques(list);
     setCurrentBoutique(selected);
@@ -181,10 +186,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   function setBoutique(b: Boutique) {
     setCurrentBoutique(b);
+    setCurrentBoutiqueId(b.id);
     try {
       localStorage.setItem(BOUTIQUE_STORAGE_KEY, b.id);
     } catch {
       // Ignore
+    }
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('pressinglite:boutique-changed', { detail: b.id }));
     }
   }
 
@@ -522,6 +531,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             .eq('user_id', newUser.id);
         } catch {
           // Non-blocking: local enforcement is already active
+        }
+        try {
+          await supabase
+            .from('boutiques')
+            .update({
+              depot_start_number: normalizedStart,
+              depot_start_year: currentYear,
+            })
+            .eq('tenant_id', newUser.id)
+            .eq('is_default', true);
+        } catch {
+          // Non-blocking: default boutique falls back to company counter if column not yet migrated
         }
       }
 

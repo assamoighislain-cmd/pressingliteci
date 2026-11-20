@@ -183,6 +183,8 @@ export interface Boutique {
   telephone: string | null;
   is_default: boolean;
   slug: string | null;
+  depot_start_number?: number | null;
+  depot_start_year?: number | null;
   created_at: string;
   updated_at: string;
 }
