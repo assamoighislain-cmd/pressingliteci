@@ -11,6 +11,7 @@ import ReleveClient from '@/components/ReleveClient';
 import EntreprisePage from '@/components/EntreprisePage';
 import Planning from '@/components/Planning';
 import Historique from '@/components/Historique';
+import JournalDepots from '@/components/JournalDepots';
 import JournalReglements from '@/components/JournalReglements';
 import Comptabilite from '@/components/Comptabilite';
 import Depenses from '@/components/Depenses';
@@ -325,6 +326,7 @@ function WorkspaceApp() {
             {view === 'livraison' && <LivraisonView />}
             {view === 'planning' && <Planning />}
             {view === 'historique' && <Historique />}
+            {view === 'journal_depots' && <JournalDepots />}
             {view === 'journal' && <JournalReglements />}
             {view === 'comptabilite' && <Comptabilite />}
             {view === 'depenses' && <Depenses />}

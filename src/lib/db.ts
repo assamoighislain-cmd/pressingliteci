@@ -237,6 +237,28 @@ const TENANT_TABLES = new Set<TableName>([
   'consommables', 'consommable_mouvements', 'relances',
 ]);
 
+// Tenant-scoped tables whose PostgreSQL schema uses tenant_id (+ boutique_id) without a user_id column.
+const TABLES_WITHOUT_USER_ID = new Set<TableName>([
+  'fidelite_points',
+  'fidelite_history',
+  'consommables',
+  'consommable_mouvements',
+  'relances',
+]);
+
+function extractMissingSchemaColumn(message: string | null | undefined): string | null {
+  if (!message) return null;
+  const match = message.match(/Could not find the '([^']+)' column of '[^']+' in the schema cache/i);
+  return match ? match[1] : null;
+}
+
+function stripColumnFromRow(row: Record<string, unknown>, col: string): Record<string, unknown> {
+  if (!(col in row)) return row;
+  const copy = { ...row };
+  delete copy[col];
+  return copy;
+}
+
 // ─── Supabase query ───────────────────────────────────────
 
 async function supabaseQuery<T>(config: QueryConfig): Promise<QueryResult<T>> {
@@ -336,14 +358,20 @@ export async function insert<T = Record<string, unknown>>(config: InsertConfig):
 
   if (TENANT_TABLES.has(config.table)) {
     const tId = await getTenantId();
-    if (tId) {
-      rows = rows.map((r) => ({
+    const includeUserId = !TABLES_WITHOUT_USER_ID.has(config.table);
+    rows = rows.map((r) => {
+      const next: Record<string, unknown> = {
         ...r,
-        tenant_id: r.tenant_id ?? tId,
-        user_id: r.user_id ?? tId,
+        ...(tId ? { tenant_id: r.tenant_id ?? tId } : {}),
         boutique_id: r.boutique_id ?? currentBoutiqueId,
-      }));
-    }
+      };
+      if (includeUserId) {
+        if (tId) next.user_id = r.user_id ?? tId;
+      } else {
+        delete next.user_id;
+      }
+      return next;
+    });
   }
 
   rows = ensureDeterministicRowIds(config.table, rows);
@@ -353,17 +381,31 @@ export async function insert<T = Record<string, unknown>>(config: InsertConfig):
   }
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let q: any = supabase.from(config.table).insert(rows);
-    if (config.select || config.table === 'articles' || config.table === 'bons_reduction') {
-      q = q.select();
+    const runInsert = async (payloadRows: Record<string, unknown>[]) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let q: any = supabase.from(config.table).insert(payloadRows);
+      if (config.select || config.table === 'articles' || config.table === 'bons_reduction') {
+        q = q.select();
+      }
+      return QUEUEABLE_TABLES.has(config.table)
+        ? await withWriteTimeout<{ data: unknown; error: { message: string } | null }>(q)
+        : await q;
+    };
+
+    let currentRows = rows;
+    let { data, error } = await runInsert(currentRows);
+
+    // Auto-recover if PostgREST reports a column missing from schema cache (PGRST204)
+    for (let retry = 0; retry < 2 && error; retry++) {
+      const missingCol = extractMissingSchemaColumn(error.message);
+      if (!missingCol || !currentRows.some((r) => missingCol in r)) break;
+      currentRows = currentRows.map((r) => stripColumnFromRow(r, missingCol));
+      ({ data, error } = await runInsert(currentRows));
     }
-    const { data, error } = QUEUEABLE_TABLES.has(config.table)
-      ? await withWriteTimeout<{ data: unknown; error: { message: string } | null }>(q)
-      : await q;
+
     if (error) {
       if (QUEUEABLE_TABLES.has(config.table) && isLikelyNetworkError(error)) {
-        return enqueueOfflineInsert<T>(config, rows);
+        return enqueueOfflineInsert<T>(config, currentRows);
       }
       return { data: null, error: error.message };
     }
@@ -379,13 +421,17 @@ export async function insert<T = Record<string, unknown>>(config: InsertConfig):
 }
 
 export async function update<T = Record<string, unknown>>(config: UpdateConfig): Promise<MutationResult<T>> {
+  let cleanValues = TABLES_WITHOUT_USER_ID.has(config.table)
+    ? stripColumnFromRow(config.values, 'user_id')
+    : config.values;
+
   const queueOffline = () => {
     enqueueMutation(
       config.table,
       'update',
-      config.values,
+      cleanValues,
       config.filters as unknown as Record<string, unknown>[],
-      buildMutationLabel(config.table, 'update', config.values),
+      buildMutationLabel(config.table, 'update', cleanValues),
     );
     notifyRealtimeMutation(config.table);
     return { data: null, error: null } as MutationResult<T>;
@@ -395,15 +441,26 @@ export async function update<T = Record<string, unknown>>(config: UpdateConfig):
     return queueOffline();
   }
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let q: any = supabase.from(config.table).update(config.values);
-    for (const f of config.filters) {
-      q = q[f.operator](f.column, f.value);
+    const runUpdate = async (vals: Record<string, unknown>) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let q: any = supabase.from(config.table).update(vals);
+      for (const f of config.filters) {
+        q = q[f.operator](f.column, f.value);
+      }
+      if (config.select) q = q.select();
+      return QUEUEABLE_TABLES.has(config.table)
+        ? await withWriteTimeout<{ data: unknown; error: { message: string } | null }>(q)
+        : await q;
+    };
+
+    let { data, error } = await runUpdate(cleanValues);
+    for (let retry = 0; retry < 2 && error; retry++) {
+      const missingCol = extractMissingSchemaColumn(error.message);
+      if (!missingCol || !(missingCol in cleanValues)) break;
+      cleanValues = stripColumnFromRow(cleanValues, missingCol);
+      ({ data, error } = await runUpdate(cleanValues));
     }
-    if (config.select) q = q.select();
-    const { data, error } = QUEUEABLE_TABLES.has(config.table)
-      ? await withWriteTimeout<{ data: unknown; error: { message: string } | null }>(q)
-      : await q;
+
     if (error) {
       if (QUEUEABLE_TABLES.has(config.table) && isLikelyNetworkError(error)) {
         return queueOffline();
@@ -464,7 +521,18 @@ export async function upsert<T = Record<string, unknown>>(config: UpsertConfig):
   let row = config.row;
   if (TENANT_TABLES.has(config.table)) {
     const tId = await getTenantId();
-    if (tId) row = { ...row, tenant_id: row.tenant_id ?? tId, user_id: row.user_id ?? tId, boutique_id: row.boutique_id ?? currentBoutiqueId };
+    const includeUserId = !TABLES_WITHOUT_USER_ID.has(config.table);
+    const next: Record<string, unknown> = {
+      ...row,
+      ...(tId ? { tenant_id: row.tenant_id ?? tId } : {}),
+      boutique_id: row.boutique_id ?? currentBoutiqueId,
+    };
+    if (includeUserId) {
+      if (tId) next.user_id = row.user_id ?? tId;
+    } else {
+      delete next.user_id;
+    }
+    row = next;
   }
   const queueOffline = () => {
     enqueueMutation(config.table, 'upsert', row, undefined, buildMutationLabel(config.table, 'upsert', row));
@@ -475,10 +543,21 @@ export async function upsert<T = Record<string, unknown>>(config: UpsertConfig):
     return queueOffline();
   }
   try {
-    const req = supabase.from(config.table).upsert(row);
-    const { data, error } = QUEUEABLE_TABLES.has(config.table)
-      ? await withWriteTimeout<{ data: unknown; error: { message: string } | null }>(req)
-      : await req;
+    const runUpsert = async (payloadRow: Record<string, unknown>) => {
+      const req = supabase.from(config.table).upsert(payloadRow);
+      return QUEUEABLE_TABLES.has(config.table)
+        ? await withWriteTimeout<{ data: unknown; error: { message: string } | null }>(req)
+        : await req;
+    };
+
+    let { data, error } = await runUpsert(row);
+    for (let retry = 0; retry < 2 && error; retry++) {
+      const missingCol = extractMissingSchemaColumn(error.message);
+      if (!missingCol || !(missingCol in row)) break;
+      row = stripColumnFromRow(row, missingCol);
+      ({ data, error } = await runUpsert(row));
+    }
+
     if (error) {
       if (QUEUEABLE_TABLES.has(config.table) && isLikelyNetworkError(error)) {
         return queueOffline();

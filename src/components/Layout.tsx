@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { db } from '@/lib/db';
 import { supabase } from '@/lib/supabase';
 import { useI18n, type Lang } from '@/lib/i18n';
-import { Package, ArrowDownToLine, ArrowUpFromLine, LayoutDashboard, BookOpen, Receipt, Building2, CalendarDays, Menu, X, Phone, Users, Download, History, Wallet, LogOut, UserCog, ShieldCheck, Calculator, Receipt as ReceiptIcon, Presentation as PresentationIcon, CreditCard, KeyRound, Lock, Loader2, Globe, Store, ChevronDown, Check, Truck, BellRing, ShoppingBag, WifiOff, Wifi, Share, Smartphone, Monitor, CheckCircle2, Ticket, PackageOpen, PackageSearch, Plus, RefreshCw, AlertTriangle, Trash2, Database, Clock } from 'lucide-react';
+import { Package, ArrowDownToLine, ArrowUpFromLine, LayoutDashboard, BookOpen, Receipt, Building2, CalendarDays, Menu, X, Phone, Users, Download, History, Wallet, LogOut, UserCog, ShieldCheck, Calculator, Receipt as ReceiptIcon, Presentation as PresentationIcon, CreditCard, KeyRound, Lock, Loader2, Globe, Store, ChevronDown, Check, Truck, BellRing, ShoppingBag, WifiOff, Wifi, Share, Smartphone, Monitor, CheckCircle2, Ticket, PackageOpen, PackageSearch, Plus, RefreshCw, AlertTriangle, Trash2, Database, Clock, ClipboardList } from 'lucide-react';
 import { Entreprise } from '@/types';
 import { usePwaInstall } from '@/hooks/usePwaInstall';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
@@ -60,7 +60,7 @@ function playOrderSound() {
   }
 }
 
-export type View = 'dashboard' | 'depot' | 'retrait' | 'planning' | 'historique' | 'journal' | 'comptabilite' | 'depenses' | 'clients' | 'catalogue' | 'releve' | 'entreprise' | 'utilisateurs' | 'superadmin' | 'presentation' | 'modes_reglement' | 'boutiques' | 'commande' | 'collecte' | 'livraison' | 'bons_reduction' | 'consommables' | 'inventaire';
+export type View = 'dashboard' | 'depot' | 'retrait' | 'planning' | 'historique' | 'journal_depots' | 'journal' | 'comptabilite' | 'depenses' | 'clients' | 'catalogue' | 'releve' | 'entreprise' | 'utilisateurs' | 'superadmin' | 'presentation' | 'modes_reglement' | 'boutiques' | 'commande' | 'collecte' | 'livraison' | 'bons_reduction' | 'consommables' | 'inventaire';
 
 interface LayoutProps {
   currentView: View;
@@ -77,6 +77,7 @@ const NAV_ITEMS: { id: View; labelKey: string; icon: React.ComponentType<{ class
   { id: 'livraison', labelKey: 'nav.livraison', icon: Truck },
   { id: 'planning', labelKey: 'nav.planning', icon: CalendarDays },
   { id: 'historique', labelKey: 'nav.historique', icon: History },
+  { id: 'journal_depots', labelKey: 'nav.journalDepots', icon: ClipboardList },
   { id: 'journal', labelKey: 'nav.journal', icon: Wallet },
   { id: 'comptabilite', labelKey: 'nav.comptabilite', icon: Calculator },
   { id: 'depenses', labelKey: 'nav.depenses', icon: ReceiptIcon },

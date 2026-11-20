@@ -45,11 +45,17 @@ async function initPwaServiceWorker() {
     immediate: true,
     onRegisteredSW(_swUrl, registration) {
       if (registration) {
-        setInterval(() => {
+        const checkUpdate = () => {
           if (navigator.onLine) {
             registration.update().catch(() => {});
           }
-        }, 60 * 60 * 1000);
+        };
+        checkUpdate();
+        window.addEventListener('online', checkUpdate);
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') checkUpdate();
+        });
+        setInterval(checkUpdate, 15 * 60 * 1000);
       }
     },
   });

@@ -27,6 +27,53 @@ const SYNC_TAG = 'pressinglite-sync-queue';
 const PERIODIC_SYNC_TAG = 'pressinglite-periodic-sync';
 const LOCK_NAME = 'pressinglite-sync-lock';
 const MAX_PERMANENT_RETRIES = 6;
+const TABLES_WITHOUT_USER_ID = new Set([
+  'fidelite_points',
+  'fidelite_history',
+  'consommables',
+  'consommable_mouvements',
+  'relances',
+]);
+
+function extractMissingSchemaColumn(message: string | null | undefined): string | null {
+  if (!message) return null;
+  const match = message.match(/Could not find the '([^']+)' column of '[^']+' in the schema cache/i);
+  return match ? match[1] : null;
+}
+
+function sanitizeMutationData(table: string, data: Record<string, unknown>): Record<string, unknown> {
+  if (!TABLES_WITHOUT_USER_ID.has(table) || !data || !('user_id' in data)) return data;
+  const cleaned = { ...data };
+  delete cleaned.user_id;
+  return cleaned;
+}
+
+function sanitizeMutationForSchema(m: QueuedMutation): QueuedMutation {
+  const missingCol = extractMissingSchemaColumn(m.lastError);
+  let nextData = sanitizeMutationData(m.table, m.data);
+  let dataChanged = nextData !== m.data;
+
+  if (missingCol && nextData && missingCol in nextData) {
+    const cleaned = { ...nextData };
+    delete cleaned[missingCol];
+    nextData = cleaned;
+    dataChanged = true;
+  }
+
+  const hadSchemaErr = Boolean(
+    missingCol ||
+      (TABLES_WITHOUT_USER_ID.has(m.table) &&
+        m.lastError &&
+        (m.lastError.includes('user_id') || m.lastError.includes('schema cache'))),
+  );
+
+  if (!dataChanged && !hadSchemaErr) return m;
+  return {
+    ...m,
+    data: nextData,
+    ...(hadSchemaErr ? { status: 'pending' as const, retries: 0, lastError: null, nextRetryAt: null } : {}),
+  };
+}
 
 export interface QueuedMutation {
   id: string;
@@ -76,7 +123,7 @@ function loadQueueFromLocalStorage(): QueuedMutation[] {
     const raw = localStorage.getItem(QUEUE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as QueuedMutation[];
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed) ? parsed.map(sanitizeMutationForSchema) : [];
   } catch {
     return [];
   }
@@ -155,9 +202,9 @@ async function reconcileQueueWithIdb(): Promise<void> {
       }
     }
     const mergedMap = new Map<string, QueuedMutation>();
-    for (const m of idbItems) mergedMap.set(m.id, m);
+    for (const m of idbItems) mergedMap.set(m.id, sanitizeMutationForSchema(m));
     for (const m of memoryQueue) {
-      if (!mergedMap.has(m.id)) mergedMap.set(m.id, m);
+      if (!mergedMap.has(m.id)) mergedMap.set(m.id, sanitizeMutationForSchema(m));
     }
     const merged = Array.from(mergedMap.values()).sort((a, b) =>
       a.createdAt.localeCompare(b.createdAt),
@@ -267,6 +314,7 @@ export function enqueueMutation(
   filters?: Record<string, unknown>[],
   label?: string,
 ): QueuedMutation {
+  data = sanitizeMutationData(table, data);
   const queue = [...memoryQueue];
   const targetRowId = extractEqIdFilter(filters);
 
@@ -282,7 +330,7 @@ export function enqueueMutation(
     if (existingInsertIdx >= 0) {
       const updated: QueuedMutation = {
         ...queue[existingInsertIdx],
-        data: { ...queue[existingInsertIdx].data, ...data },
+        data: sanitizeMutationData(table, { ...queue[existingInsertIdx].data, ...data }),
         status: 'pending',
         lastError: null,
       };
@@ -385,7 +433,15 @@ export function removeFromQueue(id: string): void {
 
 export function retryQueuedMutation(id: string): void {
   const queue = memoryQueue.map((m) =>
-    m.id === id ? { ...m, retries: 0, status: 'pending' as const, lastError: null, nextRetryAt: null } : m,
+    m.id === id
+      ? {
+          ...sanitizeMutationForSchema(m),
+          retries: 0,
+          status: 'pending' as const,
+          lastError: null,
+          nextRetryAt: null,
+        }
+      : m,
   );
   persistQueue(queue);
   if (typeof navigator !== 'undefined' && navigator.onLine) {
@@ -396,7 +452,13 @@ export function retryQueuedMutation(id: string): void {
 export function retryAllFailedMutations(): void {
   const queue = memoryQueue.map((m) =>
     m.status === 'failed'
-      ? { ...m, retries: 0, status: 'pending' as const, lastError: null, nextRetryAt: null }
+      ? {
+          ...sanitizeMutationForSchema(m),
+          retries: 0,
+          status: 'pending' as const,
+          lastError: null,
+          nextRetryAt: null,
+        }
       : m,
   );
   persistQueue(queue);
@@ -488,6 +550,7 @@ async function executeSingleMutation(
   m: QueuedMutation,
 ): Promise<{ ok: boolean; transient: boolean; error?: string }> {
   try {
+    m.data = sanitizeMutationData(m.table, m.data);
     if (m.operation === 'rpc') {
       const { error } = await supabase.rpc(m.table, m.data);
       if (!error) return { ok: true, transient: false };
@@ -505,29 +568,58 @@ async function executeSingleMutation(
       return { ok: false, transient: isLikelyNetworkError(error), error: error.message };
     }
 
+    m.data = sanitizeMutationData(m.table, m.data);
+
     if (m.operation === 'update') {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let q: any = supabase.from(m.table).update(m.data);
-      for (const f of m.filters ?? []) {
-        q = q[String(f.operator)](f.column, f.value);
+      for (let attempt = 0; attempt < 3; attempt++) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let q: any = supabase.from(m.table).update(m.data);
+        for (const f of m.filters ?? []) {
+          q = q[String(f.operator)](f.column, f.value);
+        }
+        const { error } = await q;
+        if (!error) return { ok: true, transient: false };
+        const missingCol = extractMissingSchemaColumn(error.message);
+        if (missingCol && missingCol in m.data) {
+          const cleaned = { ...m.data };
+          delete cleaned[missingCol];
+          m.data = cleaned;
+          continue;
+        }
+        return { ok: false, transient: isLikelyNetworkError(error), error: error.message };
       }
-      const { error } = await q;
-      if (!error) return { ok: true, transient: false };
-      return { ok: false, transient: isLikelyNetworkError(error), error: error.message };
+      return { ok: false, transient: false, error: 'Schema mismatch' };
     }
 
     if (m.operation === 'upsert') {
-      const { error } = await supabase.from(m.table).upsert(m.data);
-      if (!error) return { ok: true, transient: false };
-      return { ok: false, transient: isLikelyNetworkError(error), error: error.message };
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const { error } = await supabase.from(m.table).upsert(m.data);
+        if (!error) return { ok: true, transient: false };
+        const missingCol = extractMissingSchemaColumn(error.message);
+        if (missingCol && missingCol in m.data) {
+          const cleaned = { ...m.data };
+          delete cleaned[missingCol];
+          m.data = cleaned;
+          continue;
+        }
+        return { ok: false, transient: isLikelyNetworkError(error), error: error.message };
+      }
+      return { ok: false, transient: false, error: 'Schema mismatch' };
     }
 
-    // insert — handle duplicate code/numero or already-synced UUID idempotently
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const { error } = await supabase.from(m.table).insert(m.data);
+    // insert — handle duplicate code/numero, missing schema columns, or already-synced UUID idempotently
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const { error } = await supabase.from(m.table).insert(sanitizeMutationData(m.table, m.data));
       if (!error) return { ok: true, transient: false };
 
       const msg = error.message || '';
+      const missingCol = extractMissingSchemaColumn(msg);
+      if (missingCol && missingCol in m.data) {
+        const cleaned = { ...m.data };
+        delete cleaned[missingCol];
+        m.data = cleaned;
+        continue;
+      }
       if (msg.includes('duplicate key')) {
         // If primary key id already exists on server, treat as already synced idempotently!
         if (msg.includes('_pkey')) {

@@ -105,39 +105,64 @@ async function replayMutationRest(m, authMeta) {
   };
 
   try {
-    let url = `${supabaseUrl}/rest/v1/${encodeURIComponent(m.table)}`;
-    let method = 'POST';
-    let body = JSON.stringify(m.data || {});
-
-    if (m.operation === 'rpc') {
-      url = `${supabaseUrl}/rest/v1/rpc/${encodeURIComponent(m.table)}`;
-      method = 'POST';
-      body = JSON.stringify(m.data || {});
-    } else if (m.operation === 'insert') {
-      method = 'POST';
-    } else if (m.operation === 'upsert') {
-      method = 'POST';
-      headers.Prefer = 'resolution=merge-duplicates,return=minimal';
-    } else if (m.operation === 'update') {
-      url += buildFilterQuery(m.filters);
-      method = 'PATCH';
-    } else if (m.operation === 'delete') {
-      url += buildFilterQuery(m.filters);
-      method = 'DELETE';
-      body = undefined;
+    const tablesWithoutUserId = {
+      fidelite_points: true,
+      fidelite_history: true,
+      consommables: true,
+      consommable_mouvements: true,
+      relances: true,
+    };
+    const payloadData = m.data && typeof m.data === 'object' ? { ...m.data } : {};
+    if (tablesWithoutUserId[m.table] && 'user_id' in payloadData) {
+      delete payloadData.user_id;
     }
 
-    const res = await fetch(url, { method, headers, body });
-    if (res.ok) return { ok: true, transient: false };
+    const runRest = async (currentPayload) => {
+      let url = `${supabaseUrl}/rest/v1/${encodeURIComponent(m.table)}`;
+      let method = 'POST';
+      let body = JSON.stringify(currentPayload);
 
-    const text = await res.text().catch(() => `HTTP ${res.status}`);
-    // 401 (expired token), 408, 429, 5xx -> transient so foreground tab refreshes token & retries
-    const transient = res.status === 401 || res.status === 408 || res.status === 429 || res.status >= 500;
-    // Duplicate key needs foreground RPC code regeneration -> leave for foreground or next sync
-    if (text.includes('duplicate key') || res.status === 409) {
-      return { ok: false, transient: true, error: text };
+      if (m.operation === 'rpc') {
+        url = `${supabaseUrl}/rest/v1/rpc/${encodeURIComponent(m.table)}`;
+        method = 'POST';
+        body = JSON.stringify(m.data || {});
+      } else if (m.operation === 'insert') {
+        method = 'POST';
+      } else if (m.operation === 'upsert') {
+        method = 'POST';
+        headers.Prefer = 'resolution=merge-duplicates,return=minimal';
+      } else if (m.operation === 'update') {
+        url += buildFilterQuery(m.filters);
+        method = 'PATCH';
+      } else if (m.operation === 'delete') {
+        url += buildFilterQuery(m.filters);
+        method = 'DELETE';
+        body = undefined;
+      }
+
+      return fetch(url, { method, headers, body });
+    };
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const res = await runRest(payloadData);
+      if (res.ok) return { ok: true, transient: false };
+
+      const text = await res.text().catch(() => `HTTP ${res.status}`);
+      const colMatch = text.match(/Could not find the '([^']+)' column of '[^']+' in the schema cache/i);
+      if (colMatch && colMatch[1] && colMatch[1] in payloadData) {
+        delete payloadData[colMatch[1]];
+        continue;
+      }
+
+      // 401 (expired token), 408, 429, 5xx -> transient so foreground tab refreshes token & retries
+      const transient = res.status === 401 || res.status === 408 || res.status === 429 || res.status >= 500;
+      // Duplicate key needs foreground RPC code regeneration -> leave for foreground or next sync
+      if (text.includes('duplicate key') || res.status === 409) {
+        return { ok: false, transient: true, error: text };
+      }
+      return { ok: false, transient, error: text };
     }
-    return { ok: false, transient, error: text };
+    return { ok: false, transient: false, error: 'Schema mismatch' };
   } catch (err) {
     return { ok: false, transient: true, error: err && err.message ? err.message : 'Network error' };
   }
@@ -163,7 +188,11 @@ async function runSwQueueSync() {
 
     let syncedAny = false;
     for (const m of all) {
-      if (m.status === 'failed' && (m.retries || 0) >= 8) continue;
+      const hadSchemaError = Boolean(
+        m.lastError &&
+          (String(m.lastError).includes('schema cache') || String(m.lastError).includes('user_id')),
+      );
+      if (m.status === 'failed' && (m.retries || 0) >= 8 && !hadSchemaError) continue;
       const res = await replayMutationRest(m, authRecord.value);
       if (res.ok) {
         await idbDelete(db, MUTATIONS_STORE, m.id);
