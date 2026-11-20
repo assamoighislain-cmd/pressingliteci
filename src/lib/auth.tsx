@@ -9,6 +9,7 @@ import {
   writeOfflineSessionBackup,
   clearOfflineSessionBackup,
 } from '@/lib/offlineSession';
+import { setCompanyDepotStartSeq, setDepotStartSeq } from '@/lib/dbOfflineHelpers';
 import type { Boutique } from '@/types';
 
 export type UserRole = 'admin' | 'gerant' | 'commercial' | 'collecteur' | null;
@@ -26,7 +27,7 @@ interface AuthContextValue {
   setBoutique: (b: Boutique) => void;
   reloadBoutiques: () => Promise<void>;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
-  signUp: (email: string, password: string, entrepriseNom: string, fullName: string, contact: string) => Promise<{ error: string | null; joinRequested?: boolean }>;
+  signUp: (email: string, password: string, entrepriseNom: string, fullName: string, contact: string, depotStartNumber?: number | null) => Promise<{ error: string | null; joinRequested?: boolean }>;
   signOut: () => Promise<void>;
 }
 
@@ -446,7 +447,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { error: error?.message ?? null };
   }
 
-  async function signUp(email: string, password: string, entrepriseNom: string, fullName: string, contact: string): Promise<{ error: string | null; joinRequested?: boolean }> {
+  async function signUp(email: string, password: string, entrepriseNom: string, fullName: string, contact: string, depotStartNumber?: number | null): Promise<{ error: string | null; joinRequested?: boolean }> {
     let gpsLat: string | null = null;
     let gpsLng: string | null = null;
     if (entrepriseNom && 'geolocation' in navigator) {
@@ -500,6 +501,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
       if (rpcError) {
         console.warn('signup_create_entreprise RPC failed (trigger will handle it):', rpcError.message);
+      }
+
+      // Enforce initial deposit starting counter if specified during installation / signup
+      const normalizedStart =
+        depotStartNumber != null && Number.isFinite(depotStartNumber) && depotStartNumber >= 1
+          ? Math.max(1, Math.floor(depotStartNumber))
+          : null;
+      if (normalizedStart !== null) {
+        const currentYear = new Date().getFullYear();
+        setCompanyDepotStartSeq(normalizedStart, currentYear);
+        setDepotStartSeq(null, currentYear, '', normalizedStart);
+        try {
+          await supabase
+            .from('entreprise')
+            .update({
+              depot_start_number: normalizedStart,
+              depot_start_year: currentYear,
+            })
+            .eq('user_id', newUser.id);
+        } catch {
+          // Non-blocking: local enforcement is already active
+        }
       }
 
       // Ensure 30-day Demo licence is activated right away on company creation (best-effort)

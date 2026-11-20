@@ -233,6 +233,73 @@ function depotCustomProgStorageKey(boutiqueId: string | null, year: number, poin
   return `pressinglite_depot_custom_prog_${boutiqueId ?? 'global'}_${year}_${cleanPoint || 'MAIN'}`;
 }
 
+function companyDepotStartSeqStorageKey(year: number): string {
+  return `pressinglite_company_depot_start_seq_${year}`;
+}
+
+export function getCompanyDepotStartSeq(year: number): number | null {
+  try {
+    const raw = localStorage.getItem(companyDepotStartSeqStorageKey(year));
+    if (!raw) return null;
+    const parsed = parseInt(raw, 10);
+    return Number.isFinite(parsed) && parsed >= 1 ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export function setCompanyDepotStartSeq(
+  startSeq: number | null,
+  year: number = new Date().getFullYear(),
+): number | null {
+  const key = companyDepotStartSeqStorageKey(year);
+  try {
+    if (startSeq !== null && Number.isFinite(startSeq) && startSeq >= 1) {
+      const normalized = Math.max(1, Math.floor(startSeq));
+      localStorage.setItem(key, String(normalized));
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('pressinglite:depot-start-seq-changed', { detail: normalized }));
+      }
+      return normalized;
+    } else {
+      localStorage.removeItem(key);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('pressinglite:depot-start-seq-changed', { detail: null }));
+      }
+      return null;
+    }
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Hydrates the company-wide enforced starting counter from `entreprise` row into localStorage
+ * so every device and offline session honors it immediately.
+ */
+export function syncCompanyDepotStartSeqFromEntreprise(
+  startSeq: number | null | undefined,
+  startYear: number | null | undefined,
+): void {
+  const currentYear = new Date().getFullYear();
+  if (startSeq != null && Number.isFinite(Number(startSeq)) && Number(startSeq) >= 1) {
+    const targetYear =
+      startYear != null && Number.isFinite(Number(startYear)) && Number(startYear) >= 2000
+        ? Math.floor(Number(startYear))
+        : currentYear;
+    const existing = getCompanyDepotStartSeq(targetYear);
+    const normalized = Math.max(1, Math.floor(Number(startSeq)));
+    if (existing !== normalized) {
+      setCompanyDepotStartSeq(normalized, targetYear);
+    }
+  } else if (startSeq === null) {
+    // Only clear if server explicitly returned null (not undefined when column doesn't exist yet)
+    if (getCompanyDepotStartSeq(currentYear) !== null) {
+      setCompanyDepotStartSeq(null, currentYear);
+    }
+  }
+}
+
 export function getDepotStartSeq(
   boutiqueId: string | null,
   year: number,
@@ -241,12 +308,14 @@ export function getDepotStartSeq(
   const cleanPoint = pointCode !== undefined ? normalizeBillingPointCode(pointCode) : getBillingPointCode();
   try {
     const raw = localStorage.getItem(depotStartSeqStorageKey(boutiqueId, year, cleanPoint));
-    if (!raw) return null;
-    const parsed = parseInt(raw, 10);
-    return Number.isFinite(parsed) && parsed >= 1 ? parsed : null;
+    if (raw) {
+      const parsed = parseInt(raw, 10);
+      if (Number.isFinite(parsed) && parsed >= 1) return parsed;
+    }
   } catch {
-    return null;
+    // Ignore localStorage error
   }
+  return getCompanyDepotStartSeq(year);
 }
 
 export function setDepotStartSeq(
@@ -486,7 +555,9 @@ function resolveOnlineDepotNumeroInternal(
   let next: number;
   if (customStart !== null) {
     const prog = getDepotCustomProgSeq(boutiqueId, year, pointCode);
-    next = Math.max(customStart, prog + 1);
+    const syncedFloor = dbMax >= customStart ? dbMax + 1 : customStart;
+    const queuedFloor = queuedMax >= customStart ? queuedMax + 1 : customStart;
+    next = Math.max(customStart, syncedFloor, queuedFloor, prog + 1);
     while (usedSeqs.has(next)) {
       next++;
     }
@@ -561,7 +632,10 @@ function resolveOfflineDepotNumeroInternal(
   let next: number;
   if (customStart !== null) {
     const prog = getDepotCustomProgSeq(boutiqueId, year, pointCode);
-    next = Math.max(customStart, prog + 1);
+    const storedMax = getStoredMaxSeq(key);
+    const storedFloor = storedMax >= customStart ? storedMax + 1 : customStart;
+    const queuedFloor = queuedMax >= customStart ? queuedMax + 1 : customStart;
+    next = Math.max(customStart, storedFloor, queuedFloor, prog + 1);
     while (usedSeqs.has(next)) {
       next++;
     }

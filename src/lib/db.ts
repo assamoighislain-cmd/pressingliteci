@@ -3,6 +3,7 @@ import { enqueueMutation, onPostSync, getPendingMutationsForTableAsync } from '@
 import { notifyRealtimeMutation } from '@/lib/realtimeSync';
 import {
   cachedRead,
+  getCached,
   setCached,
   getCachedWithScopeFallbackAsync,
   isLikelyNetworkError,
@@ -22,6 +23,9 @@ import {
   getBillingPointCode,
   getDepotStartSeq,
   setDepotStartSeq,
+  getCompanyDepotStartSeq,
+  setCompanyDepotStartSeq,
+  syncCompanyDepotStartSeqFromEntreprise,
   previewOnlineDepotNumero,
   previewOfflineDepotNumero,
   computeNextOnlineDepotNumero,
@@ -1309,7 +1313,7 @@ export const db = {
   },
 
   async getEntreprise(): Promise<Entreprise | null> {
-    return cachedRead<Entreprise | null>('entreprise', async () => {
+    const ent = await cachedRead<Entreprise | null>('entreprise', async () => {
       const tenantId = await getTenantId();
       let data: Record<string, unknown> | null = null;
       if (tenantId) {
@@ -1326,6 +1330,10 @@ export const db = {
       if (!data) return null;
       return data as unknown as Entreprise;
     }, null);
+    if (ent && ('depot_start_number' in ent || 'depot_start_year' in ent)) {
+      syncCompanyDepotStartSeqFromEntreprise(ent.depot_start_number, ent.depot_start_year);
+    }
+    return ent;
   },
 
   async upsertEntreprise(row: Record<string, unknown>, userId?: string): Promise<string | null> {
@@ -1341,18 +1349,27 @@ export const db = {
       }
     }
     if (!userId) return 'Non authentifié';
-    const payload = { ...row, user_id: userId };
-    delete (payload as Record<string, unknown>).id;
+    let payload: Record<string, unknown> = { ...row, user_id: userId };
+    delete payload.id;
     if (isOffline()) {
       enqueueMutation('entreprise', 'upsert', payload, undefined, 'Mise à jour entreprise');
       setCached('entreprise', payload);
       return null;
     }
-    const { error } = await supabase.from('entreprise').upsert(payload, { onConflict: 'user_id' });
+    let { error } = await supabase.from('entreprise').upsert(payload, { onConflict: 'user_id' });
+    for (let retry = 0; retry < 3 && error; retry++) {
+      const missingCol = extractMissingSchemaColumn(error.message);
+      if (!missingCol || !(missingCol in payload)) break;
+      payload = stripColumnFromRow(payload, missingCol);
+      ({ error } = await supabase.from('entreprise').upsert(payload, { onConflict: 'user_id' }));
+    }
     if (error && isLikelyNetworkError(error)) {
       enqueueMutation('entreprise', 'upsert', payload, undefined, 'Mise à jour entreprise');
       setCached('entreprise', payload);
       return null;
+    }
+    if (!error) {
+      notifyRealtimeMutation('entreprise', true);
     }
     return error?.message ?? null;
   },
@@ -1401,9 +1418,88 @@ export const db = {
     return getDepotStartSeq(currentBoutiqueId, targetYear, getBillingPointCode());
   },
 
+  getCompanyEnforcedDepotStartNumber(dateDepot?: Date): number | null {
+    const targetYear = (dateDepot ?? new Date()).getFullYear();
+    return getCompanyDepotStartSeq(targetYear);
+  },
+
   setDepotStartNumber(startSeq: number | null, dateDepot?: Date): number | null {
     const targetYear = (dateDepot ?? new Date()).getFullYear();
     return setDepotStartSeq(currentBoutiqueId, targetYear, getBillingPointCode(), startSeq);
+  },
+
+  /**
+   * Enforces a starting deposit counter company-wide (persisted on `entreprise` AND cached locally)
+   * so all devices, billing points, and offline sessions respect it immediately.
+   */
+  async saveEnforcedDepotStartNumber(
+    startSeq: number | null,
+    dateDepot?: Date,
+  ): Promise<{ saved: number | null; error: string | null }> {
+    const targetYear = (dateDepot ?? new Date()).getFullYear();
+    const normalized =
+      startSeq !== null && Number.isFinite(startSeq) && startSeq >= 1
+        ? Math.max(1, Math.floor(startSeq))
+        : null;
+
+    setCompanyDepotStartSeq(normalized, targetYear);
+    setDepotStartSeq(currentBoutiqueId, targetYear, getBillingPointCode(), normalized);
+
+    const tenantId = await getTenantId();
+    if (!tenantId) {
+      return { saved: normalized, error: null };
+    }
+
+    const updateValues = {
+      depot_start_number: normalized,
+      depot_start_year: normalized !== null ? targetYear : null,
+      updated_at: new Date().toISOString(),
+    };
+
+    // Update local entreprise cache optimistically
+    const cachedEnt = getCached<Entreprise | null>('entreprise');
+    if (cachedEnt) {
+      setCached('entreprise', { ...cachedEnt, ...updateValues });
+    }
+
+    if (isOffline()) {
+      enqueueMutation(
+        'entreprise',
+        'update',
+        updateValues,
+        [{ column: 'user_id', operator: 'eq', value: tenantId }],
+        normalized !== null ? `Compteur dépôt départ: ${normalized}` : 'Compteur dépôt automatique',
+      );
+      return { saved: normalized, error: null };
+    }
+
+    try {
+      const { error } = await supabase
+        .from('entreprise')
+        .update(updateValues)
+        .eq('user_id', tenantId);
+      if (error) {
+        if (extractMissingSchemaColumn(error.message)) {
+          // Column not yet migrated in remote DB: local enforcement still active
+          return { saved: normalized, error: null };
+        }
+        if (isLikelyNetworkError(error)) {
+          enqueueMutation(
+            'entreprise',
+            'update',
+            updateValues,
+            [{ column: 'user_id', operator: 'eq', value: tenantId }],
+            normalized !== null ? `Compteur dépôt départ: ${normalized}` : 'Compteur dépôt automatique',
+          );
+          return { saved: normalized, error: null };
+        }
+        return { saved: normalized, error: error.message };
+      }
+      notifyRealtimeMutation('entreprise', true);
+      return { saved: normalized, error: null };
+    } catch {
+      return { saved: normalized, error: null };
+    }
   },
 
   async previewNextDepotNumero(dateDepot?: Date): Promise<string> {

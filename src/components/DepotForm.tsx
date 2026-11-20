@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useI18n } from '@/lib/i18n';
+import { useAuth } from '@/lib/auth';
 import { db, rpc } from '@/lib/db';
 import {
   Client,
@@ -34,6 +35,7 @@ import {
   Ticket,
   Tags,
   Monitor,
+  Lock,
 } from 'lucide-react';
 import PrintableReceipt, { PrintFormat } from '@/components/PrintableReceipt';
 import PrintableLabels from '@/components/PrintableLabels';
@@ -81,6 +83,8 @@ function makeDefaultArticle(): ArticleDraft {
 
 export default function DepotForm({ onDone }: { onDone: () => void }) {
   const { t, lang } = useI18n();
+  const { role } = useAuth();
+  const canManageCounter = !role || role === 'admin' || role === 'gerant';
   const [step, setStep] = useState<'client' | 'articles' | 'paiement'>('client');
 
   const [typesTraitement, setTypesTraitement] = useState<TypeTraitement[]>([]);
@@ -1080,60 +1084,77 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
             <div className="pt-2 border-t border-slate-100 space-y-1.5">
               <p className="text-xs font-medium text-slate-700">
                 {lang === 'fr'
-                  ? `2. Positionner le numéro de départ (${effectiveYear})`
-                  : `2. Set starting deposit number (${effectiveYear})`}
+                  ? `2. Compteur de départ des dépôts (${effectiveYear})`
+                  : `2. Starting deposit counter (${effectiveYear})`}
               </p>
-              <div className="flex flex-wrap items-center gap-2">
-                <input
-                  type="number"
-                  min={1}
-                  step={1}
-                  value={startSeqInput}
-                  onChange={(e) => setStartSeqInput(e.target.value)}
-                  placeholder={lang === 'fr' ? 'Ex: 150' : 'e.g. 150'}
-                  className="w-28 px-2.5 py-1 rounded-md border border-slate-200 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-sky-500"
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    const parsed = parseInt(startSeqInput, 10);
-                    if (!Number.isFinite(parsed) || parsed < 1) return;
-                    const saved = db.setDepotStartNumber(parsed, dateDepotEffective);
-                    setDepotStartSeqState(saved);
-                    refreshNextPreview();
-                    setStartSeqSavedMsg(true);
-                    setTimeout(() => setStartSeqSavedMsg(false), 2000);
-                  }}
-                  className="px-3 py-1 rounded-md bg-sky-500 text-white text-xs font-medium hover:bg-sky-600 transition-colors"
-                >
-                  {lang === 'fr' ? 'Positionner' : 'Apply'}
-                </button>
-                {depotStartSeq !== null && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      db.setDepotStartNumber(null, dateDepotEffective);
-                      setDepotStartSeqState(null);
-                      setStartSeqInput('');
-                      refreshNextPreview();
-                    }}
-                    className="px-2.5 py-1 rounded-md border border-slate-200 text-slate-600 text-xs hover:bg-slate-50 transition-colors"
-                  >
-                    {lang === 'fr' ? 'Mode auto' : 'Auto mode'}
-                  </button>
-                )}
-                {startSeqSavedMsg && (
-                  <span className="text-xs font-medium text-emerald-600 flex items-center gap-1">
-                    <Check className="w-3.5 h-3.5" />
-                    {lang === 'fr' ? 'Numéro positionné' : 'Start number set'}
+              {canManageCounter ? (
+                <>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={startSeqInput}
+                      onChange={(e) => setStartSeqInput(e.target.value)}
+                      placeholder={lang === 'fr' ? 'Ex: 150' : 'e.g. 150'}
+                      className="w-28 px-2.5 py-1 rounded-md border border-slate-200 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const parsed = parseInt(startSeqInput, 10);
+                        if (!Number.isFinite(parsed) || parsed < 1) return;
+                        const { saved } = await db.saveEnforcedDepotStartNumber(parsed, dateDepotEffective);
+                        setDepotStartSeqState(saved);
+                        refreshNextPreview();
+                        setStartSeqSavedMsg(true);
+                        setTimeout(() => setStartSeqSavedMsg(false), 2000);
+                      }}
+                      className="px-3 py-1 rounded-md bg-sky-500 text-white text-xs font-medium hover:bg-sky-600 transition-colors"
+                    >
+                      {lang === 'fr' ? 'Imposer' : 'Enforce'}
+                    </button>
+                    {depotStartSeq !== null && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await db.saveEnforcedDepotStartNumber(null, dateDepotEffective);
+                          setDepotStartSeqState(null);
+                          setStartSeqInput('');
+                          refreshNextPreview();
+                        }}
+                        className="px-2.5 py-1 rounded-md border border-slate-200 text-slate-600 text-xs hover:bg-slate-50 transition-colors"
+                      >
+                        {lang === 'fr' ? 'Mode auto' : 'Auto mode'}
+                      </button>
+                    )}
+                    {startSeqSavedMsg && (
+                      <span className="text-xs font-medium text-emerald-600 flex items-center gap-1">
+                        <Check className="w-3.5 h-3.5" />
+                        {lang === 'fr' ? 'Compteur imposé' : 'Counter enforced'}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-slate-400">
+                    {lang === 'fr'
+                      ? 'Exemple : saisissez 250 pour que le prochain dépôt démarre à D-250-' + effectiveYear + ' sur tous les postes puis continue à 251, 252…'
+                      : 'Example: enter 250 so the next deposit starts at D-250-' + effectiveYear + ' across all devices and continues 251, 252…'}
+                  </p>
+                </>
+              ) : (
+                <div className="flex items-center gap-2 text-xs text-slate-500 bg-slate-50 border border-slate-200/80 rounded-lg px-3 py-2">
+                  <Lock className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
+                  <span>
+                    {depotStartSeq !== null
+                      ? (lang === 'fr'
+                          ? `Compteur imposé par l'administrateur à partir de ${formatDepotNumero(depotStartSeq, effectiveYear, billingPointCode)}.`
+                          : `Starting counter enforced by administrator from ${formatDepotNumero(depotStartSeq, effectiveYear, billingPointCode)}.`)
+                      : (lang === 'fr'
+                          ? "Seul l'administrateur ou le gérant peut imposer un compteur de départ."
+                          : 'Only an administrator or manager can enforce a starting counter.')}
                   </span>
-                )}
-              </div>
-              <p className="text-[11px] text-slate-400">
-                {lang === 'fr'
-                  ? 'Exemple : saisissez 250 pour que le prochain dépôt démarre à D-250-' + effectiveYear + ' puis continue à 251, 252…'
-                  : 'Example: enter 250 so the next deposit starts at D-250-' + effectiveYear + ' and continues 251, 252…'}
-              </p>
+                </div>
+              )}
             </div>
           </div>
         )}

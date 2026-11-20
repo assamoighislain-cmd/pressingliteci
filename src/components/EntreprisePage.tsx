@@ -1104,11 +1104,20 @@ export default function EntreprisePage() {
         </div>
 
         <div className="pt-3 border-t border-slate-100 space-y-2">
-          <label className="block text-xs font-medium text-slate-700">
-            {lang === 'fr'
-              ? `Positionner le numéro de départ de dépôt (${new Date().getFullYear()})`
-              : `Set starting deposit number (${new Date().getFullYear()})`}
-          </label>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <label className="block text-xs font-medium text-slate-700">
+              {lang === 'fr'
+                ? `Imposer un compteur de départ des dépôts (${new Date().getFullYear()})`
+                : `Enforce starting deposit counter (${new Date().getFullYear()})`}
+            </label>
+            {depotStartSeq !== null && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-sky-50 border border-sky-200 text-[11px] font-semibold text-sky-700">
+                {lang === 'fr'
+                  ? `Imposé : ${formatDepotNumero(depotStartSeq, new Date().getFullYear(), billingPointCode)} (tous les postes)`
+                  : `Enforced: ${formatDepotNumero(depotStartSeq, new Date().getFullYear(), billingPointCode)} (all devices)`}
+              </span>
+            )}
+          </div>
           <div className="flex flex-wrap items-center gap-2">
             <input
               type="number"
@@ -1121,10 +1130,10 @@ export default function EntreprisePage() {
             />
             <button
               type="button"
-              onClick={() => {
+              onClick={async () => {
                 const parsed = parseInt(startSeqInput, 10);
                 if (!Number.isFinite(parsed) || parsed < 1) return;
-                const saved = db.setDepotStartNumber(parsed);
+                const { saved } = await db.saveEnforcedDepotStartNumber(parsed);
                 setDepotStartSeqState(saved);
                 refreshNumberingPreview();
                 setStartSeqSaved(true);
@@ -1132,13 +1141,13 @@ export default function EntreprisePage() {
               }}
               className="px-3.5 py-1.5 rounded-lg bg-sky-500 text-white text-xs font-medium hover:bg-sky-600 transition-colors"
             >
-              {lang === 'fr' ? 'Positionner' : 'Apply'}
+              {lang === 'fr' ? 'Imposer ce compteur' : 'Enforce counter'}
             </button>
             {depotStartSeq !== null && (
               <button
                 type="button"
-                onClick={() => {
-                  db.setDepotStartNumber(null);
+                onClick={async () => {
+                  await db.saveEnforcedDepotStartNumber(null);
                   setDepotStartSeqState(null);
                   setStartSeqInput('');
                   refreshNumberingPreview();
@@ -1151,14 +1160,14 @@ export default function EntreprisePage() {
             {startSeqSaved && (
               <span className="text-xs font-medium text-emerald-600 flex items-center gap-1">
                 <Check className="w-3.5 h-3.5" />
-                {lang === 'fr' ? 'Numéro de départ positionné !' : 'Start number applied!'}
+                {lang === 'fr' ? 'Compteur imposé sur tous les postes !' : 'Counter enforced across all devices!'}
               </span>
             )}
           </div>
           <p className="text-xs text-slate-400">
             {lang === 'fr'
-              ? `Si nécessaire (reprise d'un carnet papier ou d'un ancien logiciel), saisissez le numéro souhaité pour que le prochain dépôt commence exactement à ce numéro (ex: 250 → ${formatDepotNumero(250, new Date().getFullYear(), billingPointCode)}), puis s'incrémente normalement.`
-              : `If needed (continuing from a paper receipt book or previous software), enter the desired number so the next deposit starts at that exact number (e.g. 250 → ${formatDepotNumero(250, new Date().getFullYear(), billingPointCode)}) and increments normally.`}
+              ? `Idéal lors de l'installation du logiciel pour continuer votre numérotation existante : le prochain dépôt démarrera exactement à ce numéro (ex: 250 → ${formatDepotNumero(250, new Date().getFullYear(), billingPointCode)}) et sera imposé à tous les utilisateurs de l'entreprise.`
+              : `Ideal when installing the software to continue your existing numbering: the next deposit will start at that exact number (e.g. 250 → ${formatDepotNumero(250, new Date().getFullYear(), billingPointCode)}) and will be enforced across all users.`}
           </p>
         </div>
       </div>

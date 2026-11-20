@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { useAuth } from '@/lib/auth';
 import { useI18n, type Lang } from '@/lib/i18n';
 import { supabase } from '@/lib/supabase';
-import { Package, Mail, Lock, Building2, Loader2, Sparkles, User, Phone, ArrowLeft, CheckCircle2, Globe, Eye, EyeOff } from 'lucide-react';
+import { Package, Mail, Lock, Building2, Loader2, Sparkles, User, Phone, ArrowLeft, CheckCircle2, Globe, Eye, EyeOff, Hash } from 'lucide-react';
+import { formatDepotNumero } from '@/lib/dbOfflineHelpers';
 
 export default function AuthForm() {
   const { signIn, signUp } = useAuth();
@@ -11,6 +12,7 @@ export default function AuthForm() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [entrepriseNom, setEntrepriseNom] = useState('');
+  const [depotStartInput, setDepotStartInput] = useState('');
   const [fullName, setFullName] = useState('');
   const [contact, setContact] = useState('');
   const [joining, setJoining] = useState(false);
@@ -56,9 +58,12 @@ export default function AuthForm() {
         return;
       }
 
+      const parsedStart = depotStartInput.trim() ? parseInt(depotStartInput.trim(), 10) : null;
+      const validStart = parsedStart !== null && Number.isFinite(parsedStart) && parsedStart >= 1 ? parsedStart : null;
+
       const result = mode === 'signin'
         ? await signIn(email.trim(), password)
-        : await signUp(email.trim(), password, joining ? '' : entrepriseNom.trim(), fullName.trim(), contact.trim());
+        : await signUp(email.trim(), password, joining ? '' : entrepriseNom.trim(), fullName.trim(), contact.trim(), joining ? null : validStart);
 
       if (result.error) {
         setError(result.error);
@@ -184,21 +189,52 @@ export default function AuthForm() {
                   {lang === 'fr' ? 'Je rejoins une équipe existante' : 'I am joining an existing team'}
                 </label>
                 {!joining && (
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1.5">
-                      {t('auth.companyName')}
-                    </label>
-                    <div className="relative">
-                      <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                      <input
-                        type="text"
-                        value={entrepriseNom}
-                        onChange={(e) => setEntrepriseNom(e.target.value)}
-                        placeholder={t('auth.companyNamePlaceholder')}
-                        className="w-full pl-10 pr-3 py-2.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent"
-                      />
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                        {t('auth.companyName')}
+                      </label>
+                      <div className="relative">
+                        <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                        <input
+                          type="text"
+                          value={entrepriseNom}
+                          onChange={(e) => setEntrepriseNom(e.target.value)}
+                          placeholder={t('auth.companyNamePlaceholder')}
+                          className="w-full pl-10 pr-3 py-2.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent"
+                        />
+                      </div>
                     </div>
-                  </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                        {lang === 'fr'
+                          ? 'Compteur de départ des dépôts (optionnel)'
+                          : 'Starting deposit counter (optional)'}
+                      </label>
+                      <div className="relative">
+                        <Hash className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                        <input
+                          type="number"
+                          min={1}
+                          step={1}
+                          value={depotStartInput}
+                          onChange={(e) => setDepotStartInput(e.target.value)}
+                          placeholder={lang === 'fr' ? 'Par défaut : 1 (ex: 450)' : 'Default: 1 (e.g. 450)'}
+                          className="w-full pl-10 pr-3 py-2.5 rounded-lg border border-slate-200 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent"
+                        />
+                      </div>
+                      <p className="text-xs text-slate-400 mt-1">
+                        {(() => {
+                          const n = parseInt(depotStartInput.trim(), 10);
+                          const previewSeq = Number.isFinite(n) && n >= 1 ? n : 1;
+                          const preview = formatDepotNumero(previewSeq, new Date().getFullYear(), '');
+                          return lang === 'fr'
+                            ? `Premier numéro de dépôt imposé : ${preview}`
+                            : `First enforced deposit number: ${preview}`;
+                        })()}
+                      </p>
+                    </div>
+                  </>
                 )}
                 {joining && (
                   <div className="rounded-lg bg-sky-50 border border-sky-100 p-3">

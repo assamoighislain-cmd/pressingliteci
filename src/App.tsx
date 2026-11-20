@@ -27,6 +27,7 @@ import Inventaire from '@/components/Inventaire';
 import BoutiquesPage from '@/components/BoutiquesPage';
 import ClientPortal from '@/components/ClientPortal';
 import ErrorBoundary from '@/components/ErrorBoundary';
+import DepotStartCounterModal from '@/components/DepotStartCounterModal';
 import { useAuth } from '@/lib/auth';
 import { useI18n } from '@/lib/i18n';
 import { supabase } from '@/lib/supabase';
@@ -344,6 +345,7 @@ function WorkspaceApp() {
           </div>
         )}
       </ErrorBoundary>
+      <DepotStartCounterModal />
     </Layout>
   );
 }

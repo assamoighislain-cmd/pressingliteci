@@ -78,6 +78,8 @@ export interface Entreprise {
   label_printer_type?: string | null;
   label_printer_config?: { baudRate?: number; charWidth?: number } | null;
   label_printer_name?: string | null;
+  depot_start_number?: number | null;
+  depot_start_year?: number | null;
   created_at: string;
   updated_at: string;
 }
