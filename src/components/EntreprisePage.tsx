@@ -57,11 +57,33 @@ export default function EntreprisePage() {
   const [serialConnected, setSerialConnected] = useState(false);
   const [serialError, setSerialError] = useState<string | null>(null);
   const [billingPointCode, setBillingPointCodeState] = useState<string>(() => getBillingPointCode());
+  const [depotStartSeq, setDepotStartSeqState] = useState<number | null>(() => db.getDepotStartNumber());
+  const [startSeqInput, setStartSeqInput] = useState<string>(() => {
+    const s = db.getDepotStartNumber();
+    return s !== null ? String(s) : '';
+  });
+  const [startSeqSaved, setStartSeqSaved] = useState(false);
+  const [nextDepotPreview, setNextDepotPreview] = useState<string>('');
+
+  const refreshNumberingPreview = () => {
+    const currentStart = db.getDepotStartNumber();
+    setDepotStartSeqState(currentStart);
+    setStartSeqInput(currentStart !== null ? String(currentStart) : '');
+    void db.previewNextDepotNumero().then((p) => setNextDepotPreview(p));
+  };
 
   useEffect(() => {
-    const onPointChange = () => setBillingPointCodeState(getBillingPointCode());
-    window.addEventListener('pressinglite:billing-point-changed', onPointChange);
-    return () => window.removeEventListener('pressinglite:billing-point-changed', onPointChange);
+    refreshNumberingPreview();
+    const onSyncChange = () => {
+      setBillingPointCodeState(getBillingPointCode());
+      refreshNumberingPreview();
+    };
+    window.addEventListener('pressinglite:billing-point-changed', onSyncChange);
+    window.addEventListener('pressinglite:depot-start-seq-changed', onSyncChange);
+    return () => {
+      window.removeEventListener('pressinglite:billing-point-changed', onSyncChange);
+      window.removeEventListener('pressinglite:depot-start-seq-changed', onSyncChange);
+    };
   }, []);
 
   useEffect(() => {
@@ -1012,9 +1034,9 @@ export default function EntreprisePage() {
 
         <div className="rounded-lg bg-slate-50 border border-slate-100 p-3.5 space-y-1.5 text-xs text-slate-600">
           <div className="flex items-center justify-between">
-            <span>{lang === 'fr' ? 'Format Dépôt actif sur cet appareil :' : 'Active Deposit format on this device:'}</span>
+            <span>{lang === 'fr' ? 'Prochain numéro de dépôt sur ce poste :' : 'Next deposit number on this device:'}</span>
             <span className="font-mono font-bold text-sky-700 bg-sky-50 px-2.5 py-0.5 rounded border border-sky-200">
-              {formatDepotNumero(1, new Date().getFullYear(), billingPointCode)}
+              {nextDepotPreview || formatDepotNumero(depotStartSeq ?? 1, new Date().getFullYear(), billingPointCode)}
             </span>
           </div>
           <div className="flex items-center justify-between">
@@ -1078,6 +1100,65 @@ export default function EntreprisePage() {
             {lang === 'fr'
               ? 'Sans préfixe : D-001-2026 / C-0001. Avec préfixe (ex: C1 ou ABJ1) : C1-D-001-2026 / C1-C-0001. Attribuez un préfixe différent sur chaque point de facturation pour éviter tout doublon hors-ligne.'
               : 'Without prefix: D-001-2026 / C-0001. With prefix (e.g. C1 or ABJ1): C1-D-001-2026 / C1-C-0001. Assign a distinct prefix per billing point to avoid any offline duplicates.'}
+          </p>
+        </div>
+
+        <div className="pt-3 border-t border-slate-100 space-y-2">
+          <label className="block text-xs font-medium text-slate-700">
+            {lang === 'fr'
+              ? `Positionner le numéro de départ de dépôt (${new Date().getFullYear()})`
+              : `Set starting deposit number (${new Date().getFullYear()})`}
+          </label>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={startSeqInput}
+              onChange={(e) => setStartSeqInput(e.target.value)}
+              placeholder={lang === 'fr' ? 'Ex: 250' : 'e.g. 250'}
+              className="w-36 px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-sky-500"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                const parsed = parseInt(startSeqInput, 10);
+                if (!Number.isFinite(parsed) || parsed < 1) return;
+                const saved = db.setDepotStartNumber(parsed);
+                setDepotStartSeqState(saved);
+                refreshNumberingPreview();
+                setStartSeqSaved(true);
+                setTimeout(() => setStartSeqSaved(false), 2500);
+              }}
+              className="px-3.5 py-1.5 rounded-lg bg-sky-500 text-white text-xs font-medium hover:bg-sky-600 transition-colors"
+            >
+              {lang === 'fr' ? 'Positionner' : 'Apply'}
+            </button>
+            {depotStartSeq !== null && (
+              <button
+                type="button"
+                onClick={() => {
+                  db.setDepotStartNumber(null);
+                  setDepotStartSeqState(null);
+                  setStartSeqInput('');
+                  refreshNumberingPreview();
+                }}
+                className="px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 text-xs font-medium hover:bg-slate-50 transition-colors"
+              >
+                {lang === 'fr' ? 'Revenir au mode automatique' : 'Reset to auto mode'}
+              </button>
+            )}
+            {startSeqSaved && (
+              <span className="text-xs font-medium text-emerald-600 flex items-center gap-1">
+                <Check className="w-3.5 h-3.5" />
+                {lang === 'fr' ? 'Numéro de départ positionné !' : 'Start number applied!'}
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-slate-400">
+            {lang === 'fr'
+              ? `Si nécessaire (reprise d'un carnet papier ou d'un ancien logiciel), saisissez le numéro souhaité pour que le prochain dépôt commence exactement à ce numéro (ex: 250 → ${formatDepotNumero(250, new Date().getFullYear(), billingPointCode)}), puis s'incrémente normalement.`
+              : `If needed (continuing from a paper receipt book or previous software), enter the desired number so the next deposit starts at that exact number (e.g. 250 → ${formatDepotNumero(250, new Date().getFullYear(), billingPointCode)}) and increments normally.`}
           </p>
         </div>
       </div>

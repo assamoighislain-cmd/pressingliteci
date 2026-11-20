@@ -102,9 +102,19 @@ function WorkspaceApp() {
   const [entrepriseStatut, setEntrepriseStatut] = useState<string | null | undefined>(undefined);
 
   useEffect(() => {
-    if (isSuperAdmin && view === 'dashboard') {
+    if (isSuperAdmin && (view === 'dashboard' || window.location.hash === '#/super-admin')) {
       setView('superadmin');
     }
+  }, [isSuperAdmin]);
+
+  useEffect(() => {
+    const onHashChange = () => {
+      if (isSuperAdmin && window.location.hash === '#/super-admin') {
+        setView('superadmin');
+      }
+    };
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
   }, [isSuperAdmin]);
 
   const refreshEntrepriseAndLicenceSilently = () => {
@@ -248,8 +258,8 @@ function WorkspaceApp() {
           <h2 className="text-lg font-semibold text-slate-900">{lang === 'fr' ? 'En attente de validation' : 'Pending validation'}</h2>
           <p className="text-sm text-slate-500 mt-2">
             {lang === 'fr'
-              ? "Votre entreprise a été créée. Un administrateur de la plateforme doit valider votre compte avant que vous puissiez accéder au logiciel. Vous recevrez un email dès que votre compte sera activé."
-              : 'Your company has been created. A platform administrator must validate your account before you can access the software. You will receive an email once your account is activated.'}
+              ? "Votre entreprise a été créée avec une licence Démo de 30 jours. Le Super Administrateur a été notifié pour approuver votre compte afin que vous puissiez accéder au logiciel."
+              : 'Your company has been created with a 30-day Demo license. The Super Administrator has been notified to approve your account before you can access the software.'}
           </p>
           {isOnline && (
             <button

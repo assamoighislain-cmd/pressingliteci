@@ -19,6 +19,10 @@ import {
   observeArticleCodes,
   observeTraitementCodes,
   getBillingPointCode,
+  getDepotStartSeq,
+  setDepotStartSeq,
+  previewOnlineDepotNumero,
+  previewOfflineDepotNumero,
   computeNextOnlineDepotNumero,
   generateOfflineDepotNumero,
   computeNextOnlineClientCode,
@@ -1194,6 +1198,44 @@ export const db = {
         code: generateOfflineClientCode(currentBoutiqueId, pointCode),
         error: null,
       };
+    }
+  },
+
+  getDepotStartNumber(dateDepot?: Date): number | null {
+    const targetYear = (dateDepot ?? new Date()).getFullYear();
+    return getDepotStartSeq(currentBoutiqueId, targetYear, getBillingPointCode());
+  },
+
+  setDepotStartNumber(startSeq: number | null, dateDepot?: Date): number | null {
+    const targetYear = (dateDepot ?? new Date()).getFullYear();
+    return setDepotStartSeq(currentBoutiqueId, targetYear, getBillingPointCode(), startSeq);
+  },
+
+  async previewNextDepotNumero(dateDepot?: Date): Promise<string> {
+    const targetYear = (dateDepot ?? new Date()).getFullYear();
+    const pointCode = getBillingPointCode();
+    if (isOffline()) {
+      return previewOfflineDepotNumero(currentBoutiqueId, targetYear, pointCode);
+    }
+    try {
+      const pattern = pointCode ? `${pointCode}-D%-${targetYear}` : `D%-${targetYear}`;
+      let q = supabase.from('depots').select('numero').limit(10000);
+      if (targetYear <= 2026) {
+        q = q.or(`numero.like.${pattern},numero.like.D-%`);
+      } else {
+        q = q.like('numero', pattern);
+      }
+      if (currentBoutiqueId) {
+        q = q.eq('boutique_id', currentBoutiqueId);
+      }
+      const { data, error } = await q;
+      if (error) {
+        return previewOfflineDepotNumero(currentBoutiqueId, targetYear, pointCode);
+      }
+      const rows = (data as Array<{ numero?: string | null }> | null) ?? [];
+      return previewOnlineDepotNumero(rows, currentBoutiqueId, targetYear, pointCode);
+    } catch {
+      return previewOfflineDepotNumero(currentBoutiqueId, targetYear, pointCode);
     }
   },
 

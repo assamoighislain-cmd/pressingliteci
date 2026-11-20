@@ -176,12 +176,13 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
   const [previewMode, setPreviewMode] = useState<'receipt' | 'labels'>('receipt');
   const [billingPointCode, setBillingPointCodeState] = useState<string>(() => getBillingPointCode());
   const [showBillingPointPicker, setShowBillingPointPicker] = useState(false);
-
-  useEffect(() => {
-    const onPointChange = () => setBillingPointCodeState(getBillingPointCode());
-    window.addEventListener('pressinglite:billing-point-changed', onPointChange);
-    return () => window.removeEventListener('pressinglite:billing-point-changed', onPointChange);
-  }, []);
+  const [depotStartSeq, setDepotStartSeqState] = useState<number | null>(() => db.getDepotStartNumber());
+  const [startSeqInput, setStartSeqInput] = useState<string>(() => {
+    const s = db.getDepotStartNumber();
+    return s !== null ? String(s) : '';
+  });
+  const [startSeqSavedMsg, setStartSeqSavedMsg] = useState(false);
+  const [nextDepotPreview, setNextDepotPreview] = useState<string>('');
 
   // Load treatment types and catalog
   useEffect(() => {
@@ -372,6 +373,32 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
   const dateDepotEffective = dateDepotOverride
     ? new Date(dateDepotOverride + 'T12:00:00')
     : new Date();
+  const effectiveYear = dateDepotEffective.getFullYear();
+
+  const refreshNextPreview = useCallback(() => {
+    const d = dateDepotOverride ? new Date(dateDepotOverride + 'T12:00:00') : new Date();
+    const currentStart = db.getDepotStartNumber(d);
+    setDepotStartSeqState(currentStart);
+    setStartSeqInput(currentStart !== null ? String(currentStart) : '');
+    void db.previewNextDepotNumero(d).then((preview) => setNextDepotPreview(preview));
+  }, [dateDepotOverride]);
+
+  useEffect(() => {
+    refreshNextPreview();
+  }, [refreshNextPreview, billingPointCode, effectiveYear, success]);
+
+  useEffect(() => {
+    const onSyncChange = () => {
+      setBillingPointCodeState(getBillingPointCode());
+      refreshNextPreview();
+    };
+    window.addEventListener('pressinglite:billing-point-changed', onSyncChange);
+    window.addEventListener('pressinglite:depot-start-seq-changed', onSyncChange);
+    return () => {
+      window.removeEventListener('pressinglite:billing-point-changed', onSyncChange);
+      window.removeEventListener('pressinglite:depot-start-seq-changed', onSyncChange);
+    };
+  }, [refreshNextPreview]);
 
   function canProceedArticles(): boolean {
     return articles.every(
@@ -970,19 +997,23 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
         })}
       </div>
 
-      {/* Préfixe du point de facturation (anti-doublon hors-ligne) */}
+      {/* Préfixe du point de facturation & Numéro de départ (anti-doublon hors-ligne) */}
       <div className="bg-white rounded-xl border border-slate-100 shadow-sm px-4 py-2.5 space-y-2.5">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2 text-xs text-slate-600">
+          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
             <Monitor className="w-3.5 h-3.5 text-sky-600 shrink-0" />
             <span>
-              {lang === 'fr' ? 'Préfixe point de facturation :' : 'Billing point prefix:'}{' '}
+              {lang === 'fr' ? 'Préfixe :' : 'Prefix:'}{' '}
               <strong className="text-slate-900">
-                {billingPointCode || (lang === 'fr' ? 'Aucun (Principal)' : 'None (Main)')}
+                {billingPointCode || (lang === 'fr' ? 'Aucun' : 'None')}
               </strong>
             </span>
-            <span className="px-2 py-0.5 rounded bg-sky-50 text-sky-700 font-mono font-semibold">
-              {formatDepotNumero(1, dateDepotEffective.getFullYear(), billingPointCode)}
+            <span
+              className="px-2 py-0.5 rounded bg-sky-50 text-sky-700 font-mono font-semibold"
+              title={lang === 'fr' ? 'Prochain numéro de dépôt qui sera attribué' : 'Next deposit number to be assigned'}
+            >
+              {lang === 'fr' ? 'Prochain :' : 'Next:'}{' '}
+              {nextDepotPreview || formatDepotNumero(depotStartSeq ?? 1, effectiveYear, billingPointCode)}
             </span>
             <span className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 font-mono font-semibold">
               {formatClientCode(1, billingPointCode)}
@@ -998,50 +1029,111 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
                 ? 'Fermer'
                 : 'Close'
               : lang === 'fr'
-                ? 'Ajouter / Modifier le préfixe'
-                : 'Add / Edit prefix'}
+                ? 'Préfixe / N° de départ'
+                : 'Prefix / Start #'}
           </button>
         </div>
 
         {showBillingPointPicker && (
-          <div className="pt-2 border-t border-slate-100 space-y-2">
-            <p className="text-xs text-slate-500">
-              {lang === 'fr'
-                ? 'Ajoutez un préfixe propre à ce point de facturation (ex: C1, P1, ABJ1) pour différencier ses codes D- et C- et éviter tout doublon hors-ligne.'
-                : 'Add a prefix specific to this billing point (e.g. C1, P1, ABJ1) to differentiate its D- and C- codes and prevent offline duplicates.'}
-            </p>
-            <div className="flex flex-wrap items-center gap-1.5">
-              {(['', 'C1', 'C2', 'C3', 'P1', 'P2'] as const).map((preset) => {
-                const active = billingPointCode === preset;
-                return (
+          <div className="pt-2.5 border-t border-slate-100 space-y-3">
+            <div className="space-y-1.5">
+              <p className="text-xs font-medium text-slate-700">
+                {lang === 'fr'
+                  ? '1. Préfixe du point de facturation (anti-doublon hors-ligne)'
+                  : '1. Billing point prefix (offline anti-duplicate)'}
+              </p>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {(['', 'C1', 'C2', 'C3', 'P1', 'P2'] as const).map((preset) => {
+                  const active = billingPointCode === preset;
+                  return (
+                    <button
+                      key={preset || 'MAIN'}
+                      type="button"
+                      onClick={() => {
+                        const saved = setBillingPointCode(preset);
+                        setBillingPointCodeState(saved);
+                      }}
+                      className={`px-2.5 py-1 rounded-md text-xs font-medium border transition-colors ${
+                        active
+                          ? 'bg-sky-500 text-white border-sky-500'
+                          : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-sky-300'
+                      }`}
+                    >
+                      {preset || (lang === 'fr' ? 'Sans préfixe (D-001)' : 'No prefix (D-001)')}
+                    </button>
+                  );
+                })}
+                <input
+                  type="text"
+                  value={billingPointCode}
+                  onChange={(e) => {
+                    const saved = setBillingPointCode(normalizeBillingPointCode(e.target.value));
+                    setBillingPointCodeState(saved);
+                  }}
+                  maxLength={8}
+                  placeholder={lang === 'fr' ? 'Votre préfixe…' : 'Your prefix…'}
+                  className="w-32 px-2.5 py-1 rounded-md border border-slate-200 text-xs font-mono uppercase focus:outline-none focus:ring-2 focus:ring-sky-500"
+                />
+              </div>
+            </div>
+
+            <div className="pt-2 border-t border-slate-100 space-y-1.5">
+              <p className="text-xs font-medium text-slate-700">
+                {lang === 'fr'
+                  ? `2. Positionner le numéro de départ (${effectiveYear})`
+                  : `2. Set starting deposit number (${effectiveYear})`}
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={startSeqInput}
+                  onChange={(e) => setStartSeqInput(e.target.value)}
+                  placeholder={lang === 'fr' ? 'Ex: 150' : 'e.g. 150'}
+                  className="w-28 px-2.5 py-1 rounded-md border border-slate-200 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-sky-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    const parsed = parseInt(startSeqInput, 10);
+                    if (!Number.isFinite(parsed) || parsed < 1) return;
+                    const saved = db.setDepotStartNumber(parsed, dateDepotEffective);
+                    setDepotStartSeqState(saved);
+                    refreshNextPreview();
+                    setStartSeqSavedMsg(true);
+                    setTimeout(() => setStartSeqSavedMsg(false), 2000);
+                  }}
+                  className="px-3 py-1 rounded-md bg-sky-500 text-white text-xs font-medium hover:bg-sky-600 transition-colors"
+                >
+                  {lang === 'fr' ? 'Positionner' : 'Apply'}
+                </button>
+                {depotStartSeq !== null && (
                   <button
-                    key={preset || 'MAIN'}
                     type="button"
                     onClick={() => {
-                      const saved = setBillingPointCode(preset);
-                      setBillingPointCodeState(saved);
+                      db.setDepotStartNumber(null, dateDepotEffective);
+                      setDepotStartSeqState(null);
+                      setStartSeqInput('');
+                      refreshNextPreview();
                     }}
-                    className={`px-2.5 py-1 rounded-md text-xs font-medium border transition-colors ${
-                      active
-                        ? 'bg-sky-500 text-white border-sky-500'
-                        : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-sky-300'
-                    }`}
+                    className="px-2.5 py-1 rounded-md border border-slate-200 text-slate-600 text-xs hover:bg-slate-50 transition-colors"
                   >
-                    {preset || (lang === 'fr' ? 'Sans préfixe (D-001)' : 'No prefix (D-001)')}
+                    {lang === 'fr' ? 'Mode auto' : 'Auto mode'}
                   </button>
-                );
-              })}
-              <input
-                type="text"
-                value={billingPointCode}
-                onChange={(e) => {
-                  const saved = setBillingPointCode(normalizeBillingPointCode(e.target.value));
-                  setBillingPointCodeState(saved);
-                }}
-                maxLength={8}
-                placeholder={lang === 'fr' ? 'Votre préfixe…' : 'Your prefix…'}
-                className="w-32 px-2.5 py-1 rounded-md border border-slate-200 text-xs font-mono uppercase focus:outline-none focus:ring-2 focus:ring-sky-500"
-              />
+                )}
+                {startSeqSavedMsg && (
+                  <span className="text-xs font-medium text-emerald-600 flex items-center gap-1">
+                    <Check className="w-3.5 h-3.5" />
+                    {lang === 'fr' ? 'Numéro positionné' : 'Start number set'}
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-slate-400">
+                {lang === 'fr'
+                  ? 'Exemple : saisissez 250 pour que le prochain dépôt démarre à D-250-' + effectiveYear + ' puis continue à 251, 252…'
+                  : 'Example: enter 250 so the next deposit starts at D-250-' + effectiveYear + ' and continues 251, 252…'}
+              </p>
             </div>
           </div>
         )}

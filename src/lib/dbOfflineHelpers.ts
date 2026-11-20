@@ -213,39 +213,127 @@ function setExactStoredSeq(counterKey: string, value: number): void {
   }
 }
 
-export function getPendingOfflineQueueDepotMaxSeq(
+function depotStartSeqStorageKey(boutiqueId: string | null, year: number, pointCode: string): string {
+  const cleanPoint = normalizeBillingPointCode(pointCode);
+  return `pressinglite_depot_start_seq_${boutiqueId ?? 'global'}_${year}_${cleanPoint || 'MAIN'}`;
+}
+
+function depotCustomProgStorageKey(boutiqueId: string | null, year: number, pointCode: string): string {
+  const cleanPoint = normalizeBillingPointCode(pointCode);
+  return `pressinglite_depot_custom_prog_${boutiqueId ?? 'global'}_${year}_${cleanPoint || 'MAIN'}`;
+}
+
+export function getDepotStartSeq(
+  boutiqueId: string | null,
+  year: number,
+  pointCode?: string,
+): number | null {
+  const cleanPoint = pointCode !== undefined ? normalizeBillingPointCode(pointCode) : getBillingPointCode();
+  try {
+    const raw = localStorage.getItem(depotStartSeqStorageKey(boutiqueId, year, cleanPoint));
+    if (!raw) return null;
+    const parsed = parseInt(raw, 10);
+    return Number.isFinite(parsed) && parsed >= 1 ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export function setDepotStartSeq(
   boutiqueId: string | null,
   year: number,
   pointCode: string,
-): number {
+  startSeq: number | null,
+): number | null {
   const cleanPoint = normalizeBillingPointCode(pointCode);
+  const startKey = depotStartSeqStorageKey(boutiqueId, year, cleanPoint);
+  const progKey = depotCustomProgStorageKey(boutiqueId, year, cleanPoint);
+  try {
+    if (startSeq !== null && Number.isFinite(startSeq) && startSeq >= 1) {
+      const normalized = Math.max(1, Math.floor(startSeq));
+      localStorage.setItem(startKey, String(normalized));
+      localStorage.setItem(progKey, String(normalized - 1));
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('pressinglite:depot-start-seq-changed', { detail: normalized }));
+      }
+      return normalized;
+    } else {
+      localStorage.removeItem(startKey);
+      localStorage.removeItem(progKey);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('pressinglite:depot-start-seq-changed', { detail: null }));
+      }
+      return null;
+    }
+  } catch {
+    return null;
+  }
+}
+
+function getDepotCustomProgSeq(boutiqueId: string | null, year: number, pointCode: string): number {
+  try {
+    const raw = localStorage.getItem(depotCustomProgStorageKey(boutiqueId, year, pointCode));
+    if (!raw) return 0;
+    return parseInt(raw, 10) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+function setDepotCustomProgSeq(boutiqueId: string | null, year: number, pointCode: string, val: number): void {
+  try {
+    localStorage.setItem(
+      depotCustomProgStorageKey(boutiqueId, year, pointCode),
+      String(Math.max(0, Math.floor(val))),
+    );
+  } catch {
+    // Ignore
+  }
+}
+
+function collectPendingQueueDepotSeqs(
+  boutiqueId: string | null,
+  year: number,
+  pointCode: string,
+): { max: number; usedSeqs: Set<number> } {
+  const cleanPoint = normalizeBillingPointCode(pointCode);
+  const usedSeqs = new Set<number>();
+  let max = 0;
   try {
     const raw = localStorage.getItem(OFFLINE_QUEUE_STORAGE_KEY);
-    if (!raw) return 0;
+    if (!raw) return { max: 0, usedSeqs };
     const items = JSON.parse(raw) as Array<{
       table?: string;
       operation?: string;
       data?: Record<string, unknown>;
     }>;
-    if (!Array.isArray(items)) return 0;
-    let max = 0;
+    if (!Array.isArray(items)) return { max: 0, usedSeqs };
     for (const item of items) {
       if (item.table !== 'depots' || item.operation !== 'insert' || !item.data) continue;
       const itemBoutique = (item.data.boutique_id as string | null | undefined) ?? null;
       if (boutiqueId && itemBoutique && itemBoutique !== boutiqueId) continue;
       const rawNum = String(item.data.numero ?? '');
       const parsed = parseDepotNumeroInfo(rawNum);
-      if (parsed && parsed.year === year && parsed.pointCode === cleanPoint && parsed.seq > max) {
-        max = parsed.seq;
+      if (parsed && parsed.year === year && parsed.pointCode === cleanPoint) {
+        usedSeqs.add(parsed.seq);
+        if (parsed.seq > max) max = parsed.seq;
       } else if (year <= LEGACY_DEPOT_TRANSITION_MAX_YEAR) {
         const leg = parseLegacyDepotSeq(rawNum);
         if (leg > max) max = leg;
       }
     }
-    return max;
+    return { max, usedSeqs };
   } catch {
-    return 0;
+    return { max: 0, usedSeqs };
   }
+}
+
+export function getPendingOfflineQueueDepotMaxSeq(
+  boutiqueId: string | null,
+  year: number,
+  pointCode: string,
+): number {
+  return collectPendingQueueDepotSeqs(boutiqueId, year, pointCode).max;
 }
 
 export function getPendingOfflineQueueClientMaxSeq(pointCode: string): number {
@@ -356,26 +444,26 @@ export function observeTraitementCodes(
   if (max > 0) setStoredMaxSeq(key, max);
 }
 
-/**
- * Computes the next online deposit number (`D001-YYYY` or `<POINT>-D001-YYYY`),
- * seamlessly continuing from existing legacy `D-XXXX` numbers in <=2026 while
- * automatically resetting to `001` every January 1st for subsequent years.
- */
-export function computeNextOnlineDepotNumero(
+function resolveOnlineDepotNumeroInternal(
   dbRows: Array<{ numero?: string | null }>,
   boutiqueId: string | null,
-  targetYear?: number,
-  pointCodeOverride?: string,
+  targetYear: number | undefined,
+  pointCodeOverride: string | undefined,
+  commit: boolean,
 ): string {
   const year = targetYear ?? new Date().getFullYear();
   const pointCode =
     pointCodeOverride !== undefined ? normalizeBillingPointCode(pointCodeOverride) : getBillingPointCode();
+  const customStart = getDepotStartSeq(boutiqueId, year, pointCode);
+  const { max: queuedMax, usedSeqs } = collectPendingQueueDepotSeqs(boutiqueId, year, pointCode);
+
   let dbMax = 0;
   let legacyMax = 0;
   for (const row of dbRows) {
     const parsed = parseDepotNumeroInfo(row.numero);
-    if (parsed && parsed.year === year && parsed.pointCode === pointCode && parsed.seq > dbMax) {
-      dbMax = parsed.seq;
+    if (parsed && parsed.year === year && parsed.pointCode === pointCode) {
+      usedSeqs.add(parsed.seq);
+      if (parsed.seq > dbMax) dbMax = parsed.seq;
     } else if (year <= LEGACY_DEPOT_TRANSITION_MAX_YEAR) {
       const leg = parseLegacyDepotSeq(row.numero);
       if (leg > legacyMax) legacyMax = leg;
@@ -384,20 +472,56 @@ export function computeNextOnlineDepotNumero(
   if (legacyMax > 0) {
     setStoredMaxSeq(depotLegacySeqKey(boutiqueId), legacyMax);
   }
-  const queuedMax = getPendingOfflineQueueDepotMaxSeq(boutiqueId, year, pointCode);
-  const next = Math.max(dbMax, legacyMax, queuedMax) + 1;
-  setExactStoredSeq(depotSeqKey(boutiqueId, year, pointCode), next);
+
+  let next: number;
+  if (customStart !== null) {
+    const prog = getDepotCustomProgSeq(boutiqueId, year, pointCode);
+    next = Math.max(customStart, prog + 1);
+    while (usedSeqs.has(next)) {
+      next++;
+    }
+    if (commit) {
+      setDepotCustomProgSeq(boutiqueId, year, pointCode, next);
+      setExactStoredSeq(depotSeqKey(boutiqueId, year, pointCode), Math.max(dbMax, next));
+    }
+  } else {
+    next = Math.max(dbMax, legacyMax, queuedMax) + 1;
+    if (commit) {
+      setExactStoredSeq(depotSeqKey(boutiqueId, year, pointCode), next);
+    }
+  }
+
   return formatDepotNumero(next, year, pointCode);
 }
 
-/**
- * Generates a collision-free offline deposit number (`D001-YYYY` or `<POINT>-D001-YYYY`),
- * continuing from legacy `D-XXXX` in <=2026 and resetting to `001` every January 1st.
- */
-export function generateOfflineDepotNumero(
+export function previewOnlineDepotNumero(
+  dbRows: Array<{ numero?: string | null }>,
   boutiqueId: string | null,
   targetYear?: number,
   pointCodeOverride?: string,
+): string {
+  return resolveOnlineDepotNumeroInternal(dbRows, boutiqueId, targetYear, pointCodeOverride, false);
+}
+
+/**
+ * Computes the next online deposit number (`D-001-YYYY` or `<PREFIX>-D-001-YYYY`),
+ * honoring any custom starting number positioned for this year/point, seamlessly
+ * continuing from legacy `D-XXXX` numbers in <=2026, and resetting to `001` every Jan 1st.
+ */
+export function computeNextOnlineDepotNumero(
+  dbRows: Array<{ numero?: string | null }>,
+  boutiqueId: string | null,
+  targetYear?: number,
+  pointCodeOverride?: string,
+): string {
+  return resolveOnlineDepotNumeroInternal(dbRows, boutiqueId, targetYear, pointCodeOverride, true);
+}
+
+function resolveOfflineDepotNumeroInternal(
+  boutiqueId: string | null,
+  targetYear: number | undefined,
+  pointCodeOverride: string | undefined,
+  commit: boolean,
 ): string {
   const year = targetYear ?? new Date().getFullYear();
   const pointCode =
@@ -413,13 +537,60 @@ export function generateOfflineDepotNumero(
   observeDepotNumeros(cachedRetrait, boutiqueId);
   observeDepotNumeros(cachedPlanning, boutiqueId);
 
-  const legacyMax =
-    year <= LEGACY_DEPOT_TRANSITION_MAX_YEAR ? getStoredMaxSeq(depotLegacySeqKey(boutiqueId)) : 0;
-  const queuedMax = getPendingOfflineQueueDepotMaxSeq(boutiqueId, year, pointCode);
-  const currentMax = Math.max(getStoredMaxSeq(key), legacyMax, queuedMax);
-  const next = currentMax + 1;
-  setStoredMaxSeq(key, next);
+  const { max: queuedMax, usedSeqs } = collectPendingQueueDepotSeqs(boutiqueId, year, pointCode);
+  for (const list of [cachedAll, cachedRecent, cachedRetrait, cachedPlanning]) {
+    for (const d of list) {
+      const parsed = parseDepotNumeroInfo(d.numero);
+      if (parsed && parsed.year === year && parsed.pointCode === pointCode) {
+        usedSeqs.add(parsed.seq);
+      }
+    }
+  }
+
+  const customStart = getDepotStartSeq(boutiqueId, year, pointCode);
+  let next: number;
+  if (customStart !== null) {
+    const prog = getDepotCustomProgSeq(boutiqueId, year, pointCode);
+    next = Math.max(customStart, prog + 1);
+    while (usedSeqs.has(next)) {
+      next++;
+    }
+    if (commit) {
+      setDepotCustomProgSeq(boutiqueId, year, pointCode, next);
+      setStoredMaxSeq(key, next);
+    }
+  } else {
+    const legacyMax =
+      year <= LEGACY_DEPOT_TRANSITION_MAX_YEAR ? getStoredMaxSeq(depotLegacySeqKey(boutiqueId)) : 0;
+    const currentMax = Math.max(getStoredMaxSeq(key), legacyMax, queuedMax);
+    next = currentMax + 1;
+    if (commit) {
+      setStoredMaxSeq(key, next);
+    }
+  }
+
   return formatDepotNumero(next, year, pointCode);
+}
+
+export function previewOfflineDepotNumero(
+  boutiqueId: string | null,
+  targetYear?: number,
+  pointCodeOverride?: string,
+): string {
+  return resolveOfflineDepotNumeroInternal(boutiqueId, targetYear, pointCodeOverride, false);
+}
+
+/**
+ * Generates a collision-free offline deposit number (`D-001-YYYY` or `<PREFIX>-D-001-YYYY`),
+ * honoring custom starting numbers, continuing from legacy `D-XXXX` in <=2026,
+ * and resetting to `001` every January 1st.
+ */
+export function generateOfflineDepotNumero(
+  boutiqueId: string | null,
+  targetYear?: number,
+  pointCodeOverride?: string,
+): string {
+  return resolveOfflineDepotNumeroInternal(boutiqueId, targetYear, pointCodeOverride, true);
 }
 
 /**

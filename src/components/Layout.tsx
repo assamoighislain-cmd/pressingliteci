@@ -397,17 +397,31 @@ export default function Layout({ currentView, onNavigate, children }: LayoutProp
       </nav>
 
       {/* Licence indicator — admin only */}
-      {licenceInfo && !isSuperAdmin && role === 'admin' && (
-        <div className="px-3 pt-3">
-          <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium ${licenceInfo.type_licence === 'demo' ? 'bg-sky-50 text-sky-700 border border-sky-100' : 'bg-emerald-50 text-emerald-700 border border-emerald-100'}`}>
-            <KeyRound className="w-3.5 h-3.5 flex-shrink-0" />
-            <div className="min-w-0">
-              <span>{licenceInfo.type_licence === 'demo' ? (lang === 'fr' ? 'Licence démo' : 'Demo license') : (lang === 'fr' ? 'Licence annuelle' : 'Annual license')}</span>
-              <span className="text-slate-400 ml-1">· {lang === 'fr' ? 'exp.' : 'exp.'} {new Date(licenceInfo.date_fin).toLocaleDateString(lang === 'fr' ? 'fr-FR' : 'en-US')}</span>
+      {licenceInfo && !isSuperAdmin && role === 'admin' && (() => {
+        const daysLeft = Math.max(
+          0,
+          Math.ceil((new Date(licenceInfo.date_fin).getTime() - Date.now()) / (1000 * 60 * 60 * 24)),
+        );
+        const isDemo = licenceInfo.type_licence === 'demo' || licenceInfo.statut === 'demo';
+        return (
+          <div className="px-3 pt-3">
+            <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium ${isDemo ? 'bg-sky-50 text-sky-700 border border-sky-100' : 'bg-emerald-50 text-emerald-700 border border-emerald-100'}`}>
+              <KeyRound className="w-3.5 h-3.5 flex-shrink-0" />
+              <div className="min-w-0">
+                <div className="truncate font-semibold">
+                  {isDemo
+                    ? (lang === 'fr' ? `Licence Démo · ${daysLeft}j restants` : `Demo License · ${daysLeft}d left`)
+                    : (lang === 'fr' ? 'Licence annuelle' : 'Annual license')}
+                </div>
+                <div className="text-[11px] text-slate-500 truncate">
+                  {lang === 'fr' ? 'Expire le ' : 'Expires '}
+                  {new Date(licenceInfo.date_fin).toLocaleDateString(lang === 'fr' ? 'fr-FR' : 'en-US')}
+                </div>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Install button */}
       {canInstall && (

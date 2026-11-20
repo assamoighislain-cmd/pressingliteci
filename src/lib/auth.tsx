@@ -471,6 +471,43 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (rpcError) {
         console.warn('signup_create_entreprise RPC failed (trigger will handle it):', rpcError.message);
       }
+
+      // Ensure 30-day Demo licence is activated right away on company creation (best-effort)
+      try {
+        await supabase.rpc('ensure_trial_licence');
+      } catch {
+        // Trigger or Super Admin approval will also guarantee the 30-day Demo licence
+      }
+
+      // Immediately dispatch audible Web Push notification to Super Admin (even when app is closed)
+      try {
+        const safeNom = entrepriseNom.trim();
+        await supabase.functions.invoke('send-push-notification', {
+          body: {
+            tenant_id: 'super_admin',
+            payload: {
+              title: 'Nouvelle entreprise à approuver',
+              body: `${safeNom} vient de s'inscrire (Licence Démo 30 jours) — en attente d'approbation`,
+              icon: '/pwa-192x192.png',
+              badge: '/pwa-192x192.png',
+              tag: `new-entreprise-${newUser.id}`,
+              renotify: true,
+              requireInteraction: true,
+              silent: false,
+              vibrate: [300, 150, 300, 150, 400],
+              actions: [{ action: 'open', title: 'Approuver' }],
+              data: {
+                url: '/#/super-admin',
+                type: 'new_entreprise_approval',
+                entreprise_nom: safeNom,
+                user_id: newUser.id,
+              },
+            },
+          },
+        });
+      } catch {
+        // Non-blocking: DB trigger also attempts push delivery
+      }
     }
 
     return { error: null };

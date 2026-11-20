@@ -226,30 +226,69 @@ self.addEventListener('push', (event) => {
   }
 
   const title = data.title || 'PressingLite';
+  const payloadData = data.data || {};
+  const isApproval = payloadData.type === 'new_entreprise_approval';
+
   const options = {
     body: data.body || '',
-    icon: '/pwa-192x192.png',
-    badge: '/pwa-192x192.png',
-    data: data.data || {},
+    icon: data.icon || '/pwa-192x192.png',
+    badge: data.badge || '/pwa-192x192.png',
+    tag: data.tag || (isApproval ? 'pressinglite-approval' : 'pressinglite-push'),
+    renotify: data.renotify !== undefined ? Boolean(data.renotify) : true,
+    requireInteraction: data.requireInteraction !== undefined ? Boolean(data.requireInteraction) : isApproval,
+    silent: false,
+    vibrate: Array.isArray(data.vibrate) ? data.vibrate : [300, 150, 300, 150, 400],
+    actions: Array.isArray(data.actions) ? data.actions : undefined,
+    data: payloadData,
   };
 
-  event.waitUntil(self.registration.showNotification(title, options));
-
-  self.clients.matchAll({ type: 'window' }).then((clients) => {
-    clients.forEach((c) => c.postMessage({ type: 'PLAY_NOTIFICATION_SOUND' }));
-  });
+  event.waitUntil(
+    Promise.all([
+      self.registration.showNotification(title, options),
+      self.clients
+        .matchAll({ type: 'window', includeUncontrolled: true })
+        .then((clients) => {
+          clients.forEach((c) =>
+            c.postMessage({
+              type: 'PLAY_NOTIFICATION_SOUND',
+              soundType: payloadData.type || 'default',
+              title,
+              body: options.body,
+            }),
+          );
+        })
+        .catch(() => {}),
+    ]),
+  );
 });
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
+  const notifData = (event.notification && event.notification.data) || {};
+  const targetUrl = typeof notifData.url === 'string' && notifData.url.length > 0 ? notifData.url : '/';
+
   event.waitUntil(
-    self.clients.matchAll({ type: 'window' }).then((clients) => {
-      if (clients.length > 0) {
-        clients[0].focus();
-      } else {
-        self.clients.openWindow('/');
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+      for (const client of clients) {
+        if ('focus' in client) {
+          client.focus();
+          if (targetUrl && targetUrl !== '/' && 'navigate' in client) {
+            try {
+              const absoluteTarget = new URL(targetUrl, self.location.origin).href;
+              return client.navigate(absoluteTarget).catch(() => client);
+            } catch {
+              return client;
+            }
+          }
+          return client;
+        }
       }
+      if (self.clients.openWindow) {
+        return self.clients.openWindow(targetUrl);
+      }
+      return undefined;
     }),
   );
 });
+
 

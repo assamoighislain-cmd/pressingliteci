@@ -1,12 +1,13 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth';
 import { useI18n } from '@/lib/i18n';
 import { useOfflineStatus } from '@/hooks/useOfflineStatus';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
+import { usePushNotifications, playApprovalSound } from '@/hooks/usePushNotifications';
 import { notifyRealtimeMutation } from '@/lib/realtimeSync';
 import { buildWhatsAppUrl } from '@/types';
-import { Building2, UserPlus, Crown, Loader2, X, Check, Shield, Mail, Users, ChevronDown, ChevronRight, Trash2, UserCog, Pencil, Phone, User, KeyRound, Calendar, Plus, Ban, Copy, TrendingUp, AlertTriangle, Clock, BarChart3, UserCheck, Search, Filter, ArrowUpDown, MapPin, Navigation, Activity, ShoppingBag, Package, Store, DollarSign, ArrowDownUp, MessageCircle, Send, ExternalLink } from 'lucide-react';
+import { Building2, UserPlus, Crown, Loader2, X, Check, Shield, Mail, Users, ChevronDown, ChevronRight, Trash2, UserCog, Pencil, Phone, User, KeyRound, Calendar, Plus, Ban, Copy, TrendingUp, AlertTriangle, Clock, BarChart3, UserCheck, Search, Filter, ArrowUpDown, MapPin, Navigation, Activity, ShoppingBag, Package, Store, DollarSign, ArrowDownUp, MessageCircle, Send, ExternalLink, BellRing, BellOff, Volume2 } from 'lucide-react';
 
 type WhatsAppTemplateType = 'approval' | 'licence' | 'reminder' | 'custom';
 
@@ -89,9 +90,10 @@ const ROLE_ICONS: Record<string, React.ComponentType<{ className?: string }>> = 
 };
 
 export default function SuperAdminPage() {
-  const { isSuperAdmin } = useAuth();
+  const { isSuperAdmin, user } = useAuth();
   const { t, lang } = useI18n();
   const { isOnline } = useOfflineStatus();
+  const pushStatus = usePushNotifications();
 
   const ROLE_LABELS: Record<string, string> = {
     admin: lang === 'fr' ? 'Administrateur' : 'Administrator',
@@ -115,12 +117,14 @@ export default function SuperAdminPage() {
   const [editContact, setEditContact] = useState('');
   const [editEmail, setEditEmail] = useState('');
   const [showLicenceModal, setShowLicenceModal] = useState<number | null>(null);
+  const [licenceType, setLicenceType] = useState<'demo' | 'annuelle'>('demo');
   const [licenceStart, setLicenceStart] = useState('');
   const [licenceEnd, setLicenceEnd] = useState('');
   const [generatingLicence, setGeneratingLicence] = useState(false);
-  const [licencePrix, setLicencePrix] = useState('100000');
+  const [licencePrix, setLicencePrix] = useState('0');
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [editLicence, setEditLicence] = useState<Licence | null>(null);
+  const [editLicenceType, setEditLicenceType] = useState<'demo' | 'annuelle'>('annuelle');
   const [editLicenceStart, setEditLicenceStart] = useState('');
   const [editLicenceEnd, setEditLicenceEnd] = useState('');
   const [editLicencePrix, setEditLicencePrix] = useState('');
@@ -134,8 +138,14 @@ export default function SuperAdminPage() {
   const [joinRequests, setJoinRequests] = useState<JoinRequest[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [statutFilter, setStatutFilter] = useState<'all' | 'active' | 'demo' | 'suspended' | 'pending'>('all');
-  const [licenceFilterEnt, setLicenceFilterEnt] = useState<'all' | 'with_active' | 'expiring' | 'expired' | 'no_licence'>('all');
+  const [licenceFilterEnt, setLicenceFilterEnt] = useState<'all' | 'with_active' | 'demo' | 'expiring' | 'expired' | 'no_licence'>('all');
   const [sortBy, setSortBy] = useState<'name' | 'name_desc' | 'members' | 'licence_end'>('name');
+
+  // Super Admin realtime approval sound alert & push test state
+  const [newPendingAlert, setNewPendingAlert] = useState<{ id: number; nom: string } | null>(null);
+  const [pushTestStatus, setPushTestStatus] = useState<{ ok: boolean; text: string } | null>(null);
+  const [testingPush, setTestingPush] = useState(false);
+  const knownPendingIdsRef = useRef<Set<number> | null>(null);
 
   // WhatsApp composer & approved companies broadcast state
   const [whatsAppTarget, setWhatsAppTarget] = useState<EntrepriseRow | null>(null);
@@ -159,15 +169,16 @@ export default function SuperAdminPage() {
   const in30Days = new Date();
   in30Days.setDate(in30Days.getDate() + 30);
 
-  const activeLicences = allLicences.filter((l) => l.statut === 'active');
+  const isLicenceActiveStatus = (s: string) => s === 'active' || s === 'demo';
+  const activeLicences = allLicences.filter((l) => isLicenceActiveStatus(l.statut));
   const expiringLicences = activeLicences.filter((l) => new Date(l.date_fin) <= in30Days && new Date(l.date_fin) >= now);
-  const expiredLicences = allLicences.filter((l) => l.statut === 'expired' || (l.statut === 'active' && new Date(l.date_fin) < now));
+  const expiredLicences = allLicences.filter((l) => l.statut === 'expired' || (isLicenceActiveStatus(l.statut) && new Date(l.date_fin) < now));
   const annualLicences = allLicences.filter((l) => l.type_licence === 'annuelle');
-  const demoLicences = allLicences.filter((l) => l.type_licence === 'demo');
+  const demoLicences = allLicences.filter((l) => l.type_licence === 'demo' || l.statut === 'demo');
   const revokedLicences = allLicences.filter((l) => l.statut === 'revoked');
 
   const entreprisesWithoutActiveLicence = entreprises.filter((e) =>
-    !e.licences.some((l) => l.statut === 'active' && new Date(l.date_fin) >= now)
+    !e.licences.some((l) => isLicenceActiveStatus(l.statut) && new Date(l.date_fin) >= now)
   );
 
   const filteredEntreprises = (() => {
@@ -181,10 +192,11 @@ export default function SuperAdminPage() {
         if (!inName && !inEmail && !inPhone && !inMembers) return false;
       }
       if (statutFilter !== 'all' && e.statut !== statutFilter) return false;
-      if (licenceFilterEnt === 'with_active' && !e.licences.some((l) => l.statut === 'active' && new Date(l.date_fin) >= now)) return false;
-      if (licenceFilterEnt === 'expiring' && !e.licences.some((l) => l.statut === 'active' && new Date(l.date_fin) <= in30Days && new Date(l.date_fin) >= now)) return false;
-      if (licenceFilterEnt === 'expired' && !e.licences.some((l) => l.statut === 'expired' || (l.statut === 'active' && new Date(l.date_fin) < now))) return false;
-      if (licenceFilterEnt === 'no_licence' && e.licences.some((l) => l.statut === 'active' && new Date(l.date_fin) >= now)) return false;
+      if (licenceFilterEnt === 'with_active' && !e.licences.some((l) => isLicenceActiveStatus(l.statut) && new Date(l.date_fin) >= now)) return false;
+      if (licenceFilterEnt === 'demo' && !e.licences.some((l) => l.type_licence === 'demo' || l.statut === 'demo')) return false;
+      if (licenceFilterEnt === 'expiring' && !e.licences.some((l) => isLicenceActiveStatus(l.statut) && new Date(l.date_fin) <= in30Days && new Date(l.date_fin) >= now)) return false;
+      if (licenceFilterEnt === 'expired' && !e.licences.some((l) => l.statut === 'expired' || (isLicenceActiveStatus(l.statut) && new Date(l.date_fin) < now))) return false;
+      if (licenceFilterEnt === 'no_licence' && e.licences.some((l) => isLicenceActiveStatus(l.statut) && new Date(l.date_fin) >= now)) return false;
       return true;
     });
     list = [...list].sort((a, b) => {
@@ -192,8 +204,8 @@ export default function SuperAdminPage() {
       if (sortBy === 'name_desc') return b.nom.localeCompare(a.nom);
       if (sortBy === 'members') return b.members.length - a.members.length;
       if (sortBy === 'licence_end') {
-        const aEnd = a.licences.filter((l) => l.statut === 'active').map((l) => new Date(l.date_fin).getTime()).sort()[0] ?? Infinity;
-        const bEnd = b.licences.filter((l) => l.statut === 'active').map((l) => new Date(l.date_fin).getTime()).sort()[0] ?? Infinity;
+        const aEnd = a.licences.filter((l) => isLicenceActiveStatus(l.statut)).map((l) => new Date(l.date_fin).getTime()).sort()[0] ?? Infinity;
+        const bEnd = b.licences.filter((l) => isLicenceActiveStatus(l.statut)).map((l) => new Date(l.date_fin).getTime()).sort()[0] ?? Infinity;
         return aEnd - bEnd;
       }
       return 0;
@@ -220,6 +232,37 @@ export default function SuperAdminPage() {
     void loadEntreprises(true);
     void loadJoinRequests();
   });
+
+  // Dedicated realtime listener for newly created pending companies -> immediate audible approval alert
+  useEffect(() => {
+    if (!isSuperAdmin || !isOnline) return;
+    const channel = supabase
+      .channel('super-admin-new-entreprise-alerts')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'entreprise' },
+        (payload) => {
+          const created = payload.new as { id?: number; nom?: string; statut?: string } | null;
+          if (!created?.id) return;
+          if (created.statut === 'pending') {
+            if (!knownPendingIdsRef.current) {
+              knownPendingIdsRef.current = new Set([created.id]);
+            } else if (!knownPendingIdsRef.current.has(created.id)) {
+              knownPendingIdsRef.current.add(created.id);
+              playApprovalSound();
+              setNewPendingAlert({ id: created.id, nom: created.nom ?? 'Nouvelle entreprise' });
+            }
+          }
+          void loadEntreprises(true);
+        },
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSuperAdmin, isOnline]);
 
   useEffect(() => {
     if (isSuperAdmin && activeTab === 'usage' && usageStats.length === 0) {
@@ -333,8 +376,93 @@ export default function SuperAdminPage() {
       }),
     );
 
+    const pendingRows = enriched.filter((e) => e.statut === 'pending');
+    if (knownPendingIdsRef.current === null) {
+      knownPendingIdsRef.current = new Set(pendingRows.map((e) => e.id));
+    } else {
+      const newlyPending = pendingRows.find((e) => !knownPendingIdsRef.current!.has(e.id));
+      pendingRows.forEach((e) => knownPendingIdsRef.current!.add(e.id));
+      if (newlyPending) {
+        playApprovalSound();
+        setNewPendingAlert({ id: newlyPending.id, nom: newlyPending.nom });
+      }
+    }
+
     setEntreprises(enriched);
     if (!silent) setLoading(false);
+  }
+
+  function addDaysIso(isoDate: string, days: number): string {
+    const base = isoDate ? new Date(`${isoDate}T00:00:00`) : new Date();
+    if (Number.isNaN(base.getTime())) {
+      const fallback = new Date();
+      fallback.setDate(fallback.getDate() + days);
+      return fallback.toISOString().slice(0, 10);
+    }
+    base.setDate(base.getDate() + days);
+    return base.toISOString().slice(0, 10);
+  }
+
+  function addYearsIso(isoDate: string, years: number): string {
+    const base = isoDate ? new Date(`${isoDate}T00:00:00`) : new Date();
+    if (Number.isNaN(base.getTime())) {
+      const fallback = new Date();
+      fallback.setFullYear(fallback.getFullYear() + years);
+      return fallback.toISOString().slice(0, 10);
+    }
+    base.setFullYear(base.getFullYear() + years);
+    return base.toISOString().slice(0, 10);
+  }
+
+  function buildUniqueLicenceKey(type: 'demo' | 'annuelle'): string {
+    const year = new Date().getFullYear();
+    const bytes = new Uint8Array(4);
+    if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+      crypto.getRandomValues(bytes);
+    } else {
+      for (let i = 0; i < 4; i++) bytes[i] = Math.floor(Math.random() * 256);
+    }
+    const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+    return `${type === 'demo' ? 'DEMO' : 'PRS'}-${year}-${hex}`;
+  }
+
+  async function ensureDemo30DaysLicence(entrepriseId: number, normalizeNewTrial = false): Promise<void> {
+    const today = new Date().toISOString().slice(0, 10);
+    const in30 = addDaysIso(today, 30);
+
+    const { data: existingList } = await supabase
+      .from('licences')
+      .select('id, type_licence, statut, date_debut, date_fin, prix')
+      .eq('entreprise_id', entrepriseId);
+
+    const existing = (existingList as Licence[] | null)?.[0];
+    if (!existing) {
+      await supabase.from('licences').insert({
+        entreprise_id: entrepriseId,
+        cle_licence: buildUniqueLicenceKey('demo'),
+        date_debut: today,
+        date_fin: in30,
+        statut: 'active',
+        type_licence: 'demo',
+        prix: 0,
+        created_by: user?.id ?? null,
+      });
+      notifyRealtimeMutation('licences', true);
+      return;
+    }
+
+    if (normalizeNewTrial && existing.type_licence !== 'demo' && (existing.prix == null || Number(existing.prix) === 0)) {
+      const diffDays = Math.round(
+        (new Date(existing.date_fin).getTime() - new Date(existing.date_debut).getTime()) / (1000 * 60 * 60 * 24),
+      );
+      if (diffDays <= 35) {
+        await supabase
+          .from('licences')
+          .update({ type_licence: 'demo', prix: 0 })
+          .eq('id', existing.id);
+        notifyRealtimeMutation('licences', true);
+      }
+    }
   }
 
   async function handleCreateEntreprise() {
@@ -344,16 +472,36 @@ export default function SuperAdminPage() {
     setError(null);
     setSuccess(null);
 
+    const trimmedNom = entrepriseNom.trim();
+    const trimmedEmail = adminEmail.trim();
+
     try {
       const { error } = await supabase.rpc('create_entreprise_admin', {
-        admin_email: adminEmail.trim(),
-        entreprise_nom: entrepriseNom.trim(),
+        admin_email: trimmedEmail,
+        entreprise_nom: trimmedNom,
       });
 
       if (error) {
         setError(error.message);
       } else {
-        setSuccess(`${lang === 'fr' ? 'Entreprise créée' : 'Company created'}: ${entrepriseNom.trim()} ${lang === 'fr' ? 'avec' : 'with'} ${adminEmail.trim()} ${lang === 'fr' ? 'comme administrateur' : 'as administrator'}`);
+        // Ensure the newly created company immediately has an active 30-day Demo licence
+        const { data: createdEnt } = await supabase
+          .from('entreprise')
+          .select('id')
+          .eq('nom', trimmedNom)
+          .order('id', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (createdEnt?.id) {
+          await ensureDemo30DaysLicence(createdEnt.id as number, true);
+        }
+
+        setSuccess(
+          lang === 'fr'
+            ? `Entreprise créée : ${trimmedNom} (${trimmedEmail}) — Licence Démo 30 jours activée automatiquement`
+            : `Company created: ${trimmedNom} (${trimmedEmail}) — 30-day Demo license activated automatically`,
+        );
         setAdminEmail('');
         setEntrepriseNom('');
         setShowCreateEntreprise(false);
@@ -586,12 +734,22 @@ export default function SuperAdminPage() {
       if (error) {
         setError(error.message);
       } else {
+        // Guarantee a 30-day Demo licence is active when approving a new company
+        await ensureDemo30DaysLicence(entrepriseId, true);
         notifyRealtimeMutation('entreprise', true);
-        setSuccess(lang === 'fr' ? `« ${nom} » validée et activée` : `"${nom}" validated and activated`);
+        if (newPendingAlert?.id === entrepriseId) {
+          setNewPendingAlert(null);
+        }
+        setSuccess(
+          lang === 'fr'
+            ? `« ${nom} » approuvée et activée (Licence Démo 30 jours active)`
+            : `"${nom}" approved and activated (30-day Demo license active)`,
+        );
         const targetEnt = entreprises.find((e) => e.id === entrepriseId);
         setEntreprises((prev) =>
           prev.map((e) => (e.id === entrepriseId ? { ...e, statut: 'active' } : e)),
         );
+        await loadEntreprises(true);
         if (targetEnt) {
           openWhatsAppModal({ ...targetEnt, statut: 'active' }, 'approval', { justApproved: true });
         }
@@ -682,13 +840,33 @@ export default function SuperAdminPage() {
   }
 
   function openLicenceModal(entrepriseId: number) {
+    const ent = entreprises.find((e) => e.id === entrepriseId);
+    const hasExistingDemo = ent?.licences.some((l) => l.type_licence === 'demo');
+    const defaultType: 'demo' | 'annuelle' = hasExistingDemo ? 'annuelle' : 'demo';
     const today = new Date().toISOString().slice(0, 10);
-    const nextYear = new Date();
-    nextYear.setFullYear(nextYear.getFullYear() + 1);
+    setLicenceType(defaultType);
     setLicenceStart(today);
-    setLicenceEnd(nextYear.toISOString().slice(0, 10));
-    setLicencePrix('100000');
+    setLicenceEnd(defaultType === 'demo' ? addDaysIso(today, 30) : addYearsIso(today, 1));
+    setLicencePrix(defaultType === 'demo' ? '0' : '100000');
     setShowLicenceModal(entrepriseId);
+  }
+
+  function handleSelectLicenceType(nextType: 'demo' | 'annuelle') {
+    setLicenceType(nextType);
+    const baseStart = licenceStart || new Date().toISOString().slice(0, 10);
+    if (nextType === 'demo') {
+      setLicenceEnd(addDaysIso(baseStart, 30));
+      setLicencePrix('0');
+    } else {
+      setLicenceEnd(addYearsIso(baseStart, 1));
+      setLicencePrix('100000');
+    }
+  }
+
+  function handleLicenceStartChange(nextStart: string) {
+    setLicenceStart(nextStart);
+    if (!nextStart) return;
+    setLicenceEnd(licenceType === 'demo' ? addDaysIso(nextStart, 30) : addYearsIso(nextStart, 1));
   }
 
   async function handleGenerateLicence(entrepriseId: number) {
@@ -698,18 +876,35 @@ export default function SuperAdminPage() {
     setSuccess(null);
 
     try {
-      const { error } = await supabase.rpc('generate_licence', {
-        p_entreprise_id: entrepriseId,
-        p_date_debut: licenceStart,
-        p_date_fin: licenceEnd,
-        p_prix: parseFloat(licencePrix) || 0,
-      });
+      const newKey = buildUniqueLicenceKey(licenceType);
+      const parsedPrix = parseFloat(licencePrix) || 0;
 
-      if (error) {
-        setError(error.message);
+      // Upsert on entreprise_id to cleanly respect licences_entreprise_id_uniq and persist type_licence ('demo' | 'annuelle')
+      const { error: upsertErr } = await supabase
+        .from('licences')
+        .upsert(
+          {
+            entreprise_id: entrepriseId,
+            cle_licence: newKey,
+            date_debut: licenceStart,
+            date_fin: licenceEnd,
+            statut: 'active',
+            type_licence: licenceType,
+            prix: parsedPrix,
+            created_by: user?.id ?? null,
+          },
+          { onConflict: 'entreprise_id' },
+        );
+
+      if (upsertErr) {
+        setError(upsertErr.message);
       } else {
         notifyRealtimeMutation('licences', true);
-        setSuccess(lang === 'fr' ? 'Licence générée avec succès' : 'License generated successfully');
+        setSuccess(
+          licenceType === 'demo'
+            ? (lang === 'fr' ? 'Licence Démo générée et activée avec succès' : 'Demo license generated and activated')
+            : (lang === 'fr' ? 'Licence Annuelle générée avec succès' : 'Annual license generated successfully'),
+        );
         setShowLicenceModal(null);
         await loadEntreprises(true);
       }
@@ -740,6 +935,7 @@ export default function SuperAdminPage() {
 
   function openEditLicenceModal(lic: Licence) {
     setEditLicence(lic);
+    setEditLicenceType(lic.type_licence === 'demo' ? 'demo' : 'annuelle');
     setEditLicenceStart(lic.date_debut);
     setEditLicenceEnd(lic.date_fin);
     setEditLicencePrix(lic.prix != null ? String(lic.prix) : '');
@@ -755,6 +951,7 @@ export default function SuperAdminPage() {
 
     try {
       const updates: Record<string, unknown> = {
+        type_licence: editLicenceType,
         date_debut: editLicenceStart,
         date_fin: editLicenceEnd,
         statut: editLicenceStatut,
@@ -927,6 +1124,146 @@ export default function SuperAdminPage() {
             className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-sky-500 text-white text-sm font-medium hover:bg-sky-600 transition-colors"
           >
             <Building2 className="w-4 h-4" /> {lang === 'fr' ? 'Créer une entreprise' : 'Create company'}
+          </button>
+        </div>
+      </div>
+
+      {/* Live audible approval alert banner when a new pending company registers */}
+      {newPendingAlert && (
+        <div className="rounded-xl bg-amber-50 border-2 border-amber-300 px-4 py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 rounded-xl bg-amber-500 text-white flex items-center justify-center flex-shrink-0 animate-pulse">
+              <BellRing className="w-5 h-5" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-bold text-amber-900">
+                {lang === 'fr' ? "Nouvelle entreprise en attente d'approbation !" : 'New company awaiting approval!'}
+              </p>
+              <p className="text-xs text-amber-800 truncate">
+                {lang === 'fr'
+                  ? `« ${newPendingAlert.nom} » vient de s'inscrire (Licence Démo 30 jours prête).`
+                  : `"${newPendingAlert.nom}" just signed up (30-day Demo license ready).`}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                void handleValidateEntreprise(newPendingAlert.id, newPendingAlert.nom);
+              }}
+              disabled={submitting || !isOnline}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 transition-colors disabled:opacity-50"
+            >
+              <Check className="w-3.5 h-3.5" />
+              {lang === 'fr' ? 'Approuver maintenant' : 'Approve now'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setNewPendingAlert(null)}
+              className="p-2 rounded-lg text-amber-700 hover:bg-amber-100 transition-colors"
+              aria-label="Fermer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Super Admin Background Push & Sound Notification Status Bar */}
+      <div className="bg-white rounded-xl border border-slate-200/80 px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+        <div className="flex items-center gap-3 min-w-0">
+          <div
+            className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${
+              pushStatus.subscribed && pushStatus.permission === 'granted'
+                ? 'bg-emerald-50 text-emerald-600 border border-emerald-100'
+                : pushStatus.permission === 'denied'
+                  ? 'bg-red-50 text-red-600 border border-red-100'
+                  : 'bg-amber-50 text-amber-600 border border-amber-100'
+            }`}
+          >
+            {pushStatus.permission === 'denied' ? (
+              <BellOff className="w-4 h-4" />
+            ) : (
+              <BellRing className="w-4 h-4" />
+            )}
+          </div>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <p className="text-sm font-semibold text-slate-900">
+                {lang === 'fr' ? "Notifications sonores d'approbation" : 'Approval sound & push alerts'}
+              </p>
+              <span
+                className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold border ${
+                  pushStatus.subscribed && pushStatus.permission === 'granted'
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                    : pushStatus.permission === 'denied'
+                      ? 'bg-red-50 text-red-700 border-red-200'
+                      : 'bg-amber-50 text-amber-700 border-amber-200'
+                }`}
+              >
+                {pushStatus.subscribed && pushStatus.permission === 'granted'
+                  ? (lang === 'fr' ? 'Actives (même appli fermée)' : 'Active (even when closed)')
+                  : pushStatus.permission === 'denied'
+                    ? (lang === 'fr' ? 'Bloquées' : 'Blocked')
+                    : (lang === 'fr' ? 'À activer' : 'Inactive')}
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 mt-0.5">
+              {pushStatus.permission === 'denied'
+                ? (lang === 'fr'
+                    ? "Autorisez les notifications dans les paramètres du navigateur pour être alerté même quand l'appli est fermée."
+                    : 'Allow notifications in browser settings to receive alerts even when the app is closed.')
+                : pushTestStatus
+                  ? pushTestStatus.text
+                  : pushStatus.error
+                    ? pushStatus.error
+                    : (lang === 'fr'
+                        ? "Recevez une alerte sonore instantanée dès qu'une entreprise est créée, même lorsque le logiciel est fermé."
+                        : 'Receive an instant audible alert whenever a company registers, even when the app is closed.')}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {(!pushStatus.subscribed || pushStatus.permission !== 'granted') && pushStatus.supported && pushStatus.permission !== 'denied' && (
+            <button
+              type="button"
+              onClick={async () => {
+                setPushTestStatus(null);
+                const ok = await pushStatus.enableNotifications();
+                if (ok) {
+                  setPushTestStatus({
+                    ok: true,
+                    text: lang === 'fr'
+                      ? 'Notifications Push & sonores activées sur cet appareil (même appli fermée).'
+                      : 'Sound & Push notifications enabled on this device (even when closed).',
+                  });
+                }
+              }}
+              disabled={pushStatus.subscribing || !isOnline}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-sky-600 text-white text-xs font-semibold hover:bg-sky-700 transition-colors disabled:opacity-50"
+            >
+              {pushStatus.subscribing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <BellRing className="w-3.5 h-3.5" />}
+              {lang === 'fr' ? 'Activer les alertes' : 'Enable alerts'}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={async () => {
+              setTestingPush(true);
+              setPushTestStatus(null);
+              try {
+                const res = await pushStatus.sendTestPush(lang);
+                setPushTestStatus({ ok: res.ok, text: res.message });
+              } finally {
+                setTestingPush(false);
+              }
+            }}
+            disabled={testingPush || !isOnline}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 text-slate-700 text-xs font-medium hover:bg-slate-100 transition-colors disabled:opacity-50"
+          >
+            {testingPush ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Volume2 className="w-3.5 h-3.5 text-sky-600" />}
+            {lang === 'fr' ? 'Tester son & push' : 'Test sound & push'}
           </button>
         </div>
       </div>
@@ -1275,8 +1612,8 @@ export default function SuperAdminPage() {
                             <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${getLicenceStatusBadge(daysLeft < 0 ? 'expired' : lic.statut)}`}>
                               {daysLeft < 0 ? (lang === 'fr' ? 'Expirée' : 'Expired') : getLicenceStatusLabel(lic.statut)}
                             </span>
-                            <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${lic.type_licence === 'demo' ? 'bg-slate-100 text-slate-600 border-slate-200' : 'bg-sky-100 text-sky-700 border-sky-200'}`}>
-                              {lic.type_licence === 'demo' ? 'Demo' : (lang === 'fr' ? 'Annuelle' : 'Annual')}
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${lic.type_licence === 'demo' ? 'bg-sky-100 text-sky-700 border-sky-200' : 'bg-violet-100 text-violet-700 border-violet-200'}`}>
+                              {lic.type_licence === 'demo' ? (lang === 'fr' ? 'Démo' : 'Demo') : (lang === 'fr' ? 'Annuelle' : 'Annual')}
                             </span>
                           </div>
                           <div className="flex items-center gap-3 mt-1 flex-wrap">
@@ -1540,11 +1877,12 @@ export default function SuperAdminPage() {
             </div>
             <select
               value={licenceFilterEnt}
-              onChange={(e) => setLicenceFilterEnt(e.target.value as 'all' | 'with_active' | 'expiring' | 'expired' | 'no_licence')}
+              onChange={(e) => setLicenceFilterEnt(e.target.value as 'all' | 'with_active' | 'demo' | 'expiring' | 'expired' | 'no_licence')}
               className="px-3 py-2.5 rounded-lg border border-slate-200 text-sm font-medium text-slate-600 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent bg-white"
             >
               <option value="all">{lang === 'fr' ? 'Toutes licences' : 'All licenses'}</option>
               <option value="with_active">{lang === 'fr' ? 'Licence active' : 'Active license'}</option>
+              <option value="demo">{lang === 'fr' ? 'Licence Démo' : 'Demo license'}</option>
               <option value="expiring">{lang === 'fr' ? 'Expirent < 30j' : 'Expiring < 30d'}</option>
               <option value="expired">{lang === 'fr' ? 'Licence expirée' : 'Expired license'}</option>
               <option value="no_licence">{lang === 'fr' ? 'Sans licence' : 'No license'}</option>
@@ -1859,6 +2197,14 @@ export default function SuperAdminPage() {
                                 <div className="flex items-center gap-1 flex-shrink-0 ml-2">
                                   <button
                                     type="button"
+                                    onClick={() => openEditLicenceModal(lic)}
+                                    className="p-2 rounded-lg text-slate-400 hover:text-sky-600 hover:bg-sky-50 transition-colors"
+                                    title={lang === 'fr' ? 'Modifier cette licence' : 'Edit this license'}
+                                  >
+                                    <Pencil className="w-4 h-4" />
+                                  </button>
+                                  <button
+                                    type="button"
                                     onClick={() => openWhatsAppModal(e, 'licence', { licence: lic })}
                                     className="p-2 rounded-lg text-green-600 hover:bg-green-50 transition-colors"
                                     title={lang === 'fr' ? 'Envoyer cette licence par WhatsApp' : 'Send this license via WhatsApp'}
@@ -1911,13 +2257,44 @@ export default function SuperAdminPage() {
             <p className="text-xs text-slate-500">
               {entreprises.find((e) => e.id === showLicenceModal)?.nom} — {lang === 'fr' ? 'Une clé de licence unique sera générée automatiquement.' : 'A unique license key will be generated automatically.'}
             </p>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                {lang === 'fr' ? 'Type de licence' : 'License type'}
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleSelectLicenceType('demo')}
+                  className={`px-3 py-2.5 rounded-lg border text-sm font-medium transition-all text-left ${
+                    licenceType === 'demo'
+                      ? 'border-sky-500 bg-sky-50 text-sky-700 ring-1 ring-sky-200'
+                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  <div className="font-semibold">{lang === 'fr' ? 'Démo' : 'Demo'}</div>
+                  <div className="text-[11px] opacity-75">{lang === 'fr' ? '30 jours · 0 FCFA' : '30 days · 0 FCFA'}</div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSelectLicenceType('annuelle')}
+                  className={`px-3 py-2.5 rounded-lg border text-sm font-medium transition-all text-left ${
+                    licenceType === 'annuelle'
+                      ? 'border-violet-500 bg-violet-50 text-violet-700 ring-1 ring-violet-200'
+                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  <div className="font-semibold">{lang === 'fr' ? 'Annuelle' : 'Annual'}</div>
+                  <div className="text-[11px] opacity-75">{lang === 'fr' ? '1 an · 100 000 FCFA' : '1 year · 100,000 FCFA'}</div>
+                </button>
+              </div>
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1.5">{lang === 'fr' ? 'Date de début' : 'Start date'}</label>
                 <input
                   type="date"
                   value={licenceStart}
-                  onChange={(e) => setLicenceStart(e.target.value)}
+                  onChange={(e) => handleLicenceStartChange(e.target.value)}
                   className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent"
                 />
               </div>
@@ -1941,7 +2318,11 @@ export default function SuperAdminPage() {
                 step="1000"
                 className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent"
               />
-              <p className="text-xs text-slate-400 mt-1">{lang === 'fr' ? 'Par défaut : 100 000 FCFA pour les licences annuelles' : 'Default: 100,000 FCFA for annual licenses'}</p>
+              <p className="text-xs text-slate-400 mt-1">
+                {licenceType === 'demo'
+                  ? (lang === 'fr' ? 'Licence Démo : 0 FCFA pour 30 jours (modifiable)' : 'Demo license: 0 FCFA for 30 days (editable)')
+                  : (lang === 'fr' ? 'Par défaut : 100 000 FCFA pour les licences annuelles' : 'Default: 100,000 FCFA for annual licenses')}
+              </p>
             </div>
             <div className="flex gap-3 pt-2">
               <button
@@ -1956,7 +2337,11 @@ export default function SuperAdminPage() {
                 className="flex-1 px-4 py-2.5 rounded-lg bg-sky-500 text-white text-sm font-medium hover:bg-sky-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
                 {generatingLicence ? <Loader2 className="w-4 h-4 animate-spin" /> : <KeyRound className="w-4 h-4" />}
-                {generatingLicence ? (lang === 'fr' ? 'Génération…' : 'Generating…') : (lang === 'fr' ? 'Générer la licence' : 'Generate license')}
+                {generatingLicence
+                  ? (lang === 'fr' ? 'Génération…' : 'Generating…')
+                  : licenceType === 'demo'
+                    ? (lang === 'fr' ? 'Activer licence Démo' : 'Activate Demo license')
+                    : (lang === 'fr' ? 'Générer la licence' : 'Generate license')}
               </button>
             </div>
           </div>
@@ -1977,6 +2362,43 @@ export default function SuperAdminPage() {
             <div className="flex items-center gap-2 bg-slate-50 rounded-lg p-3">
               <KeyRound className="w-4 h-4 text-slate-400 flex-shrink-0" />
               <code className="text-xs font-mono font-semibold text-slate-700 truncate">{editLicence.cle_licence}</code>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                {lang === 'fr' ? 'Type de licence' : 'License type'}
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditLicenceType('demo');
+                    if (editLicenceStart) setEditLicenceEnd(addDaysIso(editLicenceStart, 30));
+                    setEditLicencePrix('0');
+                  }}
+                  className={`px-3 py-2 rounded-lg border text-sm font-medium transition-all ${
+                    editLicenceType === 'demo'
+                      ? 'border-sky-500 bg-sky-50 text-sky-700 ring-1 ring-sky-200'
+                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  {lang === 'fr' ? 'Démo (30 jours)' : 'Demo (30 days)'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditLicenceType('annuelle');
+                    if (editLicenceStart) setEditLicenceEnd(addYearsIso(editLicenceStart, 1));
+                    if (!editLicencePrix || editLicencePrix === '0') setEditLicencePrix('100000');
+                  }}
+                  className={`px-3 py-2 rounded-lg border text-sm font-medium transition-all ${
+                    editLicenceType === 'annuelle'
+                      ? 'border-violet-500 bg-violet-50 text-violet-700 ring-1 ring-violet-200'
+                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  {lang === 'fr' ? 'Annuelle (1 an)' : 'Annual (1 year)'}
+                </button>
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>

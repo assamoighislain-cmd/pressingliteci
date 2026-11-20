@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth';
 
@@ -16,9 +16,10 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
   return outputArray;
 }
 
-function playOrderSound() {
+export function playOrderSound() {
   try {
-    const ctx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+    const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    const ctx = new AudioCtx();
     const now = ctx.currentTime;
     const notes = [659.25, 783.99, 987.77, 1318.51];
     notes.forEach((freq, i) => {
@@ -40,87 +41,296 @@ function playOrderSound() {
   }
 }
 
-export function usePushNotifications() {
-  const { tenantId, isSuperAdmin } = useAuth();
-  const subscribedRef = useRef(false);
+/**
+ * Distinctive two-phrase ascending bell chime for Super Admin company approval alerts.
+ */
+export function playApprovalSound() {
+  try {
+    const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    const ctx = new AudioCtx();
+    const now = ctx.currentTime;
+    // Two energetic ascending phrases (C5-E5-G5-C6, pause, E5-G5-C6)
+    const sequence: Array<{ freq: number; offset: number; duration: number; peak: number }> = [
+      { freq: 523.25, offset: 0.0, duration: 0.22, peak: 0.28 },
+      { freq: 659.25, offset: 0.14, duration: 0.22, peak: 0.28 },
+      { freq: 783.99, offset: 0.28, duration: 0.24, peak: 0.30 },
+      { freq: 1046.5, offset: 0.42, duration: 0.38, peak: 0.34 },
+      { freq: 783.99, offset: 0.88, duration: 0.22, peak: 0.28 },
+      { freq: 1046.5, offset: 1.04, duration: 0.48, peak: 0.36 },
+    ];
 
+    sequence.forEach(({ freq, offset, duration, peak }) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.frequency.value = freq;
+      osc.type = 'sine';
+      const start = now + offset;
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.linearRampToValueAtTime(peak, start + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0008, start + duration);
+      osc.start(start);
+      osc.stop(start + duration + 0.04);
+    });
+  } catch {
+    // AudioContext not available
+  }
+}
+
+export interface PushNotificationStatus {
+  supported: boolean;
+  permission: NotificationPermission | 'unsupported';
+  subscribed: boolean;
+  subscribing: boolean;
+  error: string | null;
+  enableNotifications: () => Promise<boolean>;
+  sendTestPush: (lang?: string) => Promise<{ ok: boolean; message: string }>;
+}
+
+function isPushSupported(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    typeof navigator !== 'undefined' &&
+    'serviceWorker' in navigator &&
+    'PushManager' in window &&
+    'Notification' in window
+  );
+}
+
+async function registerPushSubscriptionForTenant(
+  pushTenantId: string,
+  requestPermission: boolean,
+): Promise<{ subscribed: boolean; permission: NotificationPermission; error?: string }> {
+  if (!isPushSupported()) {
+    return { subscribed: false, permission: 'denied', error: 'Notifications Push non supportées sur ce navigateur.' };
+  }
+  if (!navigator.onLine) {
+    return { subscribed: false, permission: Notification.permission, error: 'Connexion Internet requise.' };
+  }
+
+  let permission = Notification.permission;
+  if (permission === 'default' && requestPermission) {
+    permission = await Notification.requestPermission();
+  }
+  if (permission !== 'granted') {
+    return {
+      subscribed: false,
+      permission,
+      error:
+        permission === 'denied'
+          ? 'Notifications bloquées dans les paramètres du navigateur.'
+          : 'Autorisation de notification non accordée.',
+    };
+  }
+
+  // IMPORTANT: Use the active Workbox PWA Service Worker (which imports bg-sync-sw.js).
+  // Never register a separate SW at scope '/' or it will evict Workbox offline caching!
+  const reg = await navigator.serviceWorker.ready;
+  let subscription = await reg.pushManager.getSubscription();
+
+  if (!subscription) {
+    subscription = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+    });
+  }
+
+  const subData = subscription.toJSON();
+  const { endpoint, keys } = subData as { endpoint?: string; keys?: { p256dh?: string; auth?: string } };
+  if (!endpoint || !keys?.p256dh || !keys?.auth) {
+    return { subscribed: false, permission, error: 'Abonnement Push incomplet.' };
+  }
+
+  const { data: sessionData } = await supabase.auth.getSession();
+  const accessToken = sessionData.session?.access_token;
+  if (!accessToken) {
+    return { subscribed: false, permission, error: 'Session expirée.' };
+  }
+
+  const { error: upsertError } = await supabase.from('push_subscriptions').upsert(
+    {
+      endpoint,
+      p256dh: keys.p256dh,
+      auth: keys.auth,
+      tenant_id: pushTenantId,
+    },
+    { onConflict: 'endpoint' },
+  );
+
+  if (upsertError) {
+    return { subscribed: false, permission, error: upsertError.message };
+  }
+
+  return { subscribed: true, permission };
+}
+
+export function usePushNotifications(): PushNotificationStatus {
+  const { tenantId, isSuperAdmin } = useAuth();
   const pushTenantId = isSuperAdmin ? 'super_admin' : tenantId;
 
-  useEffect(() => {
-    if (!pushTenantId) return;
-    if (subscribedRef.current) return;
+  const supported = isPushSupported();
+  const [permission, setPermission] = useState<NotificationPermission | 'unsupported'>(() =>
+    supported ? Notification.permission : 'unsupported',
+  );
+  const [subscribed, setSubscribed] = useState(false);
+  const [subscribing, setSubscribing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const subscribedTenantRef = useRef<string | null>(null);
 
-    async function subscribeToPush() {
-      if (typeof navigator === 'undefined' || !navigator.onLine) return;
-      if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return;
-
+  const syncSubscription = useCallback(
+    async (requestPermission: boolean): Promise<boolean> => {
+      if (!pushTenantId || !supported) return false;
+      setSubscribing(true);
+      setError(null);
       try {
-        const permission =
-          Notification.permission === 'default'
-            ? await Notification.requestPermission()
-            : Notification.permission;
-        if (permission !== 'granted') return;
-
-        // IMPORTANT: Use the active Workbox PWA Service Worker (which imports bg-sync-sw.js).
-        // Never register a separate SW at scope '/' or it will evict Workbox offline caching!
-        const reg = await navigator.serviceWorker.ready;
-        let subscription = await reg.pushManager.getSubscription();
-
-        if (!subscription) {
-          subscription = await reg.pushManager.subscribe({
-            userVisibleOnly: true,
-            applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
-          });
+        const result = await registerPushSubscriptionForTenant(pushTenantId, requestPermission);
+        setPermission(result.permission);
+        setSubscribed(result.subscribed);
+        if (result.subscribed) {
+          subscribedTenantRef.current = pushTenantId;
         }
-
-        const subData = subscription.toJSON();
-        const { endpoint, keys } = subData as { endpoint: string; keys: { p256dh: string; auth: string } };
-        if (!endpoint || !keys?.p256dh || !keys?.auth) return;
-
-        const { data: sessionData } = await supabase.auth.getSession();
-        const accessToken = sessionData.session?.access_token;
-        if (!accessToken) return;
-
-        await supabase.from('push_subscriptions').upsert(
-          {
-            endpoint,
-            p256dh: keys.p256dh,
-            auth: keys.auth,
-            tenant_id: pushTenantId,
-          },
-          { onConflict: 'endpoint' },
-        );
-
-        subscribedRef.current = true;
-      } catch {
-        // Push subscription failed — not critical
+        if (result.error && requestPermission) {
+          setError(result.error);
+        }
+        return result.subscribed;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Erreur abonnement Push';
+        if (requestPermission) setError(msg);
+        return false;
+      } finally {
+        setSubscribing(false);
       }
+    },
+    [pushTenantId, supported],
+  );
+
+  useEffect(() => {
+    if (!pushTenantId || !supported) {
+      setSubscribed(false);
+      subscribedTenantRef.current = null;
+      return;
     }
 
-    void subscribeToPush();
+    // Attempt automatic subscription on login/mount (if already granted, refreshes silently; if default, tries once)
+    const runSync = async () => {
+      if (subscribedTenantRef.current === pushTenantId) return;
+      await syncSubscription(Notification.permission === 'default');
+    };
+
+    void runSync();
 
     const handleOnline = () => {
-      if (!subscribedRef.current) {
-        void subscribeToPush();
+      if (subscribedTenantRef.current !== pushTenantId) {
+        void syncSubscription(false);
       }
     };
     window.addEventListener('online', handleOnline);
     return () => window.removeEventListener('online', handleOnline);
-  }, [pushTenantId]);
+  }, [pushTenantId, supported, syncSubscription]);
 
-  // Listen for messages from service worker to play sound when push arrives
+  // Listen for messages from service worker to play sound when push arrives while app is open
   useEffect(() => {
     function handleMessage(event: MessageEvent) {
       if (event.data?.type === 'PLAY_NOTIFICATION_SOUND') {
-        playOrderSound();
+        if (event.data?.soundType === 'new_entreprise_approval') {
+          playApprovalSound();
+        } else {
+          playOrderSound();
+        }
       }
     }
 
-    if ('serviceWorker' in navigator) {
+    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
       navigator.serviceWorker.addEventListener('message', handleMessage);
       return () => {
         navigator.serviceWorker.removeEventListener('message', handleMessage);
       };
     }
   }, []);
+
+  const enableNotifications = useCallback(async (): Promise<boolean> => {
+    const ok = await syncSubscription(true);
+    if (ok) {
+      playApprovalSound();
+    }
+    return ok;
+  }, [syncSubscription]);
+
+  const sendTestPush = useCallback(
+    async (lang = 'fr'): Promise<{ ok: boolean; message: string }> => {
+      if (!pushTenantId) {
+        return {
+          ok: false,
+          message: lang === 'fr' ? 'Compte non connecté.' : 'Account not signed in.',
+        };
+      }
+      playApprovalSound();
+      if (!subscribed) {
+        const enabled = await syncSubscription(true);
+        if (!enabled) {
+          return {
+            ok: false,
+            message:
+              lang === 'fr'
+                ? 'Activez d’abord l’autorisation des notifications dans le navigateur.'
+                : 'Please allow browser notifications first.',
+          };
+        }
+      }
+
+      try {
+        const { data, error: fnError } = await supabase.functions.invoke('send-push-notification', {
+          body: {
+            tenant_id: pushTenantId,
+            payload: {
+              title: lang === 'fr' ? 'Test alerte approbation PressingLite' : 'PressingLite approval alert test',
+              body:
+                lang === 'fr'
+                  ? 'Les notifications sonores en arrière-plan (même appli fermée) sont bien actives !'
+                  : 'Background sound notifications (even when closed) are active!',
+              icon: '/pwa-192x192.png',
+              badge: '/pwa-192x192.png',
+              tag: `test-push-${Date.now()}`,
+              renotify: true,
+              requireInteraction: false,
+              silent: false,
+              vibrate: [300, 150, 300],
+              data: {
+                url: '/#/super-admin',
+                type: 'new_entreprise_approval',
+              },
+            },
+          },
+        });
+        if (fnError) {
+          return { ok: false, message: fnError.message };
+        }
+        const sentCount = (data as { sent?: number } | null)?.sent ?? 0;
+        return {
+          ok: true,
+          message:
+            lang === 'fr'
+              ? `Notification sonore & Push envoyée (${sentCount} appareil${sentCount > 1 ? 's' : ''}).`
+              : `Sound & Push notification sent (${sentCount} device${sentCount > 1 ? 's' : ''}).`,
+        };
+      } catch (err) {
+        return {
+          ok: false,
+          message: err instanceof Error ? err.message : (lang === 'fr' ? 'Échec de l’envoi Push' : 'Push send failed'),
+        };
+      }
+    },
+    [pushTenantId, subscribed, syncSubscription],
+  );
+
+  return {
+    supported,
+    permission,
+    subscribed,
+    subscribing,
+    error,
+    enableNotifications,
+    sendTestPush,
+  };
 }
