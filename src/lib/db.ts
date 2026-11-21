@@ -26,6 +26,8 @@ import {
   getBoutiqueDepotStartSeq,
   setBoutiqueDepotStartSeq,
   syncBoutiqueDepotStartSeqs,
+  setBoutiqueGeo,
+  hydrateBoutiquesWithGeo,
   getDefaultBoutiqueId,
   getCompanyDepotStartSeq,
   setCompanyDepotStartSeq,
@@ -404,7 +406,7 @@ export async function insert<T = Record<string, unknown>>(config: InsertConfig):
     let { data, error } = await runInsert(currentRows);
 
     // Auto-recover if PostgREST reports a column missing from schema cache (PGRST204)
-    for (let retry = 0; retry < 2 && error; retry++) {
+    for (let retry = 0; retry < 5 && error; retry++) {
       const missingCol = extractMissingSchemaColumn(error.message);
       if (!missingCol || !currentRows.some((r) => missingCol in r)) break;
       currentRows = currentRows.map((r) => stripColumnFromRow(r, missingCol));
@@ -462,7 +464,7 @@ export async function update<T = Record<string, unknown>>(config: UpdateConfig):
     };
 
     let { data, error } = await runUpdate(cleanValues);
-    for (let retry = 0; retry < 2 && error; retry++) {
+    for (let retry = 0; retry < 5 && error; retry++) {
       const missingCol = extractMissingSchemaColumn(error.message);
       if (!missingCol || !(missingCol in cleanValues)) break;
       cleanValues = stripColumnFromRow(cleanValues, missingCol);
@@ -1876,7 +1878,7 @@ export const db = {
       return mapped;
     }, []);
     syncBoutiqueDepotStartSeqs(list);
-    return list;
+    return hydrateBoutiquesWithGeo(list);
   },
 
   async insertBoutique(row: {
@@ -1886,6 +1888,8 @@ export const db = {
     telephone?: string | null;
     depot_start_number?: number | null;
     depot_start_year?: number | null;
+    latitude?: number | null;
+    longitude?: number | null;
   }): Promise<{ data: Boutique | null; error: string | null }> {
     let tId = await getTenantId();
     if (!tId) {
@@ -1903,6 +1907,17 @@ export const db = {
       row.depot_start_number != null && Number.isFinite(row.depot_start_number) && row.depot_start_number >= 1
         ? Math.max(1, Math.floor(row.depot_start_number))
         : null;
+    const hasValidGeo =
+      row.latitude != null &&
+      row.longitude != null &&
+      Number.isFinite(row.latitude) &&
+      Number.isFinite(row.longitude) &&
+      row.latitude >= -90 &&
+      row.latitude <= 90 &&
+      row.longitude >= -180 &&
+      row.longitude <= 180;
+    const normalizedLat = hasValidGeo ? Math.round(row.latitude! * 1_000_000) / 1_000_000 : null;
+    const normalizedLng = hasValidGeo ? Math.round(row.longitude! * 1_000_000) / 1_000_000 : null;
 
     let insertPayload: Record<string, unknown> = {
       nom: row.nom,
@@ -1913,6 +1928,9 @@ export const db = {
       ...(normalizedStart !== null
         ? { depot_start_number: normalizedStart, depot_start_year: targetYear }
         : {}),
+      ...(normalizedLat !== null && normalizedLng !== null
+        ? { latitude: normalizedLat, longitude: normalizedLng }
+        : {}),
     };
 
     let { data, error } = await supabase
@@ -1921,7 +1939,7 @@ export const db = {
       .select('*')
       .single();
 
-    for (let retry = 0; retry < 3 && error; retry++) {
+    for (let retry = 0; retry < 5 && error; retry++) {
       const missingCol = extractMissingSchemaColumn(error.message);
       if (!missingCol || !(missingCol in insertPayload)) break;
       insertPayload = stripColumnFromRow(insertPayload, missingCol);
@@ -1937,7 +1955,19 @@ export const db = {
     if (created?.id && normalizedStart !== null) {
       setBoutiqueDepotStartSeq(created.id, normalizedStart, targetYear);
     }
-    return { data: created, error: null };
+    if (created?.id && normalizedLat !== null && normalizedLng !== null) {
+      setBoutiqueGeo(created.id, normalizedLat, normalizedLng);
+    }
+    return {
+      data: created
+        ? {
+            ...created,
+            latitude: created.latitude ?? normalizedLat,
+            longitude: created.longitude ?? normalizedLng,
+          }
+        : null,
+      error: null,
+    };
   },
 
   async updateBoutique(
@@ -1950,6 +1980,8 @@ export const db = {
       is_default?: boolean;
       depot_start_number?: number | null;
       depot_start_year?: number | null;
+      latitude?: number | null;
+      longitude?: number | null;
     },
   ): Promise<string | null> {
     const targetYear =
@@ -1961,6 +1993,23 @@ export const db = {
       ...values,
       updated_at: new Date().toISOString(),
     };
+
+    if ('latitude' in values || 'longitude' in values) {
+      const hasValidGeo =
+        values.latitude != null &&
+        values.longitude != null &&
+        Number.isFinite(values.latitude) &&
+        Number.isFinite(values.longitude) &&
+        values.latitude >= -90 &&
+        values.latitude <= 90 &&
+        values.longitude >= -180 &&
+        values.longitude <= 180;
+      const normalizedLat = hasValidGeo ? Math.round(values.latitude! * 1_000_000) / 1_000_000 : null;
+      const normalizedLng = hasValidGeo ? Math.round(values.longitude! * 1_000_000) / 1_000_000 : null;
+      payload.latitude = normalizedLat;
+      payload.longitude = normalizedLng;
+      setBoutiqueGeo(id, normalizedLat, normalizedLng);
+    }
 
     if ('depot_start_number' in values) {
       const normalizedStart =

@@ -185,6 +185,8 @@ export interface Boutique {
   slug: string | null;
   depot_start_number?: number | null;
   depot_start_year?: number | null;
+  latitude?: number | null;
+  longitude?: number | null;
   created_at: string;
   updated_at: string;
 }

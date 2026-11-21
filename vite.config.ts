@@ -1,7 +1,7 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import { defineConfig, type Plugin } from 'vite';
+import { defineConfig, loadEnv, type Plugin } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
 const BUILD_ID =
@@ -33,10 +33,19 @@ function buildVersionPlugin(buildId: string): Plugin {
   };
 }
 
-export default defineConfig(() => {
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '');
+  const googleMapsApiKey =
+    env.VITE_GOOGLE_MAPS_API_KEY ||
+    env.GOOGLE_MAPS_API_KEY ||
+    process.env.VITE_GOOGLE_MAPS_API_KEY ||
+    process.env.GOOGLE_MAPS_API_KEY ||
+    '';
+
   return {
     define: {
       __APP_BUILD_ID__: JSON.stringify(BUILD_ID),
+      __GOOGLE_MAPS_API_KEY__: JSON.stringify(googleMapsApiKey),
     },
     plugins: [
       react(),

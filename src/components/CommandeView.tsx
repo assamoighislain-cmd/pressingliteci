@@ -34,6 +34,9 @@ export default function CommandeView() {
   const [editPickupRequested, setEditPickupRequested] = useState(false);
   const [editPickupAddress, setEditPickupAddress] = useState('');
   const [editPickupDay, setEditPickupDay] = useState('');
+  const [editDeliveryRequested, setEditDeliveryRequested] = useState(false);
+  const [editDeliveryAddress, setEditDeliveryAddress] = useState('');
+  const [editDeliveryDay, setEditDeliveryDay] = useState('');
   const [editTypeTraitementId, setEditTypeTraitementId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [convertError, setConvertError] = useState<string | null>(null);
@@ -87,18 +90,23 @@ export default function CommandeView() {
 
       const avance = parseFloat(paymentAmount) || 0;
       const modeValue = paymentMode || null;
+      const depotTotal = Number(paymentDepot.total) || 0;
       const updatePayload: Record<string, unknown> = {
         statut: 'EN_COURS',
         date_depot: now.toISOString(),
         numero: numeroResult.numero,
       };
-      if (modeValue || avance > 0) {
-        updatePayload.mode_reglement = modeValue;
-        updatePayload.avance_amount = avance > 0 ? avance : null;
+      if (modeValue && avance > 0) {
+        updatePayload.mode_reglement = avance >= depotTotal ? 'PAYER_DEPOT' : 'AVANCE';
+        updatePayload.avance_amount = Math.min(avance, depotTotal);
       }
 
       const updateErr = await db.updateDepot(paymentDepot.id, updatePayload);
       if (updateErr) throw new Error(updateErr);
+
+      if (modeValue && avance > 0) {
+        await db.insertAvance(paymentDepot.id, Math.min(avance, depotTotal), modeValue);
+      }
 
       notifyRealtimeMutation('depots');
       closePaymentModal();
@@ -128,6 +136,9 @@ export default function CommandeView() {
     setEditPickupRequested(depot.pickup_requested ?? false);
     setEditPickupAddress(depot.pickup_address ?? '');
     setEditPickupDay(depot.pickup_day ?? '');
+    setEditDeliveryRequested(depot.delivery_requested ?? false);
+    setEditDeliveryAddress(depot.delivery_address ?? '');
+    setEditDeliveryDay(depot.delivery_day ?? '');
     setEditTypeTraitementId(depot.type_traitement_id);
   }
 
@@ -157,10 +168,13 @@ export default function CommandeView() {
 
   function computeEditTotal(): number {
     const coef = getCoefficientById(editTypeTraitementId, typesTraitement);
-    return editArticles.reduce((sum, a) => {
+    const articlesSum = editArticles.reduce((sum, a) => {
       const prixTrait = a.prix_unitaire * coef;
       return sum + prixTrait * a.quantite;
     }, 0);
+    const pickupFee = editPickupRequested ? (Number(editingDepot?.frais_collecte) || 0) : 0;
+    const deliveryFee = editDeliveryRequested ? (Number(editingDepot?.frais_livraison) || 0) : 0;
+    return articlesSum + pickupFee + deliveryFee;
   }
 
   async function handleSaveEdit() {
@@ -181,6 +195,11 @@ export default function CommandeView() {
           pickup_requested: editPickupRequested,
           pickup_address: editPickupRequested ? editPickupAddress || null : null,
           pickup_day: editPickupRequested ? editPickupDay || null : null,
+          frais_collecte: editPickupRequested ? (Number(editingDepot.frais_collecte) || 0) : 0,
+          delivery_requested: editDeliveryRequested,
+          delivery_address: editDeliveryRequested ? editDeliveryAddress || null : null,
+          delivery_day: editDeliveryRequested ? editDeliveryDay || null : null,
+          frais_livraison: editDeliveryRequested ? (Number(editingDepot.frais_livraison) || 0) : 0,
           type_traitement_id: editTypeTraitementId,
           traitement: traitementLibelle,
           coefficient: coef,
@@ -327,6 +346,12 @@ export default function CommandeView() {
                         {lang === 'fr' ? 'Collecte' : 'Pickup'}
                       </span>
                     )}
+                    {depot.delivery_requested && (
+                      <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">
+                        <Home className="w-3 h-3" />
+                        {lang === 'fr' ? 'Livraison' : 'Delivery'}
+                      </span>
+                    )}
                   </div>
                   <p className="text-sm text-slate-700 mt-1">{depot.client?.nom ?? '—'}</p>
                   <p className="text-xs text-slate-400 mt-0.5">
@@ -340,30 +365,69 @@ export default function CommandeView() {
                     </p>
                   )}
                   {depot.pickup_requested && (
-                    <div className="mt-2 p-2 rounded-lg bg-sky-50 border border-sky-100 space-y-1">
+                    <div className="mt-2 p-2 rounded-lg bg-amber-50/70 border border-amber-100 space-y-1">
+                      <p className="text-[11px] font-semibold text-amber-800">
+                        {lang === 'fr' ? 'Collecte à domicile' : 'Home pickup'}
+                        {Number(depot.frais_collecte || 0) > 0 && ` · ${formatPrice(Number(depot.frais_collecte))}`}
+                      </p>
                       {depot.pickup_day && (
-                        <p className="text-xs text-sky-700 flex items-center gap-1">
+                        <p className="text-xs text-amber-700 flex items-center gap-1">
                           <CalendarClock className="w-3 h-3" />
                           <span className="capitalize">{depot.pickup_day}</span>
                         </p>
                       )}
                       {depot.pickup_address && (
-                        <p className="text-xs text-sky-700 flex items-start gap-1">
+                        <p className="text-xs text-amber-800 flex items-start gap-1">
                           <MapPin className="w-3 h-3 mt-0.5 flex-shrink-0" />
                           {depot.pickup_address}
                         </p>
                       )}
                       {depot.pickup_latitude !== null && depot.pickup_longitude !== null && (
                         <a
-                          href={`https://www.google.com/maps?q=${depot.pickup_latitude},${depot.pickup_longitude}`}
+                          href={`https://www.google.com/maps/dir/?api=1&destination=${depot.pickup_latitude},${depot.pickup_longitude}`}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-xs text-sky-600 hover:text-sky-700 underline"
+                          className="text-xs text-amber-700 hover:text-amber-800 underline"
                         >
                           {depot.pickup_latitude.toFixed(5)}, {depot.pickup_longitude.toFixed(5)}
                         </a>
                       )}
                     </div>
+                  )}
+                  {depot.delivery_requested && (
+                    <div className="mt-2 p-2 rounded-lg bg-sky-50 border border-sky-100 space-y-1">
+                      <p className="text-[11px] font-semibold text-sky-800">
+                        {lang === 'fr' ? 'Livraison à domicile' : 'Home delivery'}
+                        {Number(depot.frais_livraison || 0) > 0 && ` · ${formatPrice(Number(depot.frais_livraison))}`}
+                      </p>
+                      {depot.delivery_day && (
+                        <p className="text-xs text-sky-700 flex items-center gap-1">
+                          <CalendarClock className="w-3 h-3" />
+                          <span className="capitalize">{depot.delivery_day}</span>
+                        </p>
+                      )}
+                      {depot.delivery_address && (
+                        <p className="text-xs text-sky-800 flex items-start gap-1">
+                          <MapPin className="w-3 h-3 mt-0.5 flex-shrink-0" />
+                          {depot.delivery_address}
+                        </p>
+                      )}
+                      {depot.delivery_latitude !== null && depot.delivery_longitude !== null && (
+                        <a
+                          href={`https://www.google.com/maps/dir/?api=1&destination=${depot.delivery_latitude},${depot.delivery_longitude}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs text-sky-600 hover:text-sky-700 underline"
+                        >
+                          {depot.delivery_latitude.toFixed(5)}, {depot.delivery_longitude.toFixed(5)}
+                        </a>
+                      )}
+                    </div>
+                  )}
+                  {depot.notes && (
+                    <p className="mt-2 text-xs text-slate-500 italic bg-slate-50 rounded-lg px-2.5 py-1.5 border border-slate-100">
+                      {depot.notes}
+                    </p>
                   )}
                 </div>
                 <div className="text-right flex-shrink-0">
@@ -503,11 +567,13 @@ export default function CommandeView() {
               </button>
               <button
                 onClick={handleConvert}
-                disabled={!!convertingId || !paymentMode}
+                disabled={!!convertingId}
                 className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-emerald-500 text-white text-sm font-medium hover:bg-emerald-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {convertingId ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-                {lang === 'fr' ? 'Valider la commande' : 'Validate order'}
+                {paymentMode && (parseFloat(paymentAmount) || 0) > 0
+                  ? (lang === 'fr' ? 'Valider & encaisser' : 'Validate & collect')
+                  : (lang === 'fr' ? 'Convertir (paiement à la livraison/retrait)' : 'Convert (pay on delivery/pickup)')}
               </button>
             </div>
           </div>
@@ -707,7 +773,7 @@ export default function CommandeView() {
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-slate-500 mb-1">
-                        {lang === 'fr' ? 'Adresse' : 'Address'}
+                        {lang === 'fr' ? 'Adresse de collecte' : 'Pickup address'}
                       </label>
                       <input
                         type="text"
@@ -720,9 +786,72 @@ export default function CommandeView() {
                 )}
               </div>
 
+              {/* Delivery */}
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setEditDeliveryRequested(!editDeliveryRequested)}
+                  className="w-full flex items-center gap-3 p-3 rounded-lg border border-slate-100 hover:bg-slate-50/50 transition-colors"
+                >
+                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 transition-colors ${
+                    editDeliveryRequested ? 'bg-sky-100 text-sky-600' : 'bg-slate-100 text-slate-400'
+                  }`}>
+                    <Home className="w-4 h-4" />
+                  </div>
+                  <div className="text-left flex-1">
+                    <p className="text-sm font-medium text-slate-900">
+                      {lang === 'fr' ? 'Livraison à domicile' : 'Home delivery'}
+                    </p>
+                  </div>
+                  <div className={`w-11 h-6 rounded-full flex items-center transition-colors flex-shrink-0 ${
+                    editDeliveryRequested ? 'bg-sky-500 justify-end' : 'bg-slate-200 justify-start'
+                  }`}>
+                    <div className="w-5 h-5 rounded-full bg-white shadow-sm mx-0.5 transition-transform" />
+                  </div>
+                </button>
+                {editDeliveryRequested && (
+                  <div className="mt-2 space-y-2">
+                    <div>
+                      <label className="block text-xs font-medium text-slate-500 mb-1">
+                        {lang === 'fr' ? 'Jour de livraison' : 'Delivery day'}
+                      </label>
+                      <select
+                        value={editDeliveryDay}
+                        onChange={(e) => setEditDeliveryDay(e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
+                      >
+                        <option value="">—</option>
+                        {['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'].map((d) => (
+                          <option key={d} value={d} className="capitalize">{d}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-500 mb-1">
+                        {lang === 'fr' ? 'Adresse de livraison' : 'Delivery address'}
+                      </label>
+                      <input
+                        type="text"
+                        value={editDeliveryAddress}
+                        onChange={(e) => setEditDeliveryAddress(e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Total */}
               <div className="flex items-center justify-between px-3 py-3 rounded-lg bg-slate-50">
-                <span className="text-sm font-semibold text-slate-700">{lang === 'fr' ? 'Total' : 'Total'}</span>
+                <div>
+                  <span className="text-sm font-semibold text-slate-700">{lang === 'fr' ? 'Total (frais inclus)' : 'Total (incl. fees)'}</span>
+                  {((editPickupRequested ? Number(editingDepot?.frais_collecte) || 0 : 0) +
+                    (editDeliveryRequested ? Number(editingDepot?.frais_livraison) || 0 : 0)) > 0 && (
+                    <p className="text-[11px] text-slate-400">
+                      {lang === 'fr' ? 'Inclut frais collecte/livraison' : 'Includes pickup/delivery fees'}
+                    </p>
+                  )}
+                </div>
                 <span className="text-lg font-bold text-sky-600">{formatPrice(computeEditTotal())}</span>
               </div>
             </div>

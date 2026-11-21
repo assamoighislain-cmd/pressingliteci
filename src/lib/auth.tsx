@@ -13,6 +13,7 @@ import {
   setCompanyDepotStartSeq,
   setDepotStartSeq,
   syncBoutiqueDepotStartSeqs,
+  hydrateBoutiquesWithGeo,
 } from '@/lib/dbOfflineHelpers';
 import type { Boutique } from '@/types';
 
@@ -97,7 +98,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const initialMembership =
     initialBackup?.user?.id ? readCachedMembership(initialBackup.user.id) : null;
   const initialBoutiqueState = initialMembership
-    ? resolveInitialBoutiqueSelection(initialMembership.boutiques ?? [], initialMembership.memberBoutiqueId)
+    ? resolveInitialBoutiqueSelection(
+        hydrateBoutiquesWithGeo(initialMembership.boutiques ?? []),
+        initialMembership.memberBoutiqueId,
+      )
     : { list: [], selected: null };
 
   if (initialMembership?.tenantId) {
@@ -133,7 +137,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   function applyBoutiquesList(bsInput: Boutique[], memberBoutiqueId: string | null) {
     syncBoutiqueDepotStartSeqs(bsInput);
-    const { list, selected } = resolveInitialBoutiqueSelection(bsInput, memberBoutiqueId);
+    const hydrated = hydrateBoutiquesWithGeo(bsInput);
+    const { list, selected } = resolveInitialBoutiqueSelection(hydrated, memberBoutiqueId);
     setBoutiques(list);
     setCurrentBoutique(selected);
     setCurrentBoutiqueId(selected?.id ?? null);
@@ -161,7 +166,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setCurrentBoutique(null);
       return [];
     }
-    const bs = ((data as unknown as Boutique[]) ?? []);
+    const bs = hydrateBoutiquesWithGeo((data as unknown as Boutique[]) ?? []);
     applyBoutiquesList(bs, memberBoutiqueId);
     return bs;
   }

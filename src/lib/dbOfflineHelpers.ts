@@ -365,6 +365,133 @@ export function syncBoutiqueDepotStartSeqs(
   }
 }
 
+function boutiqueGeoStorageKey(boutiqueId: string): string {
+  return `pressinglite_boutique_geo_${boutiqueId}`;
+}
+
+export function getBoutiqueGeo(
+  boutiqueId: string | null,
+): { latitude: number; longitude: number } | null {
+  if (!boutiqueId) return null;
+  try {
+    const raw = localStorage.getItem(boutiqueGeoStorageKey(boutiqueId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { latitude?: unknown; longitude?: unknown };
+    const lat = Number(parsed?.latitude);
+    const lng = Number(parsed?.longitude);
+    if (
+      Number.isFinite(lat) &&
+      Number.isFinite(lng) &&
+      lat >= -90 &&
+      lat <= 90 &&
+      lng >= -180 &&
+      lng <= 180
+    ) {
+      return { latitude: lat, longitude: lng };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export function setBoutiqueGeo(
+  boutiqueId: string | null,
+  latitude: number | null,
+  longitude: number | null,
+): void {
+  if (!boutiqueId) return;
+  const key = boutiqueGeoStorageKey(boutiqueId);
+  try {
+    const lat = latitude != null ? Number(latitude) : NaN;
+    const lng = longitude != null ? Number(longitude) : NaN;
+    if (
+      Number.isFinite(lat) &&
+      Number.isFinite(lng) &&
+      lat >= -90 &&
+      lat <= 90 &&
+      lng >= -180 &&
+      lng <= 180
+    ) {
+      const normalized = {
+        latitude: Math.round(lat * 1_000_000) / 1_000_000,
+        longitude: Math.round(lng * 1_000_000) / 1_000_000,
+      };
+      localStorage.setItem(key, JSON.stringify(normalized));
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('pressinglite:boutique-geo-changed', {
+            detail: { boutiqueId, ...normalized },
+          }),
+        );
+      }
+    } else {
+      localStorage.removeItem(key);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('pressinglite:boutique-geo-changed', {
+            detail: { boutiqueId, latitude: null, longitude: null },
+          }),
+        );
+      }
+    }
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+/**
+ * Hydrates boutique coordinates from Supabase rows when present, or falls back
+ * to locally persisted coordinates when remote columns have not been migrated yet.
+ */
+export function hydrateBoutiquesWithGeo<
+  T extends { id: string; latitude?: number | null; longitude?: number | null },
+>(boutiques: T[]): T[] {
+  if (!Array.isArray(boutiques) || boutiques.length === 0) return boutiques;
+  return boutiques.map((b) => {
+    if (!b?.id) return b;
+    const hasLatProp = Object.prototype.hasOwnProperty.call(b, 'latitude') && b.latitude !== undefined;
+    const hasLngProp = Object.prototype.hasOwnProperty.call(b, 'longitude') && b.longitude !== undefined;
+
+    if (hasLatProp && hasLngProp) {
+      const lat = b.latitude != null ? Number(b.latitude) : null;
+      const lng = b.longitude != null ? Number(b.longitude) : null;
+      if (
+        lat !== null &&
+        lng !== null &&
+        Number.isFinite(lat) &&
+        Number.isFinite(lng) &&
+        lat >= -90 &&
+        lat <= 90 &&
+        lng >= -180 &&
+        lng <= 180
+      ) {
+        const existing = getBoutiqueGeo(b.id);
+        if (!existing || existing.latitude !== lat || existing.longitude !== lng) {
+          setBoutiqueGeo(b.id, lat, lng);
+        }
+        return { ...b, latitude: lat, longitude: lng };
+      }
+      // Server explicitly returned null for both columns
+      if (getBoutiqueGeo(b.id) !== null) {
+        setBoutiqueGeo(b.id, null, null);
+      }
+      return { ...b, latitude: null, longitude: null };
+    }
+
+    // Remote schema doesn't expose latitude/longitude yet: merge local fallback
+    const localGeo = getBoutiqueGeo(b.id);
+    if (localGeo) {
+      return {
+        ...b,
+        latitude: localGeo.latitude,
+        longitude: localGeo.longitude,
+      };
+    }
+    return b;
+  });
+}
+
 export function getCompanyDepotStartSeq(year: number): number | null {
   try {
     const raw = localStorage.getItem(companyDepotStartSeqStorageKey(year));

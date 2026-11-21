@@ -32,8 +32,15 @@ import {
   Zap,
   ShieldCheck,
   Pencil,
+  Home,
+  Map as MapIcon,
+  Copy,
+  FileText,
+  AlertCircle,
+  RefreshCw,
 } from 'lucide-react';
 import { usePwaInstall } from '@/hooks/usePwaInstall';
+import { ClientLocationMapPicker } from '@/components/DeliveryMap';
 
 interface PortalClient {
   client_id: string;
@@ -57,12 +64,20 @@ interface PortalDepot {
   statut: string;
   date_depot: string;
   date_retrait_prevue: string | null;
+  date_retrait?: string | null;
+  collected_at?: string | null;
+  ready_for_delivery?: boolean | null;
   total: number;
   mode_reglement: string | null;
   avance_amount: number | null;
   notes: string | null;
   type_traitement_id: string | null;
+  traitement?: string | null;
   coefficient: number;
+  taux_remise?: number | null;
+  montant_remise?: number | null;
+  frais_collecte?: number | null;
+  frais_livraison?: number | null;
   pickup_requested: boolean | null;
   pickup_address: string | null;
   pickup_latitude: number | null;
@@ -100,6 +115,13 @@ interface CatalogArticle {
   nb_pieces: number;
 }
 
+interface PortalArticleVariant {
+  id: string;
+  article_id: string;
+  designation: string;
+  prix_traitement: number;
+}
+
 interface PortalTypeTraitement {
   id: string;
   libelle: string;
@@ -109,7 +131,10 @@ interface PortalTypeTraitement {
 
 interface OrderArticle {
   id: string;
+  article_id: string | null;
+  variant_id: string | null;
   designation: string;
+  base_designation: string;
   prix_unitaire: number;
   quantite: number | '';
   nb_pieces: number;
@@ -139,7 +164,10 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
   const [loggingIn, setLoggingIn] = useState(false);
   const [view, setView] = useState<'releve' | 'commande'>('releve');
   const [catalog, setCatalog] = useState<CatalogArticle[]>([]);
+  const [articleVariants, setArticleVariants] = useState<PortalArticleVariant[]>([]);
   const [typesTraitement, setTypesTraitement] = useState<PortalTypeTraitement[]>([]);
+  const [typesLoading, setTypesLoading] = useState(false);
+  const [typesLoadError, setTypesLoadError] = useState<string | null>(null);
   const [selectedTypeTraitementId, setSelectedTypeTraitementId] = useState<string>('');
   const [orderArticles, setOrderArticles] = useState<OrderArticle[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -159,15 +187,30 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
   const [deliveryAddress, setDeliveryAddress] = useState('');
   const [deliveryLat, setDeliveryLat] = useState<number | null>(null);
   const [deliveryLng, setDeliveryLng] = useState<number | null>(null);
+  const [selectedDeliveryDay, setSelectedDeliveryDay] = useState<string>('');
+  const [sameAddressAsPickup, setSameAddressAsPickup] = useState(false);
+  const [showPickupMap, setShowPickupMap] = useState(false);
+  const [showDeliveryMap, setShowDeliveryMap] = useState(false);
+  const [orderNotes, setOrderNotes] = useState('');
   const [deliveryGpsLoading, setDeliveryGpsLoading] = useState(false);
   const [deliveryGpsError, setDeliveryGpsError] = useState<string | null>(null);
   const { canInstall, promptInstall, platform, hasInstallPrompt, installed } = usePwaInstall();
   const [showInstallModal, setShowInstallModal] = useState(false);
 
-  // Edit mode for uncollected orders
+  // Saved client home address (remembered locally for fast re-ordering)
+  const [savedHomeAddress, setSavedHomeAddress] = useState<{
+    address: string;
+    lat: number | null;
+    lng: number | null;
+  } | null>(null);
+
+  // Edit & cancel mode for uncollected orders
   const [editingDepotId, setEditingDepotId] = useState<string | null>(null);
   const [editError, setEditError] = useState<string | null>(null);
   const [editLoading, setEditLoading] = useState(false);
+  const [confirmCancelId, setConfirmCancelId] = useState<string | null>(null);
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const [cancelError, setCancelError] = useState<string | null>(null);
 
   // Showcase + signup
   const [showSignup, setShowSignup] = useState(false);
@@ -308,30 +351,126 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
     }
   }
 
-  // Load catalog and treatment types via the portal RPC
+  // Load catalog, treatment types, article variants, and pickup days via portal RPCs
+  const loadPortalCatalogAndTypes = useCallback(async () => {
+    setTypesLoading(true);
+    setTypesLoadError(null);
+    try {
+      const [catalogRes, typesRes, pickupDaysRes, variantsRes] = await Promise.all([
+        supabase.rpc('portal_get_catalog', { e_id: entrepriseId }),
+        supabase.rpc('portal_get_types_traitement', { e_id: entrepriseId }),
+        supabase.rpc('portal_get_pickup_days', { e_id: entrepriseId }),
+        supabase.rpc('portal_get_article_variants', { e_id: entrepriseId }),
+      ]);
+
+      if (!catalogRes.error) {
+        setCatalog((catalogRes.data as CatalogArticle[]) ?? []);
+      } else {
+        setCatalog([]);
+      }
+
+      let resolvedTypes: PortalTypeTraitement[] = [];
+      if (!typesRes.error && Array.isArray(typesRes.data)) {
+        resolvedTypes = (typesRes.data as PortalTypeTraitement[]).map((t) => ({
+          id: t.id,
+          libelle: t.libelle,
+          coefficient: Number(t.coefficient) || 1,
+          nb_jours: Number(t.nb_jours) || 1,
+        }));
+      } else {
+        // Fallback: if portal RPC fails (e.g. before SQL patch is applied), try direct read if permitted
+        const fallbackRes = await supabase
+          .from('types_traitement')
+          .select('id, libelle, coefficient, nb_jours')
+          .order('coefficient', { ascending: true });
+        if (!fallbackRes.error && Array.isArray(fallbackRes.data) && fallbackRes.data.length > 0) {
+          resolvedTypes = (fallbackRes.data as PortalTypeTraitement[]).map((t) => ({
+            id: t.id,
+            libelle: t.libelle,
+            coefficient: Number(t.coefficient) || 1,
+            nb_jours: Number(t.nb_jours) || 1,
+          }));
+        } else if (typesRes.error) {
+          setTypesLoadError(typesRes.error.message);
+        }
+      }
+
+      setTypesTraitement(resolvedTypes);
+      setSelectedTypeTraitementId((prev) => {
+        if (prev && resolvedTypes.some((t) => t.id === prev)) return prev;
+        return resolvedTypes.length > 0 ? resolvedTypes[0].id : '';
+      });
+
+      if (!variantsRes.error && Array.isArray(variantsRes.data)) {
+        setArticleVariants(
+          (variantsRes.data as PortalArticleVariant[]).map((v) => ({
+            id: v.id,
+            article_id: v.article_id,
+            designation: v.designation,
+            prix_traitement: Number(v.prix_traitement) || 0,
+          })),
+        );
+      } else {
+        setArticleVariants([]);
+      }
+
+      const days = (!pickupDaysRes.error ? (pickupDaysRes.data as string[]) : []) ?? [];
+      setPickupDays(days);
+      if (days.length > 0) {
+        setSelectedPickupDay((prev) => prev || days[0]);
+      }
+    } catch (err) {
+      setCatalog([]);
+      setTypesTraitement([]);
+      setArticleVariants([]);
+      setTypesLoadError(err instanceof Error ? err.message : 'Erreur de chargement');
+    } finally {
+      setTypesLoading(false);
+    }
+  }, [entrepriseId]);
+
   useEffect(() => {
     if (!client) return;
-    (async () => {
-      try {
-        const [catalogRes, typesRes, pickupDaysRes] = await Promise.all([
-          supabase.rpc('portal_get_catalog', { e_id: entrepriseId }),
-          supabase.rpc('portal_get_types_traitement', { e_id: entrepriseId }),
-          supabase.rpc('portal_get_pickup_days', { e_id: entrepriseId }),
-        ]);
-        if (catalogRes.error) throw catalogRes.error;
-        setCatalog((catalogRes.data as CatalogArticle[]) ?? []);
-        const types = (typesRes.data as PortalTypeTraitement[]) ?? [];
-        setTypesTraitement(types);
-        if (types.length > 0) setSelectedTypeTraitementId(types[0].id);
-        const days = (pickupDaysRes.data as string[]) ?? [];
-        setPickupDays(days);
-        if (days.length > 0) setSelectedPickupDay(days[0]);
-      } catch {
-        setCatalog([]);
-        setTypesTraitement([]);
+    void loadPortalCatalogAndTypes();
+    try {
+      const raw = localStorage.getItem(`portal_home_addr_${entrepriseId}_${code.trim().toUpperCase()}`);
+      if (raw) {
+        const parsed = JSON.parse(raw) as { address?: string; lat?: number | null; lng?: number | null };
+        if (parsed.address || (parsed.lat != null && parsed.lng != null)) {
+          setSavedHomeAddress({
+            address: parsed.address ?? '',
+            lat: parsed.lat ?? null,
+            lng: parsed.lng ?? null,
+          });
+        }
       }
-    })();
-  }, [client]);
+    } catch {
+      // Ignore storage errors
+    }
+  }, [client, loadPortalCatalogAndTypes, entrepriseId, code]);
+
+  // Keep delivery address in sync with pickup address when "same address" is toggled on
+  useEffect(() => {
+    if (sameAddressAsPickup && pickupRequested && deliveryRequested) {
+      setDeliveryAddress(pickupAddress);
+      setDeliveryLat(pickupLat);
+      setDeliveryLng(pickupLng);
+    }
+  }, [sameAddressAsPickup, pickupRequested, deliveryRequested, pickupAddress, pickupLat, pickupLng]);
+
+  function saveHomeAddressLocally(address: string, lat: number | null, lng: number | null) {
+    if (!address.trim() && (lat == null || lng == null)) return;
+    const payload = { address: address.trim(), lat, lng };
+    setSavedHomeAddress(payload);
+    try {
+      localStorage.setItem(
+        `portal_home_addr_${entrepriseId}_${code.trim().toUpperCase()}`,
+        JSON.stringify(payload),
+      );
+    } catch {
+      // Ignore storage errors
+    }
+  }
 
   function logout() {
     setClient(null);
@@ -340,6 +479,7 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
     setOrderArticles([]);
     setOrderSuccess(false);
     setOrderError(null);
+    setOrderNotes('');
     setPickupRequested(false);
     setPickupAddress('');
     setPickupLat(null);
@@ -349,9 +489,15 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
     setDeliveryAddress('');
     setDeliveryLat(null);
     setDeliveryLng(null);
+    setSelectedDeliveryDay('');
+    setSameAddressAsPickup(false);
+    setShowPickupMap(false);
+    setShowDeliveryMap(false);
     setDeliveryGpsError(null);
     setEditingDepotId(null);
     setEditError(null);
+    setConfirmCancelId(null);
+    setCancelError(null);
   }
 
   function captureGps() {
@@ -391,15 +537,32 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
     return t?.libelle ?? '';
   }
 
+  function resolveDepotTreatmentLabel(depot: PortalDepot): string | null {
+    if (depot.type_traitement_id) {
+      const found = typesTraitement.find((t) => t.id === depot.type_traitement_id);
+      if (found) return found.libelle;
+    }
+    if (depot.traitement && depot.traitement.trim()) {
+      return depot.traitement.trim();
+    }
+    return null;
+  }
+
   function addArticleToOrder(cat: CatalogArticle) {
     const coef = getSelectedCoefficient();
-    const prixTraite = Number(cat.prix_unitaire) * coef;
+    const variants = articleVariants.filter((v) => v.article_id === cat.id);
+    const firstVariant = variants.length > 0 ? variants[0] : null;
+    const basePrice = firstVariant ? Number(firstVariant.prix_traitement) : Number(cat.prix_unitaire);
+    const prixTraite = basePrice * coef;
     const newArticle: OrderArticle = {
       id: uid(),
-      designation: cat.designation,
-      prix_unitaire: Number(cat.prix_unitaire),
-      quantite: '',
-      nb_pieces: Number(cat.nb_pieces),
+      article_id: cat.id,
+      variant_id: firstVariant?.id ?? null,
+      designation: firstVariant ? `${cat.designation} (${firstVariant.designation})` : cat.designation,
+      base_designation: cat.designation,
+      prix_unitaire: basePrice,
+      quantite: 1,
+      nb_pieces: Number(cat.nb_pieces) || 1,
       prix_total: prixTraite,
       couleur: '',
       signe_particulier: 'AUCUN',
@@ -409,18 +572,34 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
     setSearchTerm('');
   }
 
-  function updateOrderArticle(id: string, field: keyof OrderArticle, value: string | number) {
+  function updateOrderArticle(id: string, field: keyof OrderArticle, value: string | number | null) {
     setOrderArticles((prev) =>
       prev.map((a) => {
         if (a.id !== id) return a;
+        const coef = getSelectedCoefficient();
+        if (field === 'variant_id') {
+          const variant = articleVariants.find((v) => v.id === value);
+          const catalogItem = catalog.find((c) => c.id === a.article_id);
+          const nextBasePrice = variant
+            ? Number(variant.prix_traitement)
+            : Number(catalogItem?.prix_unitaire ?? a.prix_unitaire);
+          const nextDesignation = variant
+            ? `${a.base_designation} (${variant.designation})`
+            : a.base_designation;
+          const qte = a.quantite === '' ? 1 : Number(a.quantite) || 1;
+          return {
+            ...a,
+            variant_id: variant?.id ?? null,
+            designation: nextDesignation,
+            prix_unitaire: nextBasePrice,
+            prix_total: nextBasePrice * coef * qte,
+          };
+        }
         const updated = { ...a, [field]: value } as OrderArticle;
         if (field === 'quantite' || field === 'nb_pieces' || field === 'prix_unitaire') {
-          const coef = getSelectedCoefficient();
           const prixTraite = (Number(updated.prix_unitaire) || 0) * coef;
           const qte = updated.quantite === '' ? 0 : Number(updated.quantite) || 0;
-          updated.prix_total =
-            prixTraite *
-            qte;
+          updated.prix_total = prixTraite * qte;
         }
         return updated;
       }),
@@ -432,12 +611,16 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
     if (selectedTypeTraitementId === '') return;
     const coef = getSelectedCoefficient();
     setOrderArticles((prev) =>
-      prev.map((a) => ({
-        ...a,
-        prix_total: (Number(a.prix_unitaire) || 0) * coef * (a.quantite === '' ? 0 : Number(a.quantite) || 0),
-      })),
+      prev.map((a) => {
+        const qte = a.quantite === '' ? 1 : Number(a.quantite) || 1;
+        return {
+          ...a,
+          prix_total: (Number(a.prix_unitaire) || 0) * coef * qte,
+        };
+      }),
     );
-  }, [selectedTypeTraitementId]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedTypeTraitementId, typesTraitement]);
 
   function removeOrderArticle(id: string) {
     setOrderArticles((prev) => prev.filter((a) => a.id !== id));
@@ -477,54 +660,144 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
     return R * 2 * Math.asin(Math.sqrt(a));
   }
 
+  const pickupDistanceKm: number | null = (() => {
+    if (!pickupRequested || !client) return null;
+    if (client.delivery_latitude == null || client.delivery_longitude == null) return null;
+    if (pickupLat == null || pickupLng == null) return null;
+    return haversineKm(client.delivery_latitude, client.delivery_longitude, pickupLat, pickupLng);
+  })();
+
+  const deliveryDistanceKm: number | null = (() => {
+    if (!deliveryRequested || !client) return null;
+    if (client.delivery_latitude == null || client.delivery_longitude == null) return null;
+    if (deliveryLat == null || deliveryLng == null) return null;
+    return haversineKm(client.delivery_latitude, client.delivery_longitude, deliveryLat, deliveryLng);
+  })();
+
   const deliveryFeeEstimate: number | null = (() => {
-    if (!deliveryRequested) return null;
-    if (!client) return null;
-    if (client.delivery_latitude == null || client.delivery_longitude == null) return client.delivery_base_fee;
-    if (deliveryLat == null || deliveryLng == null) return client.delivery_base_fee;
-    const dist = haversineKm(client.delivery_latitude, client.delivery_longitude, deliveryLat, deliveryLng);
-    return client.delivery_base_fee + client.delivery_price_per_km * dist;
+    if (!deliveryRequested || !client) return null;
+    if (deliveryDistanceKm == null) return client.delivery_base_fee;
+    return client.delivery_base_fee + client.delivery_price_per_km * deliveryDistanceKm;
   })();
 
   const pickupFeeEstimate: number | null = (() => {
-    if (!pickupRequested) return null;
-    if (!client) return null;
-    if (client.delivery_latitude == null || client.delivery_longitude == null) return client.delivery_base_fee;
-    if (pickupLat == null || pickupLng == null) return client.delivery_base_fee;
-    const dist = haversineKm(client.delivery_latitude, client.delivery_longitude, pickupLat, pickupLng);
-    return client.delivery_base_fee + client.delivery_price_per_km * dist;
+    if (!pickupRequested || !client) return null;
+    if (pickupDistanceKm == null) return client.delivery_base_fee;
+    return client.delivery_base_fee + client.delivery_price_per_km * pickupDistanceKm;
+  })();
+
+  const currentCoef = getSelectedCoefficient();
+  const clientDiscountAmount = (() => {
+    if (!client) return 0;
+    if (
+      currentCoef <= 1 &&
+      client.taux_remise > 0 &&
+      client.condition_remise !== null &&
+      orderTotal >= client.condition_remise
+    ) {
+      return (orderTotal * client.taux_remise) / 100;
+    }
+    return 0;
   })();
 
   const totalFees = (pickupFeeEstimate ?? 0) + (deliveryFeeEstimate ?? 0);
-  const grandTotal = orderTotal + totalFees;
+  const grandTotal = Math.max(0, orderTotal - clientDiscountAmount) + totalFees;
+
+  function validateOrderBeforeSubmit(): string | null {
+    if (orderArticles.length === 0) {
+      return fr ? 'Ajoutez au moins un article à votre commande.' : 'Add at least one item to your order.';
+    }
+    if (typesTraitement.length > 0 && !selectedTypeTraitementId) {
+      return fr ? 'Veuillez sélectionner un type de traitement.' : 'Please select a treatment type.';
+    }
+    if (pickupRequested) {
+      if (pickupDays.length > 0 && !selectedPickupDay) {
+        return fr ? 'Veuillez choisir un jour de collecte.' : 'Please select a pickup day.';
+      }
+      if (!pickupAddress.trim() && (pickupLat === null || pickupLng === null)) {
+        return fr
+          ? 'Veuillez saisir votre adresse de collecte ou indiquer votre position GPS / carte.'
+          : 'Please enter your pickup address or share your GPS / map pin.';
+      }
+    }
+    if (deliveryRequested) {
+      const effectiveAddr = sameAddressAsPickup && pickupRequested ? pickupAddress : deliveryAddress;
+      const effectiveLat = sameAddressAsPickup && pickupRequested ? pickupLat : deliveryLat;
+      const effectiveLng = sameAddressAsPickup && pickupRequested ? pickupLng : deliveryLng;
+      if (!effectiveAddr.trim() && (effectiveLat === null || effectiveLng === null)) {
+        return fr
+          ? 'Veuillez saisir votre adresse de livraison ou indiquer votre position GPS / carte.'
+          : 'Please enter your delivery address or share your GPS / map pin.';
+      }
+    }
+    return null;
+  }
+
+  async function handleCancelOrder(depotId: string) {
+    setCancellingId(depotId);
+    setCancelError(null);
+    try {
+      const { error } = await supabase.rpc('portal_cancel_depot', {
+        p_code: code.trim().toUpperCase(),
+        e_id: entrepriseId,
+        p_depot_id: depotId,
+      });
+      if (error) throw error;
+      setConfirmCancelId(null);
+      await loadReleve(code.trim().toUpperCase());
+    } catch {
+      setCancelError(
+        fr
+          ? 'Impossible d’annuler en ligne pour le moment. Contactez votre pressing par téléphone.'
+          : 'Unable to cancel online right now. Please contact your dry cleaner by phone.',
+      );
+    } finally {
+      setCancellingId(null);
+    }
+  }
 
   async function submitOrder() {
-    if (orderArticles.length === 0) return;
-    if (typesTraitement.length > 0 && !selectedTypeTraitementId) {
-      setOrderError(fr ? 'Veuillez sélectionner un type de traitement' : 'Please select a treatment type');
+    const validationErr = validateOrderBeforeSubmit();
+    if (validationErr) {
+      setOrderError(validationErr);
       return;
     }
     setSubmitting(true);
     setOrderError(null);
     setOrderSuccess(false);
     try {
-      const articlesJson = orderArticles.map((a) => ({
-        designation: a.designation,
-        prix_unitaire: a.prix_unitaire,
-        prix_traitement: a.prix_unitaire,
-        quantite: a.quantite === '' ? 1 : a.quantite,
-        nb_pieces: a.nb_pieces,
-        prix_total: a.quantite === '' ? a.prix_unitaire * getSelectedCoefficient() : a.prix_total,
-        couleur: a.couleur || null,
-        signe_particulier: a.signe_particulier || null,
-        griffe: a.griffe || null,
-      }));
+      const coef = getSelectedCoefficient();
+      const articlesJson = orderArticles.map((a) => {
+        const qte = a.quantite === '' ? 1 : Math.max(1, Number(a.quantite) || 1);
+        const prixTrait = a.prix_unitaire * coef;
+        return {
+          designation: a.designation,
+          prix_unitaire: a.prix_unitaire,
+          prix_traitement: prixTrait,
+          quantite: qte,
+          nb_pieces: a.nb_pieces,
+          prix_total: prixTrait * qte,
+          couleur: a.couleur || null,
+          signe_particulier: a.signe_particulier || null,
+          griffe: a.griffe || null,
+        };
+      });
+
+      const finalDeliveryAddr = sameAddressAsPickup && pickupRequested ? pickupAddress : deliveryAddress;
+      const finalDeliveryLat = sameAddressAsPickup && pickupRequested ? pickupLat : deliveryLat;
+      const finalDeliveryLng = sameAddressAsPickup && pickupRequested ? pickupLng : deliveryLng;
+
+      if (pickupRequested) {
+        saveHomeAddressLocally(pickupAddress, pickupLat, pickupLng);
+      } else if (deliveryRequested) {
+        saveHomeAddressLocally(finalDeliveryAddr, finalDeliveryLat, finalDeliveryLng);
+      }
 
       const { data, error } = await supabase.rpc('portal_create_depot', {
         p_code: code.trim().toUpperCase(),
         e_id: entrepriseId,
         p_articles: articlesJson,
-        p_notes: null,
+        p_notes: orderNotes.trim() || null,
         p_date_retrait: null,
         p_type_traitement_id: selectedTypeTraitementId || null,
         p_pickup_requested: pickupRequested,
@@ -533,10 +806,10 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
         p_pickup_longitude: pickupRequested ? pickupLng : null,
         p_pickup_day: pickupRequested ? (selectedPickupDay || null) : null,
         p_delivery_requested: deliveryRequested,
-        p_delivery_address: deliveryRequested ? (deliveryAddress.trim() || null) : null,
-        p_delivery_latitude: deliveryRequested ? deliveryLat : null,
-        p_delivery_longitude: deliveryRequested ? deliveryLng : null,
-        p_delivery_day: null,
+        p_delivery_address: deliveryRequested ? (finalDeliveryAddr.trim() || null) : null,
+        p_delivery_latitude: deliveryRequested ? finalDeliveryLat : null,
+        p_delivery_longitude: deliveryRequested ? finalDeliveryLng : null,
+        p_delivery_day: deliveryRequested ? (selectedDeliveryDay || null) : null,
       });
 
       if (error) throw error;
@@ -545,6 +818,7 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
 
       setOrderSuccess(true);
       setOrderArticles([]);
+      setOrderNotes('');
       setPickupRequested(false);
       setPickupAddress('');
       setPickupLat(null);
@@ -554,6 +828,10 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
       setDeliveryAddress('');
       setDeliveryLat(null);
       setDeliveryLng(null);
+      setSelectedDeliveryDay('');
+      setSameAddressAsPickup(false);
+      setShowPickupMap(false);
+      setShowDeliveryMap(false);
       setDeliveryGpsError(null);
       await loadReleve(code.trim().toUpperCase());
       setView('releve');
@@ -570,18 +848,34 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
     setView('commande');
     setOrderSuccess(false);
     setOrderError(null);
+    setOrderNotes(depot.notes ?? '');
     setSelectedTypeTraitementId(depot.type_traitement_id ?? (typesTraitement.length > 0 ? typesTraitement[0].id : ''));
-    setOrderArticles(depot.articles.map((a) => ({
-      id: uid(),
-      designation: a.designation,
-      prix_unitaire: Number(a.prix_unitaire) || 0,
-      quantite: a.quantite,
-      nb_pieces: a.nb_pieces,
-      prix_total: Number(a.prix_total) || 0,
-      couleur: a.couleur ?? '',
-      signe_particulier: a.signe_particulier ?? 'AUCUN',
-      griffe: a.griffe ?? 'AUCUN',
-    })));
+    setOrderArticles(depot.articles.map((a) => {
+      const matchedCatalog = catalog.find(
+        (c) => c.designation === a.designation || a.designation.startsWith(`${c.designation} (`),
+      );
+      const matchedVariant = matchedCatalog
+        ? articleVariants.find(
+            (v) =>
+              v.article_id === matchedCatalog.id &&
+              a.designation === `${matchedCatalog.designation} (${v.designation})`,
+          )
+        : undefined;
+      return {
+        id: uid(),
+        article_id: matchedCatalog?.id ?? null,
+        variant_id: matchedVariant?.id ?? null,
+        designation: a.designation,
+        base_designation: matchedCatalog?.designation ?? a.designation,
+        prix_unitaire: Number(a.prix_unitaire) || 0,
+        quantite: Math.max(1, Number(a.quantite) || 1),
+        nb_pieces: Math.max(1, Number(a.nb_pieces) || 1),
+        prix_total: Number(a.prix_total) || 0,
+        couleur: a.couleur ?? '',
+        signe_particulier: a.signe_particulier ?? 'AUCUN',
+        griffe: a.griffe ?? 'AUCUN',
+      };
+    }));
     setPickupRequested(depot.pickup_requested ?? false);
     setPickupAddress(depot.pickup_address ?? '');
     setPickupLat(depot.pickup_latitude ?? null);
@@ -591,6 +885,16 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
     setDeliveryAddress(depot.delivery_address ?? '');
     setDeliveryLat(depot.delivery_latitude ?? null);
     setDeliveryLng(depot.delivery_longitude ?? null);
+    setSelectedDeliveryDay(depot.delivery_day ?? '');
+    const sameAddr =
+      Boolean(depot.pickup_requested) &&
+      Boolean(depot.delivery_requested) &&
+      (depot.pickup_address ?? '') === (depot.delivery_address ?? '') &&
+      depot.pickup_latitude === depot.delivery_latitude &&
+      depot.pickup_longitude === depot.delivery_longitude;
+    setSameAddressAsPickup(sameAddr);
+    setShowPickupMap(false);
+    setShowDeliveryMap(false);
     setDeliveryGpsError(null);
     setSearchTerm('');
   }
@@ -599,6 +903,7 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
     setEditingDepotId(null);
     setEditError(null);
     setOrderArticles([]);
+    setOrderNotes('');
     setOrderError(null);
     setOrderSuccess(false);
     setPickupRequested(false);
@@ -610,32 +915,52 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
     setDeliveryAddress('');
     setDeliveryLat(null);
     setDeliveryLng(null);
+    setSelectedDeliveryDay('');
+    setSameAddressAsPickup(false);
+    setShowPickupMap(false);
+    setShowDeliveryMap(false);
     setDeliveryGpsError(null);
     setSearchTerm('');
     setView('releve');
   }
 
   async function submitEditOrder() {
-    if (!editingDepotId || orderArticles.length === 0) return;
-    if (typesTraitement.length > 0 && !selectedTypeTraitementId) {
-      setOrderError(fr ? 'Veuillez sélectionner un type de traitement' : 'Please select a treatment type');
+    if (!editingDepotId) return;
+    const validationErr = validateOrderBeforeSubmit();
+    if (validationErr) {
+      setOrderError(validationErr);
       return;
     }
     setEditLoading(true);
     setEditError(null);
     setOrderError(null);
     try {
-      const articlesJson = orderArticles.map((a) => ({
-        designation: a.designation,
-        prix_unitaire: a.prix_unitaire,
-        prix_traitement: a.prix_unitaire,
-        quantite: a.quantite === '' ? 1 : a.quantite,
-        nb_pieces: a.nb_pieces,
-        prix_total: a.quantite === '' ? a.prix_unitaire * getSelectedCoefficient() : a.prix_total,
-        couleur: a.couleur || null,
-        signe_particulier: a.signe_particulier || null,
-        griffe: a.griffe || null,
-      }));
+      const coef = getSelectedCoefficient();
+      const articlesJson = orderArticles.map((a) => {
+        const qte = a.quantite === '' ? 1 : Math.max(1, Number(a.quantite) || 1);
+        const prixTrait = a.prix_unitaire * coef;
+        return {
+          designation: a.designation,
+          prix_unitaire: a.prix_unitaire,
+          prix_traitement: prixTrait,
+          quantite: qte,
+          nb_pieces: a.nb_pieces,
+          prix_total: prixTrait * qte,
+          couleur: a.couleur || null,
+          signe_particulier: a.signe_particulier || null,
+          griffe: a.griffe || null,
+        };
+      });
+
+      const finalDeliveryAddr = sameAddressAsPickup && pickupRequested ? pickupAddress : deliveryAddress;
+      const finalDeliveryLat = sameAddressAsPickup && pickupRequested ? pickupLat : deliveryLat;
+      const finalDeliveryLng = sameAddressAsPickup && pickupRequested ? pickupLng : deliveryLng;
+
+      if (pickupRequested) {
+        saveHomeAddressLocally(pickupAddress, pickupLat, pickupLng);
+      } else if (deliveryRequested) {
+        saveHomeAddressLocally(finalDeliveryAddr, finalDeliveryLat, finalDeliveryLng);
+      }
 
       const { error } = await supabase.rpc('portal_update_depot', {
         p_code: code.trim().toUpperCase(),
@@ -649,16 +974,17 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
         p_pickup_longitude: pickupRequested ? pickupLng : null,
         p_pickup_day: pickupRequested ? (selectedPickupDay || null) : null,
         p_delivery_requested: deliveryRequested,
-        p_delivery_address: deliveryRequested ? (deliveryAddress.trim() || null) : null,
-        p_delivery_latitude: deliveryRequested ? deliveryLat : null,
-        p_delivery_longitude: deliveryRequested ? deliveryLng : null,
-        p_delivery_day: null,
+        p_delivery_address: deliveryRequested ? (finalDeliveryAddr.trim() || null) : null,
+        p_delivery_latitude: deliveryRequested ? finalDeliveryLat : null,
+        p_delivery_longitude: deliveryRequested ? finalDeliveryLng : null,
+        p_delivery_day: deliveryRequested ? (selectedDeliveryDay || null) : null,
       });
 
       if (error) throw error;
 
       setEditingDepotId(null);
       setOrderArticles([]);
+      setOrderNotes('');
       setPickupRequested(false);
       setPickupAddress('');
       setPickupLat(null);
@@ -668,6 +994,10 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
       setDeliveryAddress('');
       setDeliveryLat(null);
       setDeliveryLng(null);
+      setSelectedDeliveryDay('');
+      setSameAddressAsPickup(false);
+      setShowPickupMap(false);
+      setShowDeliveryMap(false);
       setDeliveryGpsError(null);
       setOrderSuccess(true);
       await loadReleve(code.trim().toUpperCase());
@@ -1057,37 +1387,231 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
               </div>
             ) : (
               <div className="space-y-3">
+                {cancelError && (
+                  <div className="rounded-xl bg-amber-50 border border-amber-200 px-4 py-3 text-xs text-amber-800 flex items-center justify-between gap-2">
+                    <span>{cancelError}</span>
+                    <button onClick={() => setCancelError(null)} className="text-amber-600 hover:text-amber-800">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-medium text-slate-500">
+                    {fr ? 'Suivi en temps réel de vos commandes' : 'Real-time tracking of your orders'}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => void loadReleve(code.trim().toUpperCase())}
+                    disabled={loadingReleve}
+                    className="inline-flex items-center gap-1 text-xs font-medium text-sky-600 hover:text-sky-700 disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${loadingReleve ? 'animate-spin' : ''}`} />
+                    {fr ? 'Actualiser' : 'Refresh'}
+                  </button>
+                </div>
                 {depots.map((depot) => {
                   const avance = Number(depot.avance_amount) ?? 0;
                   const extraAvances = depot.avances.reduce((s2, a) => s2 + Number(a.montant), 0);
                   const mode = depot.mode_reglement;
                   const paye = mode === 'PAYER_DEPOT' ? Number(depot.total) : mode === 'AVANCE' ? avance + extraAvances : mode === 'SOLDE' ? Number(depot.total) : extraAvances;
-                  const reste = Number(depot.total) - paye;
+                  const reste = Math.max(0, Number(depot.total) - paye);
+
+                  // Step-by-step lifecycle tracker
+                  const isCollected = Boolean(depot.collected_at) || depot.statut === 'EN_COURS' || depot.statut === 'RETIRE';
+                  const isProcessing = depot.statut === 'EN_COURS' || depot.statut === 'RETIRE';
+                  const isReady = Boolean(depot.ready_for_delivery) || depot.statut === 'RETIRE';
+                  const isDone = depot.statut === 'RETIRE';
+
+                  const steps: { key: string; label: string; done: boolean; active: boolean }[] = [
+                    {
+                      key: 'ordered',
+                      label: fr ? 'Commandé' : 'Ordered',
+                      done: true,
+                      active: depot.statut === 'COMMANDE',
+                    },
+                    ...(depot.pickup_requested
+                      ? [{
+                          key: 'collected',
+                          label: fr ? 'Collecté' : 'Picked up',
+                          done: isCollected,
+                          active: depot.statut === 'COMMANDE' && Boolean(depot.collected_at),
+                        }]
+                      : []),
+                    {
+                      key: 'processing',
+                      label: fr ? 'Traitement' : 'Processing',
+                      done: isProcessing,
+                      active: depot.statut === 'EN_COURS' && !depot.ready_for_delivery,
+                    },
+                    ...(depot.delivery_requested
+                      ? [{
+                          key: 'ready',
+                          label: fr ? 'Prêt livr.' : 'Ready',
+                          done: isReady,
+                          active: depot.statut === 'EN_COURS' && Boolean(depot.ready_for_delivery),
+                        }]
+                      : []),
+                    {
+                      key: 'done',
+                      label: depot.delivery_requested ? (fr ? 'Livré' : 'Delivered') : (fr ? 'Retiré' : 'Picked up'),
+                      done: isDone,
+                      active: isDone,
+                    },
+                  ];
+
+                  const statusLabel =
+                    depot.statut === 'COMMANDE'
+                      ? (depot.pickup_requested
+                          ? (fr ? 'En attente de collecte' : 'Awaiting pickup')
+                          : (fr ? 'Commande en attente' : 'Pending order'))
+                      : depot.statut === 'EN_COURS'
+                        ? (depot.delivery_requested && depot.ready_for_delivery
+                            ? (fr ? 'Prêt à livrer' : 'Ready for delivery')
+                            : (fr ? 'En traitement' : 'Processing'))
+                        : (depot.delivery_requested
+                            ? (fr ? 'Livré' : 'Delivered')
+                            : (fr ? 'Retiré' : 'Picked up'));
+
+                  const statusBadgeClass =
+                    depot.statut === 'COMMANDE'
+                      ? 'bg-sky-100 text-sky-700'
+                      : depot.statut === 'EN_COURS'
+                        ? (depot.delivery_requested && depot.ready_for_delivery
+                            ? 'bg-violet-100 text-violet-700'
+                            : 'bg-amber-100 text-amber-700')
+                        : 'bg-emerald-100 text-emerald-700';
+
                   return (
                     <div key={depot.id} className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
-                      <div className="flex items-center justify-between px-5 py-3.5 bg-slate-50/50 border-b border-slate-50">
-                        <div>
-                          <p className="text-sm font-semibold text-slate-900">
-                            {depot.numero ?? (fr ? 'Commande en attente' : 'Pending order')}
+                      <div className="flex items-center justify-between px-5 py-3.5 bg-slate-50/50 border-b border-slate-50 gap-2">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="text-sm font-semibold text-slate-900">
+                              {depot.numero ?? (fr ? 'Commande en attente' : 'Pending order')}
+                            </p>
+                            {(() => {
+                              const label = resolveDepotTreatmentLabel(depot);
+                              if (!label) return null;
+                              const coef = Number(depot.coefficient) || 1;
+                              return (
+                                <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">
+                                  <Sparkles className="w-3 h-3" />
+                                  {label}{coef !== 1 ? ` (×${coef})` : ''}
+                                </span>
+                              );
+                            })()}
+                          </div>
+                          <p className="text-xs text-slate-400 mt-0.5">
+                            {formatDateShort(depot.date_depot)}
+                            {depot.date_retrait_prevue && (
+                              <>
+                                {' · '}
+                                {depot.delivery_requested ? (fr ? 'Livraison prévue :' : 'Est. delivery:') : (fr ? 'Retrait prévu :' : 'Est. pickup:')}{' '}
+                                <span className="text-slate-600 font-medium">{formatDateShort(depot.date_retrait_prevue)}</span>
+                              </>
+                            )}
                           </p>
-                          <p className="text-xs text-slate-400 mt-0.5">{formatDateShort(depot.date_depot)}</p>
                         </div>
-                        <div className="flex items-center gap-3">
-                          <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${
-                            depot.statut === 'COMMANDE' ? 'bg-sky-100 text-sky-700' : depot.statut === 'EN_COURS' ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'
-                          }`}>
-                            {depot.statut === 'COMMANDE' ? (fr ? 'Commande' : 'Order') : depot.statut === 'EN_COURS' ? (fr ? 'En cours' : 'In progress') : (fr ? 'Retiré' : 'Picked up')}
+                        <div className="flex items-center gap-2.5 flex-shrink-0">
+                          <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${statusBadgeClass}`}>
+                            {statusLabel}
                           </span>
                           <p className="text-sm font-bold text-slate-900">{formatPrice(Number(depot.total))}</p>
                         </div>
                       </div>
+
+                      {/* Step-by-step progress timeline */}
+                      <div className="px-5 py-3 bg-white border-b border-slate-50">
+                        <div className="flex items-center justify-between gap-1">
+                          {steps.map((st, idx) => (
+                            <div key={st.key} className="flex-1 flex items-center">
+                              <div className="flex flex-col items-center flex-shrink-0">
+                                <div
+                                  className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold transition-colors ${
+                                    st.done
+                                      ? st.active
+                                        ? 'bg-sky-500 text-white ring-4 ring-sky-100'
+                                        : 'bg-emerald-500 text-white'
+                                      : 'bg-slate-100 text-slate-400'
+                                  }`}
+                                >
+                                  {st.done ? <Check className="w-3.5 h-3.5" /> : idx + 1}
+                                </div>
+                                <span
+                                  className={`text-[10px] mt-1 font-medium text-center leading-tight ${
+                                    st.active
+                                      ? 'text-sky-700'
+                                      : st.done
+                                        ? 'text-slate-700'
+                                        : 'text-slate-400'
+                                  }`}
+                                >
+                                  {st.label}
+                                </span>
+                              </div>
+                              {idx < steps.length - 1 && (
+                                <div
+                                  className={`h-0.5 flex-1 mx-1 -mt-4 rounded-full ${
+                                    steps[idx + 1].done ? 'bg-emerald-400' : 'bg-slate-200'
+                                  }`}
+                                />
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Logistics details (pickup / delivery / notes) */}
+                      {(depot.pickup_requested || depot.delivery_requested || depot.notes) && (
+                        <div className="px-5 py-2.5 bg-slate-50/40 border-b border-slate-50 space-y-1.5 text-xs">
+                          {depot.pickup_requested && (
+                            <div className="flex items-start gap-2 text-amber-800">
+                              <Truck className="w-3.5 h-3.5 text-amber-600 flex-shrink-0 mt-0.5" />
+                              <div className="min-w-0 flex-1">
+                                <span className="font-semibold">{fr ? 'Collecte :' : 'Pickup:'}</span>{' '}
+                                {depot.pickup_day && <span className="capitalize font-medium">{depot.pickup_day} · </span>}
+                                <span>{depot.pickup_address || (fr ? 'Position GPS partagée' : 'GPS location shared')}</span>
+                                {Number(depot.frais_collecte || 0) > 0 && (
+                                  <span className="ml-1.5 text-amber-700 font-medium">
+                                    ({formatPrice(Number(depot.frais_collecte))})
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                          {depot.delivery_requested && (
+                            <div className="flex items-start gap-2 text-sky-800">
+                              <Home className="w-3.5 h-3.5 text-sky-600 flex-shrink-0 mt-0.5" />
+                              <div className="min-w-0 flex-1">
+                                <span className="font-semibold">{fr ? 'Livraison :' : 'Delivery:'}</span>{' '}
+                                {depot.delivery_day && <span className="capitalize font-medium">{depot.delivery_day} · </span>}
+                                <span>{depot.delivery_address || (fr ? 'Position GPS partagée' : 'GPS location shared')}</span>
+                                {Number(depot.frais_livraison || 0) > 0 && (
+                                  <span className="ml-1.5 text-sky-700 font-medium">
+                                    ({formatPrice(Number(depot.frais_livraison))})
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                          {depot.notes && (
+                            <div className="flex items-start gap-2 text-slate-600">
+                              <FileText className="w-3.5 h-3.5 text-slate-400 flex-shrink-0 mt-0.5" />
+                              <span className="italic">{depot.notes}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
                       <div className="px-5 py-3 space-y-1.5">
                         {depot.articles.map((art) => (
                           <div key={art.id} className="flex items-center justify-between text-sm">
                             <div className="flex items-center gap-2 min-w-0">
                               <span className="w-1.5 h-1.5 rounded-full bg-sky-400 flex-shrink-0" />
                               <span className="text-slate-700 truncate">{art.designation}</span>
-                              <span className="text-xs text-slate-400 flex-shrink-0">({(Number(art.nb_pieces) || 0) * (Number(art.quantite) || 0)} {fr ? 'pcs' : 'pcs'})</span>
+                              <span className="text-xs text-slate-400 flex-shrink-0">
+                                ({Number(art.quantite) || 1}× · {(Number(art.nb_pieces) || 1) * (Number(art.quantite) || 1)} {fr ? 'pcs' : 'pcs'})
+                              </span>
                             </div>
                             <span className="text-slate-600 flex-shrink-0 ml-2">{formatPrice(Number(art.prix_total))}</span>
                           </div>
@@ -1098,14 +1622,50 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
                         <span className="text-slate-500">{fr ? 'Reste' : 'Remaining'}: <span className={reste > 0 ? 'text-red-600 font-medium' : 'text-slate-400'}>{formatPrice(reste)}</span></span>
                       </div>
                       {depot.statut === 'COMMANDE' && (
-                        <div className="px-5 pb-3 pt-1 border-t border-slate-50">
-                          <button
-                            onClick={() => startEditOrder(depot)}
-                            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-sky-50 border border-sky-200 text-sky-700 text-sm font-medium hover:bg-sky-100 transition-colors"
-                          >
-                            <Pencil className="w-4 h-4" />
-                            {fr ? 'Modifier la commande' : 'Edit order'}
-                          </button>
+                        <div className="px-5 pb-3.5 pt-2 border-t border-slate-50 space-y-2">
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => startEditOrder(depot)}
+                              className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-sky-50 border border-sky-200 text-sky-700 text-sm font-medium hover:bg-sky-100 transition-colors"
+                            >
+                              <Pencil className="w-4 h-4" />
+                              {fr ? 'Modifier' : 'Edit'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmCancelId(confirmCancelId === depot.id ? null : depot.id)}
+                              className="px-3.5 py-2.5 rounded-lg bg-white border border-slate-200 text-slate-600 text-sm font-medium hover:bg-red-50 hover:text-red-600 hover:border-red-200 transition-colors flex items-center gap-1.5"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                              {fr ? 'Annuler' : 'Cancel'}
+                            </button>
+                          </div>
+                          {confirmCancelId === depot.id && (
+                            <div className="rounded-lg bg-red-50 border border-red-200 p-3 flex items-center justify-between gap-2">
+                              <p className="text-xs text-red-700 font-medium">
+                                {fr ? 'Confirmer l’annulation de cette commande ?' : 'Confirm cancelling this order?'}
+                              </p>
+                              <div className="flex items-center gap-1.5 flex-shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmCancelId(null)}
+                                  className="px-2.5 py-1 rounded bg-white border border-slate-200 text-xs text-slate-600 hover:bg-slate-50"
+                                >
+                                  {fr ? 'Non' : 'No'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void handleCancelOrder(depot.id)}
+                                  disabled={cancellingId === depot.id}
+                                  className="px-2.5 py-1 rounded bg-red-600 text-white text-xs font-medium hover:bg-red-700 disabled:opacity-50 inline-flex items-center gap-1"
+                                >
+                                  {cancellingId === depot.id && <Loader2 className="w-3 h-3 animate-spin" />}
+                                  {fr ? 'Oui, annuler' : 'Yes, cancel'}
+                                </button>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
@@ -1159,36 +1719,84 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
                   </div>
                 )}
 
-                {/* Treatment type selector */}
-                {typesTraitement.length > 0 && (
-                  <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-5">
-                    <div className="flex items-center gap-2 mb-3">
+                {/* Treatment type selector — always visible so client explicitly picks treatment */}
+                <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-5">
+                  <div className="flex items-center justify-between gap-2 mb-3">
+                    <div className="flex items-center gap-2">
                       <Sparkles className="w-4 h-4 text-sky-500" />
                       <h3 className="text-sm font-semibold text-slate-900">
                         {fr ? 'Type de traitement' : 'Treatment type'}
                         <span className="text-red-500 ml-0.5">*</span>
                       </h3>
                     </div>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                      {typesTraitement.map((t) => (
-                        <button
-                          key={t.id}
-                          onClick={() => setSelectedTypeTraitementId(t.id)}
-                          className={`px-3 py-2.5 rounded-lg border text-sm font-medium transition-all text-left ${
-                            selectedTypeTraitementId === t.id
-                              ? 'border-sky-500 bg-sky-50 text-sky-700 ring-1 ring-sky-500'
-                              : 'border-slate-200 text-slate-600 hover:border-sky-200 hover:bg-sky-50/50'
-                          }`}
-                        >
-                          <span className="block">{t.libelle}</span>
-                          <span className="text-xs text-slate-400 mt-0.5 block">
-                            ×{t.coefficient} · {t.nb_jours}j
-                          </span>
-                        </button>
-                      ))}
-                    </div>
+                    {selectedTypeTraitementId && getSelectedTypeLibelle() && (
+                      <span className="text-xs font-medium text-sky-700 bg-sky-50 border border-sky-100 px-2 py-0.5 rounded-md">
+                        {getSelectedTypeLibelle()} · ×{getSelectedCoefficient()}
+                      </span>
+                    )}
                   </div>
-                )}
+
+                  {typesLoading ? (
+                    <div className="flex items-center justify-center gap-2 py-4 text-xs text-slate-400">
+                      <Loader2 className="w-4 h-4 animate-spin text-sky-500" />
+                      {fr ? 'Chargement des types de traitement…' : 'Loading treatment types…'}
+                    </div>
+                  ) : typesTraitement.length > 0 ? (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                      {typesTraitement.map((t) => {
+                        const isSelected = selectedTypeTraitementId === t.id;
+                        return (
+                          <button
+                            type="button"
+                            key={t.id}
+                            onClick={() => setSelectedTypeTraitementId(t.id)}
+                            className={`relative px-3.5 py-3 rounded-xl border text-sm font-medium transition-all text-left ${
+                              isSelected
+                                ? 'border-sky-500 bg-sky-50 text-sky-800 ring-2 ring-sky-500/20 shadow-xs'
+                                : 'border-slate-200 text-slate-700 hover:border-sky-300 hover:bg-sky-50/40'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-1.5">
+                              <span className="font-semibold truncate">{t.libelle}</span>
+                              {isSelected && (
+                                <span className="w-4 h-4 rounded-full bg-sky-500 text-white flex items-center justify-center flex-shrink-0">
+                                  <Check className="w-2.5 h-2.5" />
+                                </span>
+                              )}
+                            </div>
+                            <span className={`text-xs mt-1 flex items-center gap-1.5 ${isSelected ? 'text-sky-600' : 'text-slate-400'}`}>
+                              <span className="font-mono font-medium">×{t.coefficient}</span>
+                              <span>·</span>
+                              <span className="inline-flex items-center gap-0.5">
+                                <Clock className="w-3 h-3" />
+                                {t.nb_jours}{fr ? 'j' : 'd'}
+                              </span>
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="rounded-lg bg-amber-50 border border-amber-200/80 p-3 flex items-center justify-between gap-3">
+                      <p className="text-xs text-amber-800">
+                        {typesLoadError
+                          ? (fr
+                              ? 'Impossible de charger les types de traitement pour le moment.'
+                              : 'Unable to load treatment types right now.')
+                          : (fr
+                              ? 'Aucun type de traitement configuré par ce pressing.'
+                              : 'No treatment type configured by this dry cleaner.')}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => void loadPortalCatalogAndTypes()}
+                        className="px-2.5 py-1 rounded-md bg-white border border-amber-200 text-xs font-medium text-amber-800 hover:bg-amber-100 transition-colors flex-shrink-0"
+                      >
+                        {fr ? 'Réessayer' : 'Retry'}
+                      </button>
+                    </div>
+                  )}
+                </div>
 
                 {/* Estimated pickup date */}
                 {selectedTypeTraitementId && (
@@ -1198,7 +1806,7 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
                       <p className="text-xs text-slate-500">
                         {fr ? 'Date de retrait estimée' : 'Estimated pickup date'}
                       </p>
-                      <p className="text-sm font-semibold text-sky-700">
+                      <p className="text-sm font-semibold text-sky-700 capitalize">
                         {new Date(Date.now() + getSelectedNbJours() * 86400000).toLocaleDateString(fr ? 'fr-FR' : 'en-US', {
                           weekday: 'long',
                           day: '2-digit',
@@ -1229,19 +1837,33 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
                           {fr ? 'Aucun article trouvé.' : 'No item found.'}
                         </p>
                       ) : (
-                        filteredCatalog.map((cat) => (
-                          <button
-                            key={cat.id}
-                            onClick={() => addArticleToOrder(cat)}
-                            className="w-full flex items-center justify-between p-3 rounded-lg border border-slate-100 hover:border-sky-200 hover:bg-sky-50/50 transition-all text-left group"
-                          >
-                            <div className="flex items-center gap-2 min-w-0">
-                              <Plus className="w-4 h-4 text-sky-400 flex-shrink-0" />
-                              <span className="text-sm font-medium text-slate-700 truncate">{cat.designation}</span>
-                            </div>
-                            <span className="text-sm text-slate-500 flex-shrink-0 ml-2">{formatPrice(Number(cat.prix_unitaire))}</span>
-                          </button>
-                        ))
+                        filteredCatalog.map((cat) => {
+                          const coef = getSelectedCoefficient();
+                          const adjustedPrice = Number(cat.prix_unitaire) * coef;
+                          return (
+                            <button
+                              type="button"
+                              key={cat.id}
+                              onClick={() => addArticleToOrder(cat)}
+                              className="w-full flex items-center justify-between p-3 rounded-lg border border-slate-100 hover:border-sky-200 hover:bg-sky-50/50 transition-all text-left group"
+                            >
+                              <div className="flex items-center gap-2 min-w-0">
+                                <Plus className="w-4 h-4 text-sky-400 flex-shrink-0" />
+                                <span className="text-sm font-medium text-slate-700 truncate">{cat.designation}</span>
+                              </div>
+                              <div className="flex items-center gap-1.5 flex-shrink-0 ml-2">
+                                {coef !== 1 && (
+                                  <span className="text-xs text-slate-400 line-through">
+                                    {formatPrice(Number(cat.prix_unitaire))}
+                                  </span>
+                                )}
+                                <span className="text-sm font-medium text-slate-700">
+                                  {formatPrice(adjustedPrice)}
+                                </span>
+                              </div>
+                            </button>
+                          );
+                        })
                       )}
                     </div>
                   )}
@@ -1256,103 +1878,105 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
                       </p>
                     </div>
                     <div className="divide-y divide-slate-50">
-                      {orderArticles.map((art) => (
-                        <div key={art.id} className="px-5 py-3.5">
-                          <div className="flex items-center justify-between mb-2">
-                            <p className="text-sm font-medium text-slate-900">{art.designation}</p>
-                            <button
-                              onClick={() => removeOrderArticle(art.id)}
-                              className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                      {orderArticles.map((art) => {
+                        const artVariants = art.article_id
+                          ? articleVariants.filter((v) => v.article_id === art.article_id)
+                          : [];
+                        const coef = getSelectedCoefficient();
+                        return (
+                          <div key={art.id} className="px-5 py-3.5">
+                            <div className="flex items-center justify-between mb-2">
+                              <p className="text-sm font-medium text-slate-900">{art.designation}</p>
+                              <button
+                                type="button"
+                                onClick={() => removeOrderArticle(art.id)}
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                            {artVariants.length > 0 && (
+                              <div className="mb-2.5">
+                                <label className="block text-xs text-slate-500 mb-1">
+                                  {fr ? 'Option / Variante de traitement' : 'Treatment variant'}
+                                </label>
+                                <select
+                                  value={art.variant_id ?? ''}
+                                  onChange={(e) => updateOrderArticle(art.id, 'variant_id', e.target.value || null)}
+                                  className="w-full sm:w-auto min-w-[200px] px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                                >
+                                  {artVariants.map((v) => (
+                                    <option key={v.id} value={v.id}>
+                                      {v.designation} ({formatPrice(Number(v.prix_traitement) * coef)})
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            )}
+                            <div className="flex flex-wrap items-center gap-2">
+                              <div className="flex items-center gap-1">
+                                <label className="text-xs text-slate-400">{fr ? 'Qté' : 'Qty'}</label>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  value={art.quantite}
+                                  onChange={(e) => updateOrderArticle(art.id, 'quantite', e.target.value === '' ? '' : parseInt(e.target.value) || 1)}
+                                  className="w-14 px-2 py-1 rounded border border-slate-200 text-sm text-center focus:outline-none focus:ring-1 focus:ring-sky-500"
+                                />
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <label className="text-xs text-slate-400">{fr ? 'Pièces' : 'Pieces'}</label>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  value={art.nb_pieces}
+                                  onChange={(e) => updateOrderArticle(art.id, 'nb_pieces', parseInt(e.target.value) || 1)}
+                                  className="w-14 px-2 py-1 rounded border border-slate-200 text-sm text-center focus:outline-none focus:ring-1 focus:ring-sky-500"
+                                />
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <label className="text-xs text-slate-400">{fr ? 'Couleur' : 'Color'}</label>
+                                <input
+                                  type="text"
+                                  value={art.couleur}
+                                  onChange={(e) => updateOrderArticle(art.id, 'couleur', e.target.value)}
+                                  placeholder={fr ? 'Optionnel' : 'Optional'}
+                                  className="w-24 px-2 py-1 rounded border border-slate-200 text-sm focus:outline-none focus:ring-1 focus:ring-sky-500"
+                                />
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <label className="text-xs text-slate-400">{fr ? 'Signe' : 'Sign'}</label>
+                                <input
+                                  type="text"
+                                  value={art.signe_particulier}
+                                  onChange={(e) => updateOrderArticle(art.id, 'signe_particulier', e.target.value)}
+                                  className="w-20 px-2 py-1 rounded border border-slate-200 text-sm focus:outline-none focus:ring-1 focus:ring-sky-500"
+                                />
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <label className="text-xs text-slate-400">{fr ? 'Griffe' : 'Brand'}</label>
+                                <input
+                                  type="text"
+                                  value={art.griffe}
+                                  onChange={(e) => updateOrderArticle(art.id, 'griffe', e.target.value)}
+                                  className="w-20 px-2 py-1 rounded border border-slate-200 text-sm focus:outline-none focus:ring-1 focus:ring-sky-500"
+                                />
+                              </div>
+                            </div>
+                            <div className="flex items-center justify-between mt-2">
+                              <span className="text-xs text-slate-400">
+                                {fr ? 'Tarif unitaire :' : 'Unit rate:'}{' '}
+                                <span className="font-medium text-slate-600">{formatPrice(art.prix_unitaire * coef)}</span>
+                                {coef !== 1 && (
+                                  <span className="ml-1 text-slate-400">({formatPrice(art.prix_unitaire)} ×{coef})</span>
+                                )}
+                              </span>
+                              <p className="text-sm font-semibold text-slate-900">{formatPrice(art.prix_total)}</p>
+                            </div>
                           </div>
-                          <div className="flex flex-wrap gap-2">
-                            <div className="flex items-center gap-1">
-                              <label className="text-xs text-slate-400">{fr ? 'Qté' : 'Qty'}</label>
-                              <input
-                                type="number"
-                                min={1}
-                                value={art.quantite}
-                                onChange={(e) => updateOrderArticle(art.id, 'quantite', e.target.value === '' ? '' : parseInt(e.target.value) || 1)}
-                                className="w-14 px-2 py-1 rounded border border-slate-200 text-sm text-center focus:outline-none focus:ring-1 focus:ring-sky-500"
-                              />
-                            </div>
-                            <div className="flex items-center gap-1">
-                              <label className="text-xs text-slate-400">{fr ? 'Pièces' : 'Pieces'}</label>
-                              <input
-                                type="number"
-                                min={1}
-                                value={art.nb_pieces}
-                                onChange={(e) => updateOrderArticle(art.id, 'nb_pieces', parseInt(e.target.value) || 1)}
-                                className="w-14 px-2 py-1 rounded border border-slate-200 text-sm text-center focus:outline-none focus:ring-1 focus:ring-sky-500"
-                              />
-                            </div>
-                            <div className="flex items-center gap-1">
-                              <label className="text-xs text-slate-400">{fr ? 'Prix' : 'Price'}</label>
-                              <input
-                                type="number"
-                                min={0}
-                                step="100"
-                                value={art.prix_unitaire}
-                                onChange={(e) => updateOrderArticle(art.id, 'prix_unitaire', parseFloat(e.target.value) || 0)}
-                                className="w-20 px-2 py-1 rounded border border-slate-200 text-sm text-center focus:outline-none focus:ring-1 focus:ring-sky-500"
-                              />
-                            </div>
-                            <div className="flex items-center gap-1">
-                              <label className="text-xs text-slate-400">{fr ? 'Couleur' : 'Color'}</label>
-                              <input
-                                type="text"
-                                value={art.couleur}
-                                onChange={(e) => updateOrderArticle(art.id, 'couleur', e.target.value)}
-                                className="w-20 px-2 py-1 rounded border border-slate-200 text-sm focus:outline-none focus:ring-1 focus:ring-sky-500"
-                              />
-                            </div>
-                            <div className="flex items-center gap-1">
-                              <label className="text-xs text-slate-400">{fr ? 'Signe' : 'Sign'}</label>
-                              <input
-                                type="text"
-                                value={art.signe_particulier}
-                                onChange={(e) => updateOrderArticle(art.id, 'signe_particulier', e.target.value)}
-                                className="w-20 px-2 py-1 rounded border border-slate-200 text-sm focus:outline-none focus:ring-1 focus:ring-sky-500"
-                              />
-                            </div>
-                            <div className="flex items-center gap-1">
-                              <label className="text-xs text-slate-400">{fr ? 'Griffe' : 'Brand'}</label>
-                              <input
-                                type="text"
-                                value={art.griffe}
-                                onChange={(e) => updateOrderArticle(art.id, 'griffe', e.target.value)}
-                                className="w-20 px-2 py-1 rounded border border-slate-200 text-sm focus:outline-none focus:ring-1 focus:ring-sky-500"
-                              />
-                            </div>
-                          </div>
-                          <p className="text-sm font-semibold text-slate-900 mt-2">{formatPrice(art.prix_total)}</p>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
-                    <div className="px-5 py-4 bg-slate-50/50 border-t border-slate-50 flex items-center justify-between">
-                      <div>
-                        <p className="text-sm font-bold text-slate-900">{fr ? 'Total' : 'Total'}</p>
-                        {getSelectedCoefficient() !== 1 && (
-                          <p className="text-xs text-slate-400 mt-0.5">
-                            {getSelectedTypeLibelle()} (×{getSelectedCoefficient()})
-                          </p>
-                        )}
-                      </div>
-                      <p className="text-lg font-bold text-sky-600">{formatPrice(grandTotal)}</p>
-                      {totalFees > 0 && (
-                        <p className="text-xs text-slate-400 mt-0.5">
-                          {fr ? ' dont ' : 'incl. '}{formatPrice(totalFees)} {fr ? 'de frais' : 'fees'}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {(orderError || editError) && (
-                  <div className="rounded-lg bg-red-50 border border-red-200 p-3">
-                    <p className="text-sm text-red-600">{orderError ?? editError}</p>
                   </div>
                 )}
 
@@ -1360,6 +1984,7 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
                 {orderArticles.length > 0 && (
                   <div className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
                     <button
+                      type="button"
                       onClick={() => setPickupRequested(!pickupRequested)}
                       className="w-full flex items-center gap-3 px-5 py-4 hover:bg-slate-50/50 transition-colors"
                     >
@@ -1374,8 +1999,8 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
                         </p>
                         <p className="text-xs text-slate-400 mt-0.5">
                           {pickupRequested
-                            ? (fr ? 'L\'entreprise viendra chercher vos articles (frais selon la distance)' : 'The company will pick up your items (distance-based fee)')
-                            : (fr ? 'Demander à l\'entreprise de venir chercher les articles' : 'Request the company to pick up items')}
+                            ? (fr ? 'Notre collecteur passera récupérer votre linge à domicile' : 'Our collector will pick up your laundry at home')
+                            : (fr ? 'Demander à l\'entreprise de venir chercher vos articles' : 'Request the company to pick up items')}
                         </p>
                       </div>
                       <div className={`w-11 h-6 rounded-full flex items-center transition-colors flex-shrink-0 ${
@@ -1387,10 +2012,31 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
 
                     {pickupRequested && (
                       <div className="px-5 pb-5 space-y-4 border-t border-slate-50 pt-4">
+                        {savedHomeAddress && !pickupAddress && pickupLat === null && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPickupAddress(savedHomeAddress.address);
+                              setPickupLat(savedHomeAddress.lat);
+                              setPickupLng(savedHomeAddress.lng);
+                            }}
+                            className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-amber-50/70 border border-amber-200 text-xs text-amber-800 hover:bg-amber-50 transition-colors"
+                          >
+                            <span className="flex items-center gap-1.5 truncate">
+                              <MapPin className="w-3.5 h-3.5 flex-shrink-0" />
+                              <span className="truncate">
+                                {fr ? 'Réutiliser ma dernière adresse :' : 'Reuse my last address:'}{' '}
+                                <strong>{savedHomeAddress.address || (fr ? 'Position GPS enregistrée' : 'Saved GPS location')}</strong>
+                              </span>
+                            </span>
+                            <span className="font-semibold flex-shrink-0">{fr ? 'Appliquer' : 'Apply'}</span>
+                          </button>
+                        )}
+
                         {pickupDays.length > 0 && (
                           <div>
                             <label className="block text-xs font-medium text-slate-500 mb-1.5">
-                              {fr ? 'Jour de collecte' : 'Pickup day'}
+                              {fr ? 'Jour de collecte souhaité *' : 'Preferred pickup day *'}
                             </label>
                             <div className="flex flex-wrap gap-2">
                               {pickupDays.map((day) => {
@@ -1406,6 +2052,7 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
                                 const label = dayLabels[day]?.[lang === 'fr' ? 'fr' : 'en'] ?? day;
                                 return (
                                   <button
+                                    type="button"
                                     key={day}
                                     onClick={() => setSelectedPickupDay(day)}
                                     className={`px-3 py-2 rounded-lg border text-sm font-medium transition-all ${
@@ -1424,66 +2071,84 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
 
                         <div>
                           <label className="block text-xs font-medium text-slate-500 mb-1.5">
-                            {fr ? 'Adresse de collecte' : 'Pickup address'}
+                            {fr ? 'Adresse de collecte (quartier, rue, repère) *' : 'Pickup address (district, street, landmark) *'}
                           </label>
                           <input
                             type="text"
                             value={pickupAddress}
                             onChange={(e) => setPickupAddress(e.target.value)}
-                            placeholder={fr ? 'Ex: Rue 12, Quartier Médina, Dakar' : 'Ex: 12 Main St, Downtown'}
+                            placeholder={fr ? 'Ex: Cocody Angré, Immeuble bleu 2e étage' : 'Ex: 12 Main St, Apt 2B'}
                             className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent"
                           />
                         </div>
 
-                        <div>
-                          <label className="block text-xs font-medium text-slate-500 mb-1.5">
-                            {fr ? 'Position GPS' : 'GPS location'}
+                        <div className="space-y-2.5">
+                          <label className="block text-xs font-medium text-slate-500">
+                            {fr ? 'Position GPS / Carte (recommandé pour le collecteur)' : 'GPS / Map location (recommended for pickup)'}
                           </label>
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
                             <button
+                              type="button"
                               onClick={captureGps}
                               disabled={gpsLoading}
-                              className="px-3 py-2.5 rounded-lg bg-sky-50 border border-sky-200 text-sky-600 text-sm font-medium hover:bg-sky-100 transition-colors disabled:opacity-50 flex items-center gap-2 flex-shrink-0"
+                              className="px-3 py-2 rounded-lg bg-sky-50 border border-sky-200 text-sky-600 text-xs font-medium hover:bg-sky-100 transition-colors disabled:opacity-50 flex items-center gap-1.5"
                             >
                               {gpsLoading ? (
-                                <Loader2 className="w-4 h-4 animate-spin" />
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
                               ) : (
-                                <Navigation className="w-4 h-4" />
+                                <Navigation className="w-3.5 h-3.5" />
                               )}
-                              {fr ? 'Partager ma position' : 'Share my location'}
+                              {fr ? 'Ma position GPS' : 'My GPS location'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setShowPickupMap((v) => !v)}
+                              className="px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-slate-700 text-xs font-medium hover:bg-slate-100 transition-colors flex items-center gap-1.5"
+                            >
+                              <MapIcon className="w-3.5 h-3.5 text-amber-600" />
+                              {showPickupMap
+                                ? (fr ? 'Masquer la carte' : 'Hide map')
+                                : (fr ? 'Choisir sur la carte' : 'Pick on map')}
                             </button>
                             {pickupLat !== null && pickupLng !== null && (
-                              <div className="flex items-center gap-1.5 text-sm text-emerald-600 flex-1 min-w-0">
-                                <Check className="w-4 h-4 flex-shrink-0" />
-                                <span className="truncate">
-                                  {pickupLat.toFixed(5)}, {pickupLng.toFixed(5)}
-                                </span>
-                                <a
-                                  href={`https://www.google.com/maps?q=${pickupLat},${pickupLng}`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="text-sky-500 hover:text-sky-600 text-xs underline flex-shrink-0"
-                                >
-                                  {fr ? 'Voir' : 'View'}
-                                </a>
-                              </div>
+                              <span className="inline-flex items-center gap-1 text-xs text-emerald-600 font-medium">
+                                <Check className="w-3.5 h-3.5" />
+                                {pickupLat.toFixed(4)}, {pickupLng.toFixed(4)}
+                              </span>
                             )}
                           </div>
-                          {gpsError && (
-                            <p className="text-xs text-red-500 mt-1.5">{gpsError}</p>
-                          )}
-                          {pickupLat === null && !gpsError && (
-                            <p className="text-xs text-slate-400 mt-1.5">
-                              {fr ? 'Partagez votre position pour calculer les frais selon la distance.' : 'Share your location to calculate fees based on distance.'}
-                            </p>
+                          {gpsError && <p className="text-xs text-red-500">{gpsError}</p>}
+                          {showPickupMap && (
+                            <ClientLocationMapPicker
+                              id="client-pickup-map"
+                              latitude={pickupLat}
+                              longitude={pickupLng}
+                              shopLatitude={client.delivery_latitude}
+                              shopLongitude={client.delivery_longitude}
+                              shopName={client.entreprise_nom}
+                              accent="amber"
+                              lang={lang}
+                              onSelect={(lat, lng) => {
+                                setPickupLat(lat);
+                                setPickupLng(lng);
+                                setGpsError(null);
+                              }}
+                            />
                           )}
                         </div>
 
                         {pickupFeeEstimate !== null && (
                           <div className="rounded-lg bg-amber-50 border border-amber-100 p-3 flex items-center justify-between">
-                            <span className="text-xs text-slate-600">
-                              {fr ? 'Frais de collecte estimés' : 'Estimated pickup fee'}
-                            </span>
+                            <div>
+                              <span className="text-xs font-medium text-slate-700">
+                                {fr ? 'Frais de collecte estimés' : 'Estimated pickup fee'}
+                              </span>
+                              {pickupDistanceKm !== null && (
+                                <span className="text-[11px] text-amber-700 ml-1.5">
+                                  ({pickupDistanceKm.toFixed(1)} km)
+                                </span>
+                              )}
+                            </div>
                             <span className="text-sm font-bold text-amber-700">{formatPrice(pickupFeeEstimate)}</span>
                           </div>
                         )}
@@ -1492,16 +2157,24 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
                   </div>
                 )}
 
+                {/* Delivery option */}
                 {orderArticles.length > 0 && (
                   <div className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
                     <button
-                      onClick={() => setDeliveryRequested(!deliveryRequested)}
+                      type="button"
+                      onClick={() => {
+                        const next = !deliveryRequested;
+                        setDeliveryRequested(next);
+                        if (next && pickupRequested && !deliveryAddress && deliveryLat === null) {
+                          setSameAddressAsPickup(true);
+                        }
+                      }}
                       className="w-full flex items-center gap-3 px-5 py-4 hover:bg-slate-50/50 transition-colors"
                     >
                       <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 transition-colors ${
                         deliveryRequested ? 'bg-sky-100 text-sky-600' : 'bg-slate-100 text-slate-400'
                       }`}>
-                        <Truck className="w-5 h-5" />
+                        <Home className="w-5 h-5" />
                       </div>
                       <div className="text-left flex-1">
                         <p className="text-sm font-semibold text-slate-900">
@@ -1509,8 +2182,8 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
                         </p>
                         <p className="text-xs text-slate-400 mt-0.5">
                           {deliveryRequested
-                            ? (fr ? 'La commande sera livrée à l’adresse indiquée' : 'The order will be delivered to the address below')
-                            : (fr ? 'Demander la livraison de votre commande' : 'Request delivery of your order')}
+                            ? (fr ? 'Votre linge propre vous sera livré directement chez vous' : 'Your clean laundry will be delivered directly to you')
+                            : (fr ? 'Demander la livraison une fois le linge traité' : 'Request delivery once laundry is processed')}
                         </p>
                       </div>
                       <div className={`w-11 h-6 rounded-full flex items-center transition-colors flex-shrink-0 ${
@@ -1519,70 +2192,175 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
                         <div className="w-5 h-5 rounded-full bg-white shadow-sm mx-0.5 transition-transform" />
                       </div>
                     </button>
+
                     {deliveryRequested && (
                       <div className="px-5 pb-5 space-y-4 border-t border-slate-50 pt-4">
-                        <div>
-                          <label className="block text-xs font-medium text-slate-500 mb-1.5">
-                            {fr ? 'Adresse de livraison' : 'Delivery address'}
+                        {pickupRequested && (
+                          <label className="flex items-center gap-2.5 p-3 rounded-lg bg-sky-50/70 border border-sky-100 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={sameAddressAsPickup}
+                              onChange={(e) => {
+                                const checked = e.target.checked;
+                                setSameAddressAsPickup(checked);
+                                if (checked) {
+                                  setDeliveryAddress(pickupAddress);
+                                  setDeliveryLat(pickupLat);
+                                  setDeliveryLng(pickupLng);
+                                }
+                              }}
+                              className="w-4 h-4 rounded border-sky-300 text-sky-600 focus:ring-sky-500"
+                            />
+                            <Copy className="w-3.5 h-3.5 text-sky-600 flex-shrink-0" />
+                            <span className="text-xs font-medium text-sky-900">
+                              {fr ? 'Même adresse et position GPS que la collecte' : 'Same address and GPS location as pickup'}
+                            </span>
                           </label>
-                          <input
-                            type="text"
-                            value={deliveryAddress}
-                            onChange={(e) => setDeliveryAddress(e.target.value)}
-                            placeholder={fr ? 'Ex: Rue 12, Quartier Médina, Dakar' : 'Ex: 12 Main St, Downtown'}
-                            className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent"
-                          />
-                        </div>
+                        )}
+
+                        {!sameAddressAsPickup && savedHomeAddress && !deliveryAddress && deliveryLat === null && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDeliveryAddress(savedHomeAddress.address);
+                              setDeliveryLat(savedHomeAddress.lat);
+                              setDeliveryLng(savedHomeAddress.lng);
+                            }}
+                            className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-sky-50/70 border border-sky-200 text-xs text-sky-800 hover:bg-sky-50 transition-colors"
+                          >
+                            <span className="flex items-center gap-1.5 truncate">
+                              <MapPin className="w-3.5 h-3.5 flex-shrink-0" />
+                              <span className="truncate">
+                                {fr ? 'Réutiliser ma dernière adresse :' : 'Reuse my last address:'}{' '}
+                                <strong>{savedHomeAddress.address || (fr ? 'Position GPS enregistrée' : 'Saved GPS location')}</strong>
+                              </span>
+                            </span>
+                            <span className="font-semibold flex-shrink-0">{fr ? 'Appliquer' : 'Apply'}</span>
+                          </button>
+                        )}
 
                         <div>
                           <label className="block text-xs font-medium text-slate-500 mb-1.5">
-                            {fr ? 'Position GPS (pour le calcul des frais)' : 'GPS location (for fee calculation)'}
+                            {fr ? 'Jour de livraison souhaité (optionnel)' : 'Preferred delivery day (optional)'}
                           </label>
-                          <div className="flex items-center gap-2">
-                            <button
-                              onClick={captureDeliveryGps}
-                              disabled={deliveryGpsLoading}
-                              className="px-3 py-2.5 rounded-lg bg-sky-50 border border-sky-200 text-sky-600 text-sm font-medium hover:bg-sky-100 transition-colors disabled:opacity-50 flex items-center gap-2 flex-shrink-0"
-                            >
-                              {deliveryGpsLoading ? (
-                                <Loader2 className="w-4 h-4 animate-spin" />
-                              ) : (
-                                <Navigation className="w-4 h-4" />
-                              )}
-                              {fr ? 'Partager ma position' : 'Share my location'}
-                            </button>
-                            {deliveryLat !== null && deliveryLng !== null && (
-                              <div className="flex items-center gap-1.5 text-sm text-emerald-600 flex-1 min-w-0">
-                                <Check className="w-4 h-4 flex-shrink-0" />
-                                <span className="truncate">
-                                  {deliveryLat.toFixed(5)}, {deliveryLng.toFixed(5)}
-                                </span>
-                                <a
-                                  href={`https://www.google.com/maps?q=${deliveryLat},${deliveryLng}`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="text-sky-500 hover:text-sky-600 text-xs underline flex-shrink-0"
+                          <div className="flex flex-wrap gap-1.5">
+                            {(pickupDays.length > 0
+                              ? pickupDays
+                              : ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi']
+                            ).map((day) => {
+                              const dayLabels: Record<string, { fr: string; en: string }> = {
+                                lundi: { fr: 'Lundi', en: 'Mon' },
+                                mardi: { fr: 'Mardi', en: 'Tue' },
+                                mercredi: { fr: 'Mercredi', en: 'Wed' },
+                                jeudi: { fr: 'Jeudi', en: 'Thu' },
+                                vendredi: { fr: 'Vendredi', en: 'Fri' },
+                                samedi: { fr: 'Samedi', en: 'Sat' },
+                                dimanche: { fr: 'Dimanche', en: 'Sun' },
+                              };
+                              const label = dayLabels[day]?.[fr ? 'fr' : 'en'] ?? day;
+                              const isSelected = selectedDeliveryDay === day;
+                              return (
+                                <button
+                                  type="button"
+                                  key={day}
+                                  onClick={() => setSelectedDeliveryDay(isSelected ? '' : day)}
+                                  className={`px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-all ${
+                                    isSelected
+                                      ? 'bg-sky-500 text-white border-sky-500 shadow-xs'
+                                      : 'bg-white border-slate-200 text-slate-600 hover:border-sky-200 hover:bg-sky-50/50'
+                                  }`}
                                 >
-                                  {fr ? 'Voir' : 'View'}
-                                </a>
-                              </div>
-                            )}
+                                  {label}
+                                </button>
+                              );
+                            })}
                           </div>
-                          {deliveryGpsError && (
-                            <p className="text-xs text-red-500 mt-1.5">{deliveryGpsError}</p>
-                          )}
-                          {deliveryLat === null && !deliveryGpsError && (
-                            <p className="text-xs text-slate-400 mt-1.5">
-                              {fr ? 'Partagez votre position pour calculer les frais selon la distance.' : 'Share your location to calculate fees based on distance.'}
-                            </p>
-                          )}
                         </div>
+
+                        {!sameAddressAsPickup && (
+                          <>
+                            <div>
+                              <label className="block text-xs font-medium text-slate-500 mb-1.5">
+                                {fr ? 'Adresse de livraison *' : 'Delivery address *'}
+                              </label>
+                              <input
+                                type="text"
+                                value={deliveryAddress}
+                                onChange={(e) => setDeliveryAddress(e.target.value)}
+                                placeholder={fr ? 'Ex: Plateau, Immeuble Alpha, 4e étage' : 'Ex: 12 Main St, Downtown'}
+                                className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent"
+                              />
+                            </div>
+
+                            <div className="space-y-2.5">
+                              <label className="block text-xs font-medium text-slate-500">
+                                {fr ? 'Position GPS / Carte (pour le calcul des frais et le livreur)' : 'GPS / Map location (for fee calculation & driver)'}
+                              </label>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={captureDeliveryGps}
+                                  disabled={deliveryGpsLoading}
+                                  className="px-3 py-2 rounded-lg bg-sky-50 border border-sky-200 text-sky-600 text-xs font-medium hover:bg-sky-100 transition-colors disabled:opacity-50 flex items-center gap-1.5"
+                                >
+                                  {deliveryGpsLoading ? (
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                  ) : (
+                                    <Navigation className="w-3.5 h-3.5" />
+                                  )}
+                                  {fr ? 'Ma position GPS' : 'My GPS location'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setShowDeliveryMap((v) => !v)}
+                                  className="px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-slate-700 text-xs font-medium hover:bg-slate-100 transition-colors flex items-center gap-1.5"
+                                >
+                                  <MapIcon className="w-3.5 h-3.5 text-sky-600" />
+                                  {showDeliveryMap
+                                    ? (fr ? 'Masquer la carte' : 'Hide map')
+                                    : (fr ? 'Choisir sur la carte' : 'Pick on map')}
+                                </button>
+                                {deliveryLat !== null && deliveryLng !== null && (
+                                  <span className="inline-flex items-center gap-1 text-xs text-emerald-600 font-medium">
+                                    <Check className="w-3.5 h-3.5" />
+                                    {deliveryLat.toFixed(4)}, {deliveryLng.toFixed(4)}
+                                  </span>
+                                )}
+                              </div>
+                              {deliveryGpsError && <p className="text-xs text-red-500">{deliveryGpsError}</p>}
+                              {showDeliveryMap && (
+                                <ClientLocationMapPicker
+                                  id="client-delivery-map"
+                                  latitude={deliveryLat}
+                                  longitude={deliveryLng}
+                                  shopLatitude={client.delivery_latitude}
+                                  shopLongitude={client.delivery_longitude}
+                                  shopName={client.entreprise_nom}
+                                  accent="sky"
+                                  lang={lang}
+                                  onSelect={(lat, lng) => {
+                                    setDeliveryLat(lat);
+                                    setDeliveryLng(lng);
+                                    setDeliveryGpsError(null);
+                                  }}
+                                />
+                              )}
+                            </div>
+                          </>
+                        )}
 
                         {deliveryFeeEstimate !== null && (
                           <div className="rounded-lg bg-sky-50 border border-sky-100 p-3 flex items-center justify-between">
-                            <span className="text-xs text-slate-600">
-                              {fr ? 'Frais de livraison estimés' : 'Estimated delivery fee'}
-                            </span>
+                            <div>
+                              <span className="text-xs font-medium text-slate-700">
+                                {fr ? 'Frais de livraison estimés' : 'Estimated delivery fee'}
+                              </span>
+                              {deliveryDistanceKm !== null && (
+                                <span className="text-[11px] text-sky-700 ml-1.5">
+                                  ({deliveryDistanceKm.toFixed(1)} km)
+                                </span>
+                              )}
+                            </div>
                             <span className="text-sm font-bold text-sky-700">{formatPrice(deliveryFeeEstimate)}</span>
                           </div>
                         )}
@@ -1591,10 +2369,99 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
                   </div>
                 )}
 
+                {/* Special instructions / notes */}
+                {orderArticles.length > 0 && (
+                  <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-5">
+                    <label className="flex items-center gap-2 text-sm font-semibold text-slate-900 mb-2">
+                      <FileText className="w-4 h-4 text-sky-500" />
+                      {fr ? 'Instructions & remarques (optionnel)' : 'Special instructions (optional)'}
+                    </label>
+                    <textarea
+                      value={orderNotes}
+                      onChange={(e) => setOrderNotes(e.target.value)}
+                      rows={2}
+                      placeholder={
+                        fr
+                          ? 'Ex : Appeler 15 min avant, portail vert, tache de café sur la chemise blanche…'
+                          : 'Ex: Call 15 min ahead, green gate, coffee stain on white shirt…'
+                      }
+                      className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent resize-none"
+                    />
+                  </div>
+                )}
+
+                {/* Transparent order summary breakdown */}
+                {orderArticles.length > 0 && (
+                  <div className="bg-white rounded-xl border border-slate-200/80 shadow-sm p-5 space-y-2.5">
+                    <div className="flex items-center justify-between text-xs text-slate-600">
+                      <span>
+                        {fr ? 'Sous-total articles' : 'Items subtotal'}
+                        {getSelectedTypeLibelle() && (
+                          <span className="text-sky-700 font-medium ml-1">
+                            ({getSelectedTypeLibelle()} ×{getSelectedCoefficient()})
+                          </span>
+                        )}
+                      </span>
+                      <span className="font-medium text-slate-800">{formatPrice(orderTotal)}</span>
+                    </div>
+
+                    {clientDiscountAmount > 0 && (
+                      <div className="flex items-center justify-between text-xs text-emerald-700">
+                        <span>
+                          {fr ? `Remise fidélité (${client.taux_remise}%)` : `Client discount (${client.taux_remise}%)`}
+                        </span>
+                        <span className="font-semibold">-{formatPrice(clientDiscountAmount)}</span>
+                      </div>
+                    )}
+
+                    {pickupRequested && pickupFeeEstimate !== null && (
+                      <div className="flex items-center justify-between text-xs text-amber-700">
+                        <span>
+                          {fr ? 'Frais de collecte à domicile' : 'Home pickup fee'}
+                          {pickupDistanceKm !== null ? ` (${pickupDistanceKm.toFixed(1)} km)` : ''}
+                        </span>
+                        <span className="font-medium">{formatPrice(pickupFeeEstimate)}</span>
+                      </div>
+                    )}
+
+                    {deliveryRequested && deliveryFeeEstimate !== null && (
+                      <div className="flex items-center justify-between text-xs text-sky-700">
+                        <span>
+                          {fr ? 'Frais de livraison à domicile' : 'Home delivery fee'}
+                          {deliveryDistanceKm !== null ? ` (${deliveryDistanceKm.toFixed(1)} km)` : ''}
+                        </span>
+                        <span className="font-medium">{formatPrice(deliveryFeeEstimate)}</span>
+                      </div>
+                    )}
+
+                    <div className="pt-2.5 border-t border-slate-100 flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-bold text-slate-900">
+                          {fr ? 'Total estimé' : 'Estimated total'}
+                        </p>
+                        <p className="text-[11px] text-slate-400">
+                          {fr
+                            ? 'Ajustable après vérification physique des pièces à la collecte'
+                            : 'Adjustable after physical count at pickup'}
+                        </p>
+                      </div>
+                      <p className="text-xl font-bold text-sky-600">{formatPrice(grandTotal)}</p>
+                    </div>
+                  </div>
+                )}
+
+                {(orderError || editError) && (
+                  <div className="rounded-xl bg-red-50 border border-red-200 p-3.5 flex items-start gap-2.5">
+                    <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0 mt-0.5" />
+                    <p className="text-sm text-red-700">{orderError ?? editError}</p>
+                  </div>
+                )}
+
                 {orderArticles.length > 0 && (
                   <div className="space-y-2">
                     {editingDepotId && (
                       <button
+                        type="button"
                         onClick={cancelEdit}
                         className="w-full px-4 py-3 rounded-lg border border-slate-200 text-slate-600 font-medium text-sm hover:bg-slate-50 transition-colors"
                       >
@@ -1602,9 +2469,10 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
                       </button>
                     )}
                     <button
+                      type="button"
                       onClick={editingDepotId ? submitEditOrder : submitOrder}
                       disabled={(editingDepotId ? editLoading : submitting) || (typesTraitement.length > 0 && !selectedTypeTraitementId)}
-                      className="w-full px-4 py-3 rounded-lg bg-sky-500 text-white font-medium text-sm hover:bg-sky-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                      className="w-full px-4 py-3.5 rounded-xl bg-sky-500 text-white font-semibold text-sm hover:bg-sky-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-sm"
                     >
                       {(editingDepotId ? editLoading : submitting) ? (
                         <>
@@ -1616,7 +2484,7 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
                           <Check className="w-4 h-4" />
                           {editingDepotId
                             ? (fr ? 'Enregistrer les modifications' : 'Save changes')
-                            : (fr ? 'Valider ma commande' : 'Submit my order')}
+                            : (fr ? `Valider ma commande · ${formatPrice(grandTotal)}` : `Submit my order · ${formatPrice(grandTotal)}`)}
                         </>
                       )}
                     </button>
