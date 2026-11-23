@@ -36,7 +36,8 @@ import { setCurrentBoutiqueId, db } from '@/lib/db';
 import { connectRealtimeSync } from '@/lib/realtimeSync';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import { useOfflineStatus } from '@/hooks/useOfflineStatus';
-import { Loader2, Clock, LogOut, ShieldAlert, ShieldCheck } from 'lucide-react';
+import { usePushNotifications, notifyCompanyDemoLicencePush } from '@/hooks/usePushNotifications';
+import { Loader2, Clock, LogOut, ShieldAlert, ShieldCheck, BellRing, KeyRound, CheckCircle2 } from 'lucide-react';
 
 type LicenceInfo = { statut: string; date_fin: string; type_licence: string };
 
@@ -255,37 +256,19 @@ function WorkspaceApp() {
     );
   }
 
-  // Pending entreprise check: block access until super admin validates
+  // Pending entreprise check: block access until super admin validates,
+  // while subscribing the company to Push and confirming its 30-day Demo licence
   if (!isSuperAdmin && entrepriseStatut === 'pending') {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center px-4">
-        <div className="max-w-md text-center">
-          <div className="w-16 h-16 rounded-2xl bg-amber-50 flex items-center justify-center mx-auto mb-4">
-            <ShieldCheck className="w-8 h-8 text-amber-500" />
-          </div>
-          <h2 className="text-lg font-semibold text-slate-900">{lang === 'fr' ? 'En attente de validation' : 'Pending validation'}</h2>
-          <p className="text-sm text-slate-500 mt-2">
-            {lang === 'fr'
-              ? "Votre entreprise a été créée avec une licence Démo de 30 jours. Le Super Administrateur a été notifié pour approuver votre compte afin que vous puissiez accéder au logiciel."
-              : 'Your company has been created with a 30-day Demo license. The Super Administrator has been notified to approve your account before you can access the software.'}
-          </p>
-          {isOnline && (
-            <button
-              onClick={() => refreshEntrepriseAndLicenceSilently()}
-              className="mt-6 px-4 py-2.5 rounded-lg bg-sky-500 text-white text-sm font-medium hover:bg-sky-600 transition-colors"
-            >
-              {lang === 'fr' ? 'Vérifier le statut' : 'Check status'}
-            </button>
-          )}
-          <button
-            onClick={() => signOut()}
-            className="mt-3 mx-auto px-4 py-2.5 rounded-lg bg-red-50 border border-red-100 text-red-600 text-sm font-medium hover:bg-red-100 transition-colors flex items-center justify-center gap-2"
-          >
-            <LogOut className="w-4 h-4" />
-            {t('nav.logout')}
-          </button>
-        </div>
-      </div>
+      <PendingEntrepriseScreen
+        tenantId={tenantId}
+        lang={lang}
+        isOnline={isOnline}
+        licenceDateFin={licenceStatus?.date_fin ?? null}
+        onRefresh={refreshEntrepriseAndLicenceSilently}
+        onSignOut={() => signOut()}
+        logoutLabel={t('nav.logout')}
+      />
     );
   }
 
@@ -348,6 +331,138 @@ function WorkspaceApp() {
       </ErrorBoundary>
       <DepotStartCounterModal />
     </Layout>
+  );
+}
+
+function PendingEntrepriseScreen({
+  tenantId,
+  lang,
+  isOnline,
+  licenceDateFin,
+  onRefresh,
+  onSignOut,
+  logoutLabel,
+}: {
+  tenantId: string | null;
+  lang: string;
+  isOnline: boolean;
+  licenceDateFin: string | null;
+  onRefresh: () => void;
+  onSignOut: () => void;
+  logoutLabel: string;
+}) {
+  const pushStatus = usePushNotifications();
+  const [pushConfirmSent, setPushConfirmSent] = useState(false);
+
+  const fallbackDateFin =
+    licenceDateFin ?? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const formattedEnd = new Date(fallbackDateFin).toLocaleDateString(lang === 'fr' ? 'fr-FR' : 'en-US', {
+    day: '2-digit',
+    month: 'long',
+    year: 'numeric',
+  });
+
+  async function handleEnablePush() {
+    const ok = await pushStatus.enableNotifications();
+    if (ok && tenantId) {
+      let entNom = 'PressingLite';
+      try {
+        const raw = localStorage.getItem(`demo_30d_welcome_pending_${tenantId}`);
+        if (raw) {
+          const parsed = JSON.parse(raw) as { entrepriseNom?: string };
+          if (parsed.entrepriseNom) entNom = parsed.entrepriseNom;
+        }
+      } catch {
+        // Ignore
+      }
+      await notifyCompanyDemoLicencePush({
+        tenantId,
+        entrepriseNom: entNom,
+        dateFin: fallbackDateFin,
+        lang,
+        requestPermissionIfDefault: false,
+        showLocalNotification: true,
+      });
+      setPushConfirmSent(true);
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-50 flex items-center justify-center px-4 py-8">
+      <div className="max-w-md w-full space-y-4">
+        {/* Push-style 30-day Demo licence notification card */}
+        <div className="rounded-2xl bg-gradient-to-r from-sky-600 to-indigo-600 text-white p-4 shadow-lg flex items-start gap-3">
+          <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center flex-shrink-0">
+            <KeyRound className="w-5 h-5" />
+          </div>
+          <div className="flex-1 min-w-0 text-left">
+            <p className="text-sm font-bold">
+              {lang === 'fr' ? 'Licence Démo 30 jours activée !' : '30-Day Demo License Activated!'}
+            </p>
+            <p className="text-xs text-white/95 mt-1 leading-relaxed">
+              {lang === 'fr'
+                ? `Votre nouvelle entreprise bénéficie automatiquement d'une licence Démo gratuite de 30 jours (valable jusqu'au ${formattedEnd}).`
+                : `Your new company automatically receives a free 30-day Demo license (valid until ${formattedEnd}).`}
+            </p>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 text-center">
+          <div className="w-16 h-16 rounded-2xl bg-amber-50 flex items-center justify-center mx-auto mb-4">
+            <ShieldCheck className="w-8 h-8 text-amber-500" />
+          </div>
+          <h2 className="text-lg font-semibold text-slate-900">
+            {lang === 'fr' ? 'En attente de validation' : 'Pending validation'}
+          </h2>
+          <p className="text-sm text-slate-500 mt-2">
+            {lang === 'fr'
+              ? 'Le Super Administrateur a été notifié pour approuver votre compte. Activez les notifications Push ci-dessous pour recevoir la confirmation instantanément.'
+              : 'The Super Administrator has been notified to approve your account. Enable Push notifications below to receive confirmation instantly.'}
+          </p>
+
+          {pushStatus.supported && (
+            <div className="mt-4">
+              {pushStatus.subscribed || pushConfirmSent ? (
+                <div className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-medium">
+                  <CheckCircle2 className="w-4 h-4" />
+                  {lang === 'fr'
+                    ? 'Notifications Push activées sur cet appareil'
+                    : 'Push notifications enabled on this device'}
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void handleEnablePush()}
+                  disabled={pushStatus.subscribing}
+                  className="w-full px-4 py-2.5 rounded-lg bg-indigo-50 border border-indigo-200 text-indigo-700 text-sm font-medium hover:bg-indigo-100 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  <BellRing className="w-4 h-4" />
+                  {lang === 'fr'
+                    ? 'Activer les messages Push (Licence & Validation)'
+                    : 'Enable Push alerts (License & Approval)'}
+                </button>
+              )}
+            </div>
+          )}
+
+          {isOnline && (
+            <button
+              onClick={onRefresh}
+              className="mt-4 w-full px-4 py-2.5 rounded-lg bg-sky-500 text-white text-sm font-medium hover:bg-sky-600 transition-colors"
+            >
+              {lang === 'fr' ? 'Vérifier le statut' : 'Check status'}
+            </button>
+          )}
+          <button
+            onClick={onSignOut}
+            className="mt-3 mx-auto px-4 py-2.5 rounded-lg bg-red-50 border border-red-100 text-red-600 text-sm font-medium hover:bg-red-100 transition-colors flex items-center justify-center gap-2"
+          >
+            <LogOut className="w-4 h-4" />
+            {logoutLabel}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

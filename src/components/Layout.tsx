@@ -5,7 +5,7 @@ import { useI18n, type Lang } from '@/lib/i18n';
 import { Package, ArrowDownToLine, ArrowUpFromLine, LayoutDashboard, BookOpen, Receipt, Building2, CalendarDays, Menu, X, Phone, Users, Download, History, Wallet, LogOut, UserCog, ShieldCheck, Calculator, Receipt as ReceiptIcon, Presentation as PresentationIcon, CreditCard, KeyRound, Lock, Loader2, Globe, Store, ChevronDown, Check, Truck, BellRing, ShoppingBag, WifiOff, Wifi, Share, Smartphone, Monitor, CheckCircle2, Ticket, PackageOpen, PackageSearch, Plus, RefreshCw, AlertTriangle, Trash2, Database, Clock, ClipboardList } from 'lucide-react';
 import { Entreprise } from '@/types';
 import { usePwaInstall } from '@/hooks/usePwaInstall';
-import { usePushNotifications } from '@/hooks/usePushNotifications';
+import { usePushNotifications, notifyCompanyDemoLicencePush, playApprovalSound } from '@/hooks/usePushNotifications';
 import { useOfflineStatus } from '@/hooks/useOfflineStatus';
 import { enableAutoSync } from '@/lib/offlineQueue';
 import { getLastCacheRefreshAt } from '@/lib/readCache';
@@ -121,7 +121,7 @@ export default function Layout({ currentView, onNavigate, children }: LayoutProp
     retryMutation,
     retryAllFailed,
   } = useOfflineStatus();
-  usePushNotifications();
+  const pushStatus = usePushNotifications();
   useEffect(() => { enableAutoSync(); }, []);
   useEffect(() => {
     if (showSyncModal) {
@@ -139,6 +139,11 @@ export default function Layout({ currentView, onNavigate, children }: LayoutProp
   const [confirmPassword, setConfirmPassword] = useState('');
   const [pickupAlert, setPickupAlert] = useState<{ numero: string | null; address: string | null } | null>(null);
   const [orderAlert, setOrderAlert] = useState<{ numero: string | null; client: string | null } | null>(null);
+  const [demoLicenceAlert, setDemoLicenceAlert] = useState<{
+    entrepriseNom: string;
+    dateFin: string;
+    daysLeft: number;
+  } | null>(null);
   const knownDepotIds = useRef<Set<string>>(new Set());
   const [iosBannerDismissed, setIosBannerDismissed] = useState(false);
 
@@ -209,6 +214,43 @@ export default function Layout({ currentView, onNavigate, children }: LayoutProp
       });
     }
   }, [tenantId, isSuperAdmin, isOnline]);
+
+  // First-time Push notification for newly created companies with automatic 30-day Demo licence
+  useEffect(() => {
+    if (!tenantId || isSuperAdmin || !licenceInfo) return;
+    const isDemo = licenceInfo.type_licence === 'demo' || licenceInfo.statut === 'demo';
+    if (!isDemo) return;
+
+    const shownKey = `demo_30d_push_shown_${tenantId}`;
+    const pendingKey = `demo_30d_welcome_pending_${tenantId}`;
+    try {
+      if (localStorage.getItem(shownKey)) return;
+      localStorage.setItem(shownKey, new Date().toISOString());
+      localStorage.removeItem(pendingKey);
+    } catch {
+      // Proceed even if storage is restricted
+    }
+
+    const daysLeft = Math.max(
+      1,
+      Math.ceil((new Date(licenceInfo.date_fin).getTime() - Date.now()) / (1000 * 60 * 60 * 24)),
+    );
+    const nom = entreprise?.nom ?? 'PressingLite';
+    setDemoLicenceAlert({
+      entrepriseNom: nom,
+      dateFin: licenceInfo.date_fin,
+      daysLeft,
+    });
+    playApprovalSound();
+    void notifyCompanyDemoLicencePush({
+      tenantId,
+      entrepriseNom: nom,
+      dateFin: licenceInfo.date_fin,
+      lang,
+      requestPermissionIfDefault: false,
+      showLocalNotification: true,
+    });
+  }, [tenantId, isSuperAdmin, licenceInfo, entreprise?.nom, lang]);
 
   // Realtime listener for pickup-requested depots (active only when online)
   useEffect(() => {
@@ -571,6 +613,57 @@ export default function Layout({ currentView, onNavigate, children }: LayoutProp
               <button
                 onClick={() => setPickupAlert(null)}
                 className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/20 transition-colors flex-shrink-0"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Demo 30-day Licence Welcome Push Banner */}
+        {demoLicenceAlert && (
+          <div className="fixed top-3 left-3 right-3 sm:left-auto sm:right-4 sm:max-w-md z-[65] animate-[slideIn_0.3s_ease-out]">
+            <div className="bg-gradient-to-r from-sky-600 to-indigo-600 text-white rounded-2xl px-4 py-3.5 shadow-xl border border-white/15 flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center flex-shrink-0 mt-0.5">
+                <BellRing className="w-5 h-5 animate-pulse" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-bold leading-snug">
+                  {lang === 'fr' ? 'Licence Démo 30 jours activée !' : '30-Day Demo License Activated!'}
+                </p>
+                <p className="text-xs text-white/95 mt-0.5 leading-relaxed">
+                  {lang === 'fr'
+                    ? `Bienvenue ${demoLicenceAlert.entrepriseNom} ! Votre entreprise bénéficie automatiquement d'une licence Démo gratuite de 30 jours (${demoLicenceAlert.daysLeft}j restants, jusqu'au ${new Date(demoLicenceAlert.dateFin).toLocaleDateString('fr-FR')}).`
+                    : `Welcome ${demoLicenceAlert.entrepriseNom}! Your company automatically benefits from a free 30-day Demo license (${demoLicenceAlert.daysLeft}d left, until ${new Date(demoLicenceAlert.dateFin).toLocaleDateString('en-US')}).`}
+                </p>
+                {pushStatus.supported && pushStatus.permission !== 'granted' && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const ok = await pushStatus.enableNotifications();
+                      if (ok && tenantId) {
+                        void notifyCompanyDemoLicencePush({
+                          tenantId,
+                          entrepriseNom: demoLicenceAlert.entrepriseNom,
+                          dateFin: demoLicenceAlert.dateFin,
+                          lang,
+                          requestPermissionIfDefault: false,
+                          showLocalNotification: true,
+                        });
+                      }
+                    }}
+                    className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white text-sky-700 text-xs font-semibold hover:bg-sky-50 transition-colors"
+                  >
+                    <BellRing className="w-3.5 h-3.5" />
+                    {lang === 'fr' ? 'Activer les notifications Push' : 'Enable Push notifications'}
+                  </button>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setDemoLicenceAlert(null)}
+                className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-white/20 transition-colors flex-shrink-0"
+                aria-label={lang === 'fr' ? 'Fermer' : 'Close'}
               >
                 <X className="w-4 h-4" />
               </button>

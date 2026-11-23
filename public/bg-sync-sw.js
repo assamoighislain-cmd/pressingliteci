@@ -262,14 +262,15 @@ self.addEventListener('push', (event) => {
   const title = data.title || 'PressingLite';
   const payloadData = data.data || {};
   const isApproval = payloadData.type === 'new_entreprise_approval';
+  const isDemoWelcome = payloadData.type === 'demo_licence_activated';
 
   const options = {
     body: data.body || '',
     icon: data.icon || '/pwa-192x192.png',
     badge: data.badge || '/pwa-192x192.png',
-    tag: data.tag || (isApproval ? 'pressinglite-approval' : 'pressinglite-push'),
+    tag: data.tag || (isApproval ? 'pressinglite-approval' : isDemoWelcome ? 'pressinglite-demo-licence' : 'pressinglite-push'),
     renotify: data.renotify !== undefined ? Boolean(data.renotify) : true,
-    requireInteraction: data.requireInteraction !== undefined ? Boolean(data.requireInteraction) : isApproval,
+    requireInteraction: data.requireInteraction !== undefined ? Boolean(data.requireInteraction) : (isApproval || isDemoWelcome),
     silent: false,
     vibrate: Array.isArray(data.vibrate) ? data.vibrate : [300, 150, 300, 150, 400],
     actions: Array.isArray(data.actions) ? data.actions : undefined,

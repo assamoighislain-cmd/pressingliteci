@@ -73,8 +73,8 @@ export default function AuthForm() {
           : `Your request to join "${entrepriseNom.trim()}" has been sent. The company administrator must approve your request before you can access the account.`);
       } else if (mode === 'signup' && !joining) {
         setSignupSuccess(lang === 'fr'
-          ? `Votre entreprise « ${entrepriseNom.trim()} » a été créée. Un administrateur de la plateforme doit valider votre compte avant que vous puissiez accéder au logiciel. Vous serez notifié dès que votre compte sera activé.`
-          : `Your company "${entrepriseNom.trim()}" has been created. A platform administrator must validate your account before you can access the software. You will be notified once your account is activated.`);
+          ? `Félicitations ! Votre entreprise « ${entrepriseNom.trim()} » a été créée avec une licence Démo gratuite de 30 jours activée automatiquement. Un administrateur va valider votre compte et vous serez notifié par message Push.`
+          : `Congratulations! Your company "${entrepriseNom.trim()}" has been created with a free 30-day Demo license activated automatically. A platform administrator will validate your account and you will be notified by Push message.`);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : t('common.error'));

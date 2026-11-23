@@ -16,6 +16,7 @@ import {
   hydrateBoutiquesWithGeo,
 } from '@/lib/dbOfflineHelpers';
 import type { Boutique } from '@/types';
+import { notifyCompanyDemoLicencePush } from '@/hooks/usePushNotifications';
 
 export type UserRole = 'admin' | 'gerant' | 'commercial' | 'collecteur' | null;
 
@@ -552,15 +553,43 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       // Ensure 30-day Demo licence is activated right away on company creation (best-effort)
+      const demoEndDateIso = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
       try {
         await supabase.rpc('ensure_trial_licence');
       } catch {
         // Trigger or Super Admin approval will also guarantee the 30-day Demo licence
       }
 
+      const safeNom = entrepriseNom.trim();
+      try {
+        localStorage.setItem(
+          `demo_30d_welcome_pending_${newUser.id}`,
+          JSON.stringify({
+            entrepriseNom: safeNom,
+            dateFin: demoEndDateIso,
+            createdAt: new Date().toISOString(),
+          }),
+        );
+      } catch {
+        // Ignore storage errors
+      }
+
+      // Immediately notify the newly created company by Push about its automatic 30-day Demo licence
+      try {
+        await notifyCompanyDemoLicencePush({
+          tenantId: newUser.id,
+          entrepriseNom: safeNom,
+          dateFin: demoEndDateIso,
+          lang: localStorage.getItem('lang') || 'fr',
+          requestPermissionIfDefault: true,
+          showLocalNotification: true,
+        });
+      } catch {
+        // Non-blocking: in-app Push notification & DB trigger also notify the company
+      }
+
       // Immediately dispatch audible Web Push notification to Super Admin (even when app is closed)
       try {
-        const safeNom = entrepriseNom.trim();
         await supabase.functions.invoke('send-push-notification', {
           body: {
             tenant_id: 'super_admin',

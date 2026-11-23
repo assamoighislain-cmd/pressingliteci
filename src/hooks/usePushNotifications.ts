@@ -165,6 +165,156 @@ async function registerPushSubscriptionForTenant(
   return { subscribed: true, permission };
 }
 
+export interface DemoLicencePushPayload {
+  title: string;
+  body: string;
+  icon: string;
+  badge: string;
+  tag: string;
+  renotify: boolean;
+  requireInteraction: boolean;
+  silent: boolean;
+  vibrate: number[];
+  data: {
+    url: string;
+    type: 'demo_licence_activated';
+    entreprise_nom: string;
+    date_fin: string | null;
+  };
+}
+
+export function buildDemoLicencePushPayload(
+  entrepriseNom: string,
+  dateFinIso?: string | null,
+  lang = 'fr',
+): DemoLicencePushPayload {
+  const safeNom = entrepriseNom.trim() || 'PressingLite';
+  let formattedDate = '';
+  if (dateFinIso) {
+    try {
+      formattedDate = new Date(dateFinIso).toLocaleDateString(lang === 'fr' ? 'fr-FR' : 'en-US', {
+        day: '2-digit',
+        month: 'long',
+        year: 'numeric',
+      });
+    } catch {
+      formattedDate = dateFinIso;
+    }
+  }
+
+  const title =
+    lang === 'fr'
+      ? 'Licence Démo 30 jours activée !'
+      : '30-Day Demo License Activated!';
+  const body =
+    lang === 'fr'
+      ? `Bienvenue ${safeNom} ! Votre nouvelle entreprise bénéficie automatiquement d'une licence Démo gratuite de 30 jours${formattedDate ? ` (valable jusqu'au ${formattedDate})` : ''}.`
+      : `Welcome ${safeNom}! Your new company automatically benefits from a free 30-day Demo license${formattedDate ? ` (valid until ${formattedDate})` : ''}.`;
+
+  return {
+    title,
+    body,
+    icon: '/pwa-192x192.png',
+    badge: '/pwa-192x192.png',
+    tag: `demo-licence-30d-${safeNom.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 32)}`,
+    renotify: true,
+    requireInteraction: true,
+    silent: false,
+    vibrate: [250, 120, 250, 120, 350],
+    data: {
+      url: '/',
+      type: 'demo_licence_activated',
+      entreprise_nom: safeNom,
+      date_fin: dateFinIso ?? null,
+    },
+  };
+}
+
+/**
+ * Notifies a newly created company by Push notification that its 30-day Demo licence is active.
+ * - Always dispatches server Web Push via Edge Function for all subscribed devices of `tenantId`.
+ * - Optionally displays an immediate local Service Worker / Browser Push notification in the current session.
+ */
+export async function notifyCompanyDemoLicencePush(params: {
+  tenantId: string;
+  entrepriseNom: string;
+  dateFin?: string | null;
+  lang?: string;
+  requestPermissionIfDefault?: boolean;
+  showLocalNotification?: boolean;
+}): Promise<{ webPushSent: boolean; localShown: boolean }> {
+  const {
+    tenantId,
+    entrepriseNom,
+    dateFin = null,
+    lang = 'fr',
+    requestPermissionIfDefault = false,
+    showLocalNotification = false,
+  } = params;
+
+  const payload = buildDemoLicencePushPayload(entrepriseNom, dateFin, lang);
+  let webPushSent = false;
+  let localShown = false;
+
+  // 1. If in the company's own browser, try to register push subscription first when permission is granted/requested
+  if (showLocalNotification && isPushSupported()) {
+    try {
+      const subResult = await registerPushSubscriptionForTenant(tenantId, requestPermissionIfDefault);
+      if (subResult.permission === 'granted') {
+        try {
+          const reg = await Promise.race([
+            navigator.serviceWorker.ready,
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500)),
+          ]);
+          if (reg && 'showNotification' in reg) {
+            await reg.showNotification(payload.title, {
+              body: payload.body,
+              icon: payload.icon,
+              badge: payload.badge,
+              tag: payload.tag,
+              requireInteraction: payload.requireInteraction,
+              silent: false,
+              data: payload.data,
+            });
+            localShown = true;
+          } else if (typeof Notification !== 'undefined') {
+            new Notification(payload.title, {
+              body: payload.body,
+              icon: payload.icon,
+              tag: payload.tag,
+            });
+            localShown = true;
+          }
+          if (localShown) {
+            playApprovalSound();
+          }
+        } catch {
+          // Fallback silently to in-app push toast
+        }
+      }
+    } catch {
+      // Non-blocking
+    }
+  }
+
+  // 2. Dispatch server Web Push via Edge Function (reaches all subscribed devices, even when closed)
+  if (typeof navigator === 'undefined' || navigator.onLine) {
+    try {
+      const { error } = await supabase.functions.invoke('send-push-notification', {
+        body: {
+          tenant_id: tenantId,
+          payload,
+        },
+      });
+      if (!error) webPushSent = true;
+    } catch {
+      // Non-blocking: DB trigger also dispatches push
+    }
+  }
+
+  return { webPushSent, localShown };
+}
+
 export function usePushNotifications(): PushNotificationStatus {
   const { tenantId, isSuperAdmin } = useAuth();
   const pushTenantId = isSuperAdmin ? 'super_admin' : tenantId;
@@ -233,7 +383,10 @@ export function usePushNotifications(): PushNotificationStatus {
   useEffect(() => {
     function handleMessage(event: MessageEvent) {
       if (event.data?.type === 'PLAY_NOTIFICATION_SOUND') {
-        if (event.data?.soundType === 'new_entreprise_approval') {
+        if (
+          event.data?.soundType === 'new_entreprise_approval' ||
+          event.data?.soundType === 'demo_licence_activated'
+        ) {
           playApprovalSound();
         } else {
           playOrderSound();

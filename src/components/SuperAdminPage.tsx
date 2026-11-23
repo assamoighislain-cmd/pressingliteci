@@ -4,7 +4,7 @@ import { useAuth } from '@/lib/auth';
 import { useI18n } from '@/lib/i18n';
 import { useOfflineStatus } from '@/hooks/useOfflineStatus';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
-import { usePushNotifications, playApprovalSound } from '@/hooks/usePushNotifications';
+import { usePushNotifications, playApprovalSound, notifyCompanyDemoLicencePush } from '@/hooks/usePushNotifications';
 import { notifyRealtimeMutation } from '@/lib/realtimeSync';
 import { buildWhatsAppUrl } from '@/types';
 import { Building2, UserPlus, Crown, Loader2, X, Check, Shield, Mail, Users, ChevronDown, ChevronRight, Trash2, UserCog, Pencil, Phone, User, KeyRound, Calendar, Plus, Ban, Copy, TrendingUp, AlertTriangle, Clock, BarChart3, UserCheck, Search, Filter, ArrowUpDown, MapPin, Navigation, Activity, ShoppingBag, Package, Store, DollarSign, ArrowDownUp, MessageCircle, Send, ExternalLink, BellRing, BellOff, Volume2 } from 'lucide-react';
@@ -487,7 +487,7 @@ export default function SuperAdminPage() {
         // Ensure the newly created company immediately has an active 30-day Demo licence
         const { data: createdEnt } = await supabase
           .from('entreprise')
-          .select('id')
+          .select('id, user_id')
           .eq('nom', trimmedNom)
           .order('id', { ascending: false })
           .limit(1)
@@ -495,12 +495,22 @@ export default function SuperAdminPage() {
 
         if (createdEnt?.id) {
           await ensureDemo30DaysLicence(createdEnt.id as number, true);
+          if (createdEnt.user_id) {
+            const demoEndIso = addDaysIso(new Date().toISOString().slice(0, 10), 30);
+            void notifyCompanyDemoLicencePush({
+              tenantId: String(createdEnt.user_id),
+              entrepriseNom: trimmedNom,
+              dateFin: demoEndIso,
+              lang,
+              showLocalNotification: false,
+            });
+          }
         }
 
         setSuccess(
           lang === 'fr'
-            ? `Entreprise créée : ${trimmedNom} (${trimmedEmail}) — Licence Démo 30 jours activée automatiquement`
-            : `Company created: ${trimmedNom} (${trimmedEmail}) — 30-day Demo license activated automatically`,
+            ? `Entreprise créée : ${trimmedNom} (${trimmedEmail}) — Licence Démo 30 jours activée et notification Push envoyée`
+            : `Company created: ${trimmedNom} (${trimmedEmail}) — 30-day Demo license activated and Push sent`,
         );
         setAdminEmail('');
         setEntrepriseNom('');
@@ -740,12 +750,22 @@ export default function SuperAdminPage() {
         if (newPendingAlert?.id === entrepriseId) {
           setNewPendingAlert(null);
         }
+        const targetEnt = entreprises.find((e) => e.id === entrepriseId);
+        if (targetEnt?.user_id) {
+          const demoEndIso = addDaysIso(new Date().toISOString().slice(0, 10), 30);
+          void notifyCompanyDemoLicencePush({
+            tenantId: targetEnt.user_id,
+            entrepriseNom: nom,
+            dateFin: demoEndIso,
+            lang,
+            showLocalNotification: false,
+          });
+        }
         setSuccess(
           lang === 'fr'
-            ? `« ${nom} » approuvée et activée (Licence Démo 30 jours active)`
-            : `"${nom}" approved and activated (30-day Demo license active)`,
+            ? `« ${nom} » approuvée et activée (Licence Démo 30 jours active — notification Push envoyée)`
+            : `"${nom}" approved and activated (30-day Demo license active — Push sent)`,
         );
-        const targetEnt = entreprises.find((e) => e.id === entrepriseId);
         setEntreprises((prev) =>
           prev.map((e) => (e.id === entrepriseId ? { ...e, statut: 'active' } : e)),
         );
