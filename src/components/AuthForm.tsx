@@ -211,15 +211,45 @@ export default function AuthForm() {
                     </div>
                   </div>
                 </div>
-                <label className="flex items-center gap-2 text-sm text-slate-600 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={joining}
-                    onChange={(e) => setJoining(e.target.checked)}
-                    className="w-4 h-4 rounded border-slate-300 text-sky-500 focus:ring-sky-500"
-                  />
-                  {lang === 'fr' ? 'Je rejoins une équipe existante' : 'I am joining an existing team'}
-                </label>
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
+                    {lang === 'fr' ? 'Type de compte' : 'Account type'}
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setJoining(false)}
+                      className={`p-3 rounded-xl border text-left transition-all ${
+                        !joining
+                          ? 'border-sky-500 bg-sky-50 text-sky-900 ring-1 ring-sky-200'
+                          : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      <div className="text-xs font-semibold">
+                        {lang === 'fr' ? 'Nouvelle entreprise' : 'New company'}
+                      </div>
+                      <div className="text-[11px] opacity-75 mt-0.5">
+                        {lang === 'fr' ? 'Créer mon pressing (Démo 30j)' : 'Create my pressing (30d Demo)'}
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setJoining(true)}
+                      className={`p-3 rounded-xl border text-left transition-all ${
+                        joining
+                          ? 'border-sky-500 bg-sky-50 text-sky-900 ring-1 ring-sky-200'
+                          : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      <div className="text-xs font-semibold">
+                        {lang === 'fr' ? 'Rejoindre une équipe' : 'Join a team'}
+                      </div>
+                      <div className="text-[11px] opacity-75 mt-0.5">
+                        {lang === 'fr' ? 'Entreprise déjà existante' : 'Existing company'}
+                      </div>
+                    </button>
+                  </div>
+                </div>
                 {!joining && (
                   <>
                     <div>

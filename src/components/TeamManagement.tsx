@@ -3,7 +3,9 @@ import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth';
 import { useI18n } from '@/lib/i18n';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
-import { UserPlus, Trash2, Shield, Crown, UserCog, Mail, Loader2, X, Check, Pencil, Phone, User, UserCheck, Clock, Store, Truck, RefreshCw } from 'lucide-react';
+import { createOrAttachCompanyMember, generateTemporaryPassword } from '@/lib/memberCreator';
+import { buildWhatsAppUrl } from '@/types';
+import { UserPlus, Trash2, Shield, Crown, UserCog, Mail, Loader2, X, Check, Pencil, Phone, User, UserCheck, Clock, Store, Truck, RefreshCw, Lock, Eye, EyeOff, Copy, Sparkles, MessageCircle } from 'lucide-react';
 
 interface Member {
   id: string;
@@ -53,9 +55,22 @@ export default function TeamManagement() {
   const [members, setMembers] = useState<Member[]>([]);
   const [loading, setLoading] = useState(true);
   const [showInvite, setShowInvite] = useState(false);
+  const [inviteMode, setInviteMode] = useState<'create' | 'attach'>('create');
   const [inviteEmail, setInviteEmail] = useState('');
+  const [invitePassword, setInvitePassword] = useState('');
+  const [showInvitePassword, setShowInvitePassword] = useState(false);
+  const [inviteFullName, setInviteFullName] = useState('');
+  const [inviteContact, setInviteContact] = useState('');
   const [inviteRole, setInviteRole] = useState<string>('commercial');
   const [inviteBoutiqueId, setInviteBoutiqueId] = useState<string>('');
+  const [createdCredentials, setCreatedCredentials] = useState<{
+    email: string;
+    password?: string;
+    fullName?: string;
+    contact?: string;
+    role: string;
+  } | null>(null);
+  const [copiedCreds, setCopiedCreds] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -174,32 +189,84 @@ export default function TeamManagement() {
     }
   }
 
+  function getDefaultBoutiqueId(): string {
+    return boutiques.find((b) => b.is_default)?.id ?? boutiques[0]?.id ?? '';
+  }
+
+  function openInviteModal() {
+    setInviteMode('create');
+    setInviteEmail('');
+    setInviteFullName('');
+    setInviteContact('');
+    setInvitePassword(generateTemporaryPassword(10));
+    setShowInvitePassword(true);
+    setInviteRole('commercial');
+    setInviteBoutiqueId(getDefaultBoutiqueId());
+    setError(null);
+    setShowInvite(true);
+  }
+
   async function handleInvite() {
     if (!inviteEmail.trim()) return;
+    if (inviteMode === 'create' && invitePassword.trim().length < 6) {
+      setError(lang === 'fr' ? 'Le mot de passe doit contenir au moins 6 caractères.' : 'Password must be at least 6 characters.');
+      return;
+    }
     setSubmitting(true);
     setError(null);
     setSuccess(null);
 
-    const normalizedEmail = inviteEmail.trim().toLowerCase();
     try {
-      const { error } = await supabase.rpc('add_team_member', {
-        member_email: normalizedEmail,
-        member_role: inviteRole,
-        member_boutique_id: inviteRole !== 'admin' && inviteBoutiqueId ? inviteBoutiqueId : null,
+      const res = await createOrAttachCompanyMember({
+        mode: inviteMode,
+        scope: 'team_admin',
+        email: inviteEmail,
+        password: inviteMode === 'create' ? invitePassword : undefined,
+        fullName: inviteFullName,
+        contact: inviteContact,
+        role: inviteRole,
+        boutiqueId: inviteRole !== 'admin' ? (inviteBoutiqueId || getDefaultBoutiqueId() || null) : null,
+        targetTenantId: tenantId ?? undefined,
       });
 
-      if (error) {
-        setError(error.message);
+      if (res.error) {
+        setError(res.error);
       } else {
-        setSuccess(`${lang === 'fr' ? 'Membre ajouté' : 'Member added'}: ${normalizedEmail}`);
+        if (res.createdNewAccount) {
+          setCreatedCredentials({
+            email: res.email,
+            password: res.password,
+            fullName: inviteFullName.trim() || undefined,
+            contact: inviteContact.trim() || undefined,
+            role: inviteRole,
+          });
+          setSuccess(
+            lang === 'fr'
+              ? `Compte membre créé et ajouté à votre entreprise : ${res.email}`
+              : `Member account created and added to your company: ${res.email}`,
+          );
+        } else if (res.alreadyExisted) {
+          setCreatedCredentials(null);
+          setSuccess(
+            lang === 'fr'
+              ? `Ce compte existait déjà (${res.email}) : il a été directement rattaché à votre entreprise avec son mot de passe existant.`
+              : `This account already existed (${res.email}): it has been attached directly to your company with its existing password.`,
+          );
+        } else {
+          setCreatedCredentials(null);
+          setSuccess(`${lang === 'fr' ? 'Membre rattaché' : 'Member attached'}: ${res.email}`);
+        }
         setInviteEmail('');
+        setInviteFullName('');
+        setInviteContact('');
+        setInvitePassword('');
         setInviteRole('commercial');
-        setInviteBoutiqueId('');
+        setInviteBoutiqueId(getDefaultBoutiqueId());
         setShowInvite(false);
         await loadMembers();
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : (lang === 'fr' ? 'Erreur lors de l\'ajout' : 'Error during addition'));
+      setError(err instanceof Error ? err.message : (lang === 'fr' ? "Erreur lors de l'ajout" : 'Error during addition'));
     } finally {
       setSubmitting(false);
     }
@@ -338,10 +405,10 @@ export default function TeamManagement() {
           </button>
           {activeTab === 'members' && (
             <button
-              onClick={() => setShowInvite(true)}
+              onClick={openInviteModal}
               className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-sky-500 text-white text-sm font-medium hover:bg-sky-600 transition-colors"
             >
-              <UserPlus className="w-4 h-4" /> {lang === 'fr' ? 'Ajouter un membre' : 'Add member'}
+              <UserPlus className="w-4 h-4" /> {lang === 'fr' ? 'Créer / Ajouter un membre' : 'Create / Add member'}
             </button>
           )}
         </div>
@@ -406,22 +473,155 @@ export default function TeamManagement() {
         </div>
       )}
 
-      {/* Invite modal */}
+      {createdCredentials && (
+        <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-4 space-y-3">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <p className="text-sm font-semibold text-emerald-900">
+                {lang === 'fr' ? 'Identifiants du nouveau membre prêts à partager' : 'New member credentials ready to share'}
+              </p>
+              <p className="text-xs text-emerald-700 mt-0.5">
+                {lang === 'fr'
+                  ? "Le membre peut se connecter immédiatement via « Connexion » (sans jamais recréer d'entreprise)."
+                  : 'The member can sign in immediately via "Sign In" (without creating a duplicate company).'}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setCreatedCredentials(null)}
+              className="text-emerald-600 hover:text-emerald-800"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="rounded-lg bg-white border border-emerald-200 p-3 text-xs font-mono space-y-1 text-slate-800">
+            <div><span className="text-slate-400">Email :</span> <strong>{createdCredentials.email}</strong></div>
+            {createdCredentials.password && (
+              <div><span className="text-slate-400">{lang === 'fr' ? 'Mot de passe :' : 'Password:'}</span> <strong>{createdCredentials.password}</strong></div>
+            )}
+            <div><span className="text-slate-400">{lang === 'fr' ? 'Rôle :' : 'Role:'}</span> <strong>{ROLE_LABELS[createdCredentials.role] ?? createdCredentials.role}</strong></div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                const text =
+                  lang === 'fr'
+                    ? `Bonjour${createdCredentials.fullName ? ` ${createdCredentials.fullName}` : ''},\nVoici vos identifiants PressingLite :\nLien : ${window.location.origin}\nEmail : ${createdCredentials.email}\nMot de passe : ${createdCredentials.password ?? '(votre mot de passe habituel)'}`
+                    : `Hello${createdCredentials.fullName ? ` ${createdCredentials.fullName}` : ''},\nHere are your PressingLite credentials:\nURL: ${window.location.origin}\nEmail: ${createdCredentials.email}\nPassword: ${createdCredentials.password ?? '(your existing password)'}`;
+                navigator.clipboard.writeText(text);
+                setCopiedCreds(true);
+                setTimeout(() => setCopiedCreds(false), 2000);
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-700 transition-colors"
+            >
+              {copiedCreds ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+              {copiedCreds ? (lang === 'fr' ? 'Copié !' : 'Copied!') : (lang === 'fr' ? 'Copier les identifiants' : 'Copy credentials')}
+            </button>
+            {createdCredentials.contact && createdCredentials.contact.replace(/[^\d]/g, '').length >= 8 && (
+              <a
+                href={buildWhatsAppUrl(
+                  createdCredentials.contact,
+                  lang === 'fr'
+                    ? `Bonjour${createdCredentials.fullName ? ` ${createdCredentials.fullName}` : ''},\n\nVotre compte membre PressingLite a été créé.\nConnectez-vous sur : ${window.location.origin}\nEmail : ${createdCredentials.email}\nMot de passe : ${createdCredentials.password ?? '(votre mot de passe habituel)'}`
+                    : `Hello${createdCredentials.fullName ? ` ${createdCredentials.fullName}` : ''},\n\nYour PressingLite team account is ready.\nSign in at: ${window.location.origin}\nEmail: ${createdCredentials.email}\nPassword: ${createdCredentials.password ?? '(your existing password)'}`,
+                )}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-600 text-white text-xs font-medium hover:bg-green-700 transition-colors"
+              >
+                <MessageCircle className="w-3.5 h-3.5" />
+                {lang === 'fr' ? 'Envoyer par WhatsApp' : 'Send via WhatsApp'}
+              </a>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Create / Attach member modal */}
       {showInvite && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-          <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setShowInvite(false)} />
-          <div className="relative bg-white rounded-2xl shadow-xl w-full max-w-md p-6 space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-4 py-6 overflow-y-auto">
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setShowInvite(false)} />
+          <div className="relative bg-white rounded-2xl shadow-xl w-full max-w-md p-6 space-y-4 my-auto">
             <div className="flex items-center justify-between">
-              <h3 className="text-base font-semibold text-slate-900">{lang === 'fr' ? 'Ajouter un membre' : 'Add member'}</h3>
+              <h3 className="text-base font-semibold text-slate-900">
+                {lang === 'fr' ? 'Créer ou rattacher un membre' : 'Create or attach a member'}
+              </h3>
               <button onClick={() => setShowInvite(false)} className="text-slate-400 hover:text-slate-600">
                 <X className="w-5 h-5" />
               </button>
             </div>
+
+            {/* Mode tabs */}
+            <div className="flex gap-1 p-1 bg-slate-100 rounded-xl">
+              <button
+                type="button"
+                onClick={() => {
+                  setInviteMode('create');
+                  if (!invitePassword) setInvitePassword(generateTemporaryPassword(10));
+                }}
+                className={`flex-1 py-2 rounded-lg text-xs font-semibold transition-all ${
+                  inviteMode === 'create' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                {lang === 'fr' ? 'Créer un nouveau membre' : 'Create new member'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setInviteMode('attach')}
+                className={`flex-1 py-2 rounded-lg text-xs font-semibold transition-all ${
+                  inviteMode === 'attach' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                {lang === 'fr' ? 'Compte déjà existant' : 'Existing account'}
+              </button>
+            </div>
+
             <p className="text-xs text-slate-500">
-              {lang === 'fr' ? "L'utilisateur doit d'abord créer un compte avec cet email, puis vous pourrez l'ajouter ici." : 'The user must first create an account with this email, then you can add them here.'}
+              {inviteMode === 'create'
+                ? (lang === 'fr'
+                    ? "Crée directement le compte du collaborateur et l'ajoute à votre entreprise (sans aucun doublon d'entreprise)."
+                    : 'Directly creates the staff account and attaches it to your company (zero duplicate companies).')
+                : (lang === 'fr'
+                    ? "Rattache immédiatement un utilisateur qui possède déjà un compte PressingLite avec cet email."
+                    : 'Immediately attaches a user who already has a PressingLite account with this email.')}
             </p>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  {lang === 'fr' ? 'Nom et prénoms' : 'Full name'}
+                </label>
+                <div className="relative">
+                  <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  <input
+                    type="text"
+                    value={inviteFullName}
+                    onChange={(e) => setInviteFullName(e.target.value)}
+                    placeholder={lang === 'fr' ? 'Ex: Kouassi Jean' : 'e.g. John Doe'}
+                    className="w-full pl-9 pr-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  {lang === 'fr' ? 'Téléphone' : 'Phone'}
+                </label>
+                <div className="relative">
+                  <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  <input
+                    type="tel"
+                    value={inviteContact}
+                    onChange={(e) => setInviteContact(e.target.value)}
+                    placeholder="+225 07..."
+                    className="w-full pl-9 pr-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent"
+                  />
+                </div>
+              </div>
+            </div>
+
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1.5">{lang === 'fr' ? 'Email du membre' : 'Member email'}</label>
+              <label className="block text-sm font-medium text-slate-700 mb-1">{lang === 'fr' ? 'Email du membre' : 'Member email'} *</label>
               <div className="relative">
                 <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                 <input
@@ -433,11 +633,54 @@ export default function TeamManagement() {
                 />
               </div>
             </div>
+
+            {inviteMode === 'create' && (
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-sm font-medium text-slate-700">
+                    {lang === 'fr' ? 'Mot de passe provisoire' : 'Temporary password'} *
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setInvitePassword(generateTemporaryPassword(10))}
+                    className="inline-flex items-center gap-1 text-xs text-sky-600 hover:text-sky-700 font-medium"
+                  >
+                    <Sparkles className="w-3 h-3" />
+                    {lang === 'fr' ? 'Générer' : 'Generate'}
+                  </button>
+                </div>
+                <div className="relative">
+                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  <input
+                    type={showInvitePassword ? 'text' : 'password'}
+                    value={invitePassword}
+                    onChange={(e) => setInvitePassword(e.target.value)}
+                    minLength={6}
+                    placeholder="Minimum 6 caractères"
+                    className="w-full pl-10 pr-10 py-2.5 rounded-lg border border-slate-200 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowInvitePassword((s) => !s)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                  >
+                    {showInvitePassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+            )}
+
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1.5">{lang === 'fr' ? 'Rôle' : 'Role'}</label>
+              <label className="block text-sm font-medium text-slate-700 mb-1">{lang === 'fr' ? 'Rôle' : 'Role'}</label>
               <select
                 value={inviteRole}
-                onChange={(e) => { setInviteRole(e.target.value); setInviteBoutiqueId(''); }}
+                onChange={(e) => {
+                  const nextRole = e.target.value;
+                  setInviteRole(nextRole);
+                  if (nextRole !== 'admin' && !inviteBoutiqueId) {
+                    setInviteBoutiqueId(getDefaultBoutiqueId());
+                  }
+                }}
                 className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent bg-white"
               >
                 <option value="admin">{ROLE_LABELS.admin}</option>
@@ -446,9 +689,9 @@ export default function TeamManagement() {
                 <option value="collecteur">{ROLE_LABELS.collecteur}</option>
               </select>
             </div>
-            {inviteRole !== 'admin' && (
+            {inviteRole !== 'admin' && boutiques.length > 0 && (
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">{lang === 'fr' ? 'Boutique assignée' : 'Assigned boutique'} *</label>
+                <label className="block text-sm font-medium text-slate-700 mb-1">{lang === 'fr' ? 'Boutique assignée' : 'Assigned boutique'} *</label>
                 <select
                   value={inviteBoutiqueId}
                   onChange={(e) => setInviteBoutiqueId(e.target.value)}
@@ -470,11 +713,20 @@ export default function TeamManagement() {
               </button>
               <button
                 onClick={handleInvite}
-                disabled={submitting || !inviteEmail.trim() || (inviteRole !== 'admin' && !inviteBoutiqueId)}
+                disabled={
+                  submitting ||
+                  !inviteEmail.trim() ||
+                  (inviteMode === 'create' && invitePassword.trim().length < 6) ||
+                  (inviteRole !== 'admin' && boutiques.length > 0 && !inviteBoutiqueId)
+                }
                 className="flex-1 px-4 py-2.5 rounded-lg bg-sky-500 text-white text-sm font-medium hover:bg-sky-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
                 {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserPlus className="w-4 h-4" />}
-                {submitting ? (lang === 'fr' ? 'Ajout…' : 'Adding…') : (lang === 'fr' ? 'Ajouter' : 'Add')}
+                {submitting
+                  ? (lang === 'fr' ? 'Traitement…' : 'Processing…')
+                  : inviteMode === 'create'
+                    ? (lang === 'fr' ? 'Créer le membre' : 'Create member')
+                    : (lang === 'fr' ? 'Rattacher le membre' : 'Attach member')}
               </button>
             </div>
           </div>

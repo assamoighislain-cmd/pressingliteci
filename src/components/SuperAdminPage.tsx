@@ -7,7 +7,8 @@ import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import { usePushNotifications, playApprovalSound, notifyCompanyDemoLicencePush } from '@/hooks/usePushNotifications';
 import { notifyRealtimeMutation } from '@/lib/realtimeSync';
 import { buildWhatsAppUrl } from '@/types';
-import { Building2, UserPlus, Crown, Loader2, X, Check, Shield, Mail, Users, ChevronDown, ChevronRight, Trash2, UserCog, Pencil, Phone, User, KeyRound, Calendar, Plus, Ban, Copy, TrendingUp, AlertTriangle, Clock, BarChart3, UserCheck, Search, Filter, ArrowUpDown, MapPin, Navigation, Activity, ShoppingBag, Package, Store, DollarSign, ArrowDownUp, MessageCircle, Send, ExternalLink, BellRing, BellOff, Volume2, Truck, ArrowRightLeft } from 'lucide-react';
+import { createOrAttachCompanyMember, generateTemporaryPassword } from '@/lib/memberCreator';
+import { Building2, UserPlus, Crown, Loader2, X, Check, Shield, Mail, Users, ChevronDown, ChevronRight, Trash2, UserCog, Pencil, Phone, User, KeyRound, Calendar, Plus, Ban, Copy, TrendingUp, AlertTriangle, Clock, BarChart3, UserCheck, Search, Filter, ArrowUpDown, MapPin, Navigation, Activity, ShoppingBag, Package, Store, DollarSign, ArrowDownUp, MessageCircle, Send, ExternalLink, BellRing, BellOff, Volume2, Truck, ArrowRightLeft, Lock, Eye, EyeOff, Sparkles } from 'lucide-react';
 
 type WhatsAppTemplateType = 'approval' | 'licence' | 'reminder' | 'custom';
 
@@ -110,8 +111,22 @@ export default function SuperAdminPage() {
   const [showAddMember, setShowAddMember] = useState<number | null>(null);
   const [adminEmail, setAdminEmail] = useState('');
   const [entrepriseNom, setEntrepriseNom] = useState('');
+  const [memberMode, setMemberMode] = useState<'create' | 'attach'>('create');
   const [memberEmail, setMemberEmail] = useState('');
+  const [memberPassword, setMemberPassword] = useState('');
+  const [showMemberPassword, setShowMemberPassword] = useState(false);
+  const [memberFullName, setMemberFullName] = useState('');
+  const [memberContact, setMemberContact] = useState('');
   const [memberRole, setMemberRole] = useState('commercial');
+  const [createdMemberCreds, setCreatedMemberCreds] = useState<{
+    entrepriseNom: string;
+    email: string;
+    password?: string;
+    fullName?: string;
+    contact?: string;
+    role: string;
+  } | null>(null);
+  const [copiedMemberCreds, setCopiedMemberCreds] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -480,7 +495,23 @@ export default function SuperAdminPage() {
     setSuccess(null);
 
     const trimmedNom = entrepriseNom.trim();
-    const trimmedEmail = adminEmail.trim();
+    const trimmedEmail = adminEmail.trim().toLowerCase();
+
+    // Strictly prevent duplicate company creation
+    const existingDuplicate = entreprises.find(
+      (e) => e.nom.trim().toLowerCase() === trimmedNom.toLowerCase(),
+    );
+    if (existingDuplicate) {
+      setSubmitting(false);
+      setShowCreateEntreprise(false);
+      setExpandedId(existingDuplicate.id);
+      setError(
+        lang === 'fr'
+          ? `Doublon bloqué : l'entreprise « ${existingDuplicate.nom} » existe déjà. Dépliez sa fiche ci-dessous et cliquez sur « Créer / Ajouter un utilisateur » pour y rattacher ce membre.`
+          : `Duplicate blocked: company "${existingDuplicate.nom}" already exists. Expand it below and click "Create / Add user" to attach this member.`,
+      );
+      return;
+    }
 
     try {
       const { error } = await supabase.rpc('create_entreprise_admin', {
@@ -531,68 +562,89 @@ export default function SuperAdminPage() {
     }
   }
 
+  function openAddMemberModal(entId: number) {
+    setShowAddMember(entId);
+    setMemberMode('create');
+    setMemberEmail('');
+    setMemberFullName('');
+    setMemberContact('');
+    setMemberPassword(generateTemporaryPassword(10));
+    setShowMemberPassword(true);
+    setMemberRole('commercial');
+    setError(null);
+  }
+
   async function handleAddMember(tenantId: string, entrepriseNom: string) {
     if (!isOnline) return;
-    const cleanEmail = memberEmail.trim().toLowerCase();
-    if (!cleanEmail) return;
+    if (!memberEmail.trim()) return;
+    if (memberMode === 'create' && memberPassword.trim().length < 6) {
+      setError(lang === 'fr' ? 'Le mot de passe doit contenir au moins 6 caractères.' : 'Password must be at least 6 characters.');
+      return;
+    }
     setSubmitting(true);
     setError(null);
     setSuccess(null);
 
     try {
-      let addedUid: string | null = null;
-      let { data: rpcData, error } = await supabase.rpc('add_member_to_entreprise', {
-        member_email: cleanEmail,
-        target_tenant_id: tenantId,
-        member_role: memberRole,
+      const res = await createOrAttachCompanyMember({
+        mode: memberMode,
+        scope: 'super_admin',
+        email: memberEmail,
+        password: memberMode === 'create' ? memberPassword : undefined,
+        fullName: memberFullName,
+        contact: memberContact,
+        role: memberRole,
+        targetTenantId: tenantId,
       });
 
-      // Fallback for unpatched live DB where add_member_to_entreprise didn't allow 'collecteur'
-      if (error && memberRole === 'collecteur' && error.message.toLowerCase().includes('invalide')) {
-        const retry = await supabase.rpc('add_member_to_entreprise', {
-          member_email: cleanEmail,
-          target_tenant_id: tenantId,
-          member_role: 'commercial',
-        });
-        error = retry.error;
-        rpcData = retry.data;
-        if (!error && typeof rpcData === 'string') {
-          await supabase
-            .from('entreprise_members')
-            .update({ role: 'collecteur' })
-            .eq('tenant_id', tenantId)
-            .eq('user_id', rpcData);
-        }
-      }
-
-      if (typeof rpcData === 'string') {
-        addedUid = rpcData;
-      }
-
-      if (error) {
-        setError(error.message);
+      if (res.error) {
+        setError(res.error);
       } else {
-        notifyRealtimeMutation('entreprise_members', true);
-        const otherCompany = addedUid
+        const otherCompany = res.memberUserId
           ? entreprises.find(
-              (ent) => ent.user_id !== tenantId && ent.members.some((m) => m.user_id === addedUid),
+              (ent) => ent.user_id !== tenantId && ent.members.some((m) => m.user_id === res.memberUserId),
             )
           : undefined;
         const duplicateHint = otherCompany
           ? (lang === 'fr'
-              ? ` — Attention : cet utilisateur appartient aussi à « ${otherCompany.nom} » (retirez-le de l'ancienne entreprise pour éviter tout conflit).`
-              : ` — Note: this user also belongs to "${otherCompany.nom}" (remove them from the old company to avoid conflicts).`)
+              ? ` — Attention : cet utilisateur appartient aussi à « ${otherCompany.nom} » (pensez à le retirer de son ancienne entreprise ou à supprimer le doublon).`
+              : ` — Note: this user also belongs to "${otherCompany.nom}" (remove them from the old company or delete the duplicate).`)
           : '';
-        setSuccess(
-          `${cleanEmail} ${lang === 'fr' ? 'ajouté à' : 'added to'} ${entrepriseNom} ${lang === 'fr' ? 'en tant que' : 'as'} ${ROLE_LABELS[memberRole] ?? memberRole}${duplicateHint}`,
-        );
+
+        if (res.createdNewAccount) {
+          setCreatedMemberCreds({
+            entrepriseNom,
+            email: res.email,
+            password: res.password,
+            fullName: memberFullName.trim() || undefined,
+            contact: memberContact.trim() || undefined,
+            role: memberRole,
+          });
+          setSuccess(
+            `${lang === 'fr' ? 'Nouveau membre créé dans' : 'New member created in'} « ${entrepriseNom} » : ${res.email} (${ROLE_LABELS[memberRole] ?? memberRole})${duplicateHint}`,
+          );
+        } else if (res.alreadyExisted) {
+          setCreatedMemberCreds(null);
+          setSuccess(
+            `${lang === 'fr' ? 'Compte existant rattaché à' : 'Existing account attached to'} « ${entrepriseNom} » : ${res.email} (${ROLE_LABELS[memberRole] ?? memberRole})${duplicateHint}`,
+          );
+        } else {
+          setCreatedMemberCreds(null);
+          setSuccess(
+            `${res.email} ${lang === 'fr' ? 'ajouté à' : 'added to'} ${entrepriseNom} ${lang === 'fr' ? 'en tant que' : 'as'} ${ROLE_LABELS[memberRole] ?? memberRole}${duplicateHint}`,
+          );
+        }
+
         setMemberEmail('');
+        setMemberFullName('');
+        setMemberContact('');
+        setMemberPassword('');
         setMemberRole('commercial');
         setShowAddMember(null);
         await loadEntreprises();
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : (lang === 'fr' ? 'Erreur lors de l\'ajout' : 'Error during addition'));
+      setError(err instanceof Error ? err.message : (lang === 'fr' ? "Erreur lors de l'ajout" : 'Error during addition'));
     } finally {
       setSubmitting(false);
     }
@@ -1529,22 +1581,84 @@ export default function SuperAdminPage() {
         </div>
       )}
 
-      {/* Add member modal */}
+      {/* Create / Attach member modal */}
       {showAddMember !== null && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-          <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setShowAddMember(null)} />
-          <div className="relative bg-white rounded-2xl shadow-xl w-full max-w-md p-6 space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-4 py-6 overflow-y-auto">
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setShowAddMember(null)} />
+          <div className="relative bg-white rounded-2xl shadow-xl w-full max-w-md p-6 space-y-4 my-auto">
             <div className="flex items-center justify-between">
-              <h3 className="text-base font-semibold text-slate-900">{lang === 'fr' ? 'Ajouter un utilisateur' : 'Add user'}</h3>
+              <h3 className="text-base font-semibold text-slate-900">
+                {lang === 'fr' ? 'Créer ou rattacher un utilisateur' : 'Create or attach user'}
+              </h3>
               <button onClick={() => setShowAddMember(null)} className="text-slate-400 hover:text-slate-600">
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <p className="text-xs text-slate-500">
-              {entreprises.find((e) => e.id === showAddMember)?.nom} — {lang === 'fr' ? "L'utilisateur doit d'abord créer un compte avec cet email." : 'The user must first create an account with this email.'}
+            <p className="text-xs font-medium text-sky-700 bg-sky-50 border border-sky-100 rounded-lg px-3 py-2">
+              {lang === 'fr' ? 'Entreprise cible :' : 'Target company:'}{' '}
+              <strong>{entreprises.find((e) => e.id === showAddMember)?.nom}</strong>
             </p>
+
+            {/* Mode tabs */}
+            <div className="flex gap-1 p-1 bg-slate-100 rounded-xl">
+              <button
+                type="button"
+                onClick={() => {
+                  setMemberMode('create');
+                  if (!memberPassword) setMemberPassword(generateTemporaryPassword(10));
+                }}
+                className={`flex-1 py-2 rounded-lg text-xs font-semibold transition-all ${
+                  memberMode === 'create' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                {lang === 'fr' ? 'Créer un nouveau membre' : 'Create new member'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setMemberMode('attach')}
+                className={`flex-1 py-2 rounded-lg text-xs font-semibold transition-all ${
+                  memberMode === 'attach' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                {lang === 'fr' ? 'Compte déjà existant' : 'Existing account'}
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  {lang === 'fr' ? 'Nom et prénoms' : 'Full name'}
+                </label>
+                <div className="relative">
+                  <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  <input
+                    type="text"
+                    value={memberFullName}
+                    onChange={(e) => setMemberFullName(e.target.value)}
+                    placeholder={lang === 'fr' ? 'Ex: Kouassi Jean' : 'e.g. John Doe'}
+                    className="w-full pl-9 pr-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  {lang === 'fr' ? 'Téléphone' : 'Phone'}
+                </label>
+                <div className="relative">
+                  <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  <input
+                    type="tel"
+                    value={memberContact}
+                    onChange={(e) => setMemberContact(e.target.value)}
+                    placeholder="+225 07..."
+                    className="w-full pl-9 pr-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent"
+                  />
+                </div>
+              </div>
+            </div>
+
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1.5">{lang === 'fr' ? "Email de l'utilisateur" : 'User email'}</label>
+              <label className="block text-sm font-medium text-slate-700 mb-1">{lang === 'fr' ? "Email de l'utilisateur" : 'User email'} *</label>
               <div className="relative">
                 <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                 <input
@@ -1556,8 +1670,45 @@ export default function SuperAdminPage() {
                 />
               </div>
             </div>
+
+            {memberMode === 'create' && (
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-sm font-medium text-slate-700">
+                    {lang === 'fr' ? 'Mot de passe provisoire' : 'Temporary password'} *
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setMemberPassword(generateTemporaryPassword(10))}
+                    className="inline-flex items-center gap-1 text-xs text-sky-600 hover:text-sky-700 font-medium"
+                  >
+                    <Sparkles className="w-3 h-3" />
+                    {lang === 'fr' ? 'Générer' : 'Generate'}
+                  </button>
+                </div>
+                <div className="relative">
+                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  <input
+                    type={showMemberPassword ? 'text' : 'password'}
+                    value={memberPassword}
+                    onChange={(e) => setMemberPassword(e.target.value)}
+                    minLength={6}
+                    placeholder="Minimum 6 caractères"
+                    className="w-full pl-10 pr-10 py-2.5 rounded-lg border border-slate-200 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowMemberPassword((s) => !s)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                  >
+                    {showMemberPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+            )}
+
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1.5">{lang === 'fr' ? 'Rôle' : 'Role'}</label>
+              <label className="block text-sm font-medium text-slate-700 mb-1">{lang === 'fr' ? 'Rôle' : 'Role'}</label>
               <select
                 value={memberRole}
                 onChange={(e) => setMemberRole(e.target.value)}
@@ -1581,11 +1732,19 @@ export default function SuperAdminPage() {
                   const ent = entreprises.find((e) => e.id === showAddMember);
                   if (ent) handleAddMember(ent.user_id, ent.nom);
                 }}
-                disabled={submitting || !memberEmail.trim()}
+                disabled={
+                  submitting ||
+                  !memberEmail.trim() ||
+                  (memberMode === 'create' && memberPassword.trim().length < 6)
+                }
                 className="flex-1 px-4 py-2.5 rounded-lg bg-sky-500 text-white text-sm font-medium hover:bg-sky-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
                 {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserPlus className="w-4 h-4" />}
-                {submitting ? (lang === 'fr' ? 'Ajout…' : 'Adding…') : (lang === 'fr' ? 'Ajouter' : 'Add')}
+                {submitting
+                  ? (lang === 'fr' ? 'Traitement…' : 'Processing…')
+                  : memberMode === 'create'
+                    ? (lang === 'fr' ? 'Créer le membre' : 'Create member')
+                    : (lang === 'fr' ? 'Rattacher' : 'Attach')}
               </button>
             </div>
           </div>
@@ -2109,6 +2268,125 @@ export default function SuperAdminPage() {
         );
       })()}
 
+      {/* Created member credentials card */}
+      {createdMemberCreds && (
+        <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-4 space-y-3">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <p className="text-sm font-semibold text-emerald-900">
+                {lang === 'fr'
+                  ? `Nouveau membre créé dans « ${createdMemberCreds.entrepriseNom} »`
+                  : `New member created in "${createdMemberCreds.entrepriseNom}"`}
+              </p>
+              <p className="text-xs text-emerald-700 mt-0.5">
+                {lang === 'fr'
+                  ? "Transmettez ces identifiants au membre : il peut se connecter directement via « Connexion »."
+                  : 'Share these credentials with the member: they can sign in directly via "Sign In".'}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setCreatedMemberCreds(null)}
+              className="text-emerald-600 hover:text-emerald-800"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="rounded-lg bg-white border border-emerald-200 p-3 text-xs font-mono space-y-1 text-slate-800">
+            <div><span className="text-slate-400">Email :</span> <strong>{createdMemberCreds.email}</strong></div>
+            {createdMemberCreds.password && (
+              <div><span className="text-slate-400">{lang === 'fr' ? 'Mot de passe :' : 'Password:'}</span> <strong>{createdMemberCreds.password}</strong></div>
+            )}
+            <div><span className="text-slate-400">{lang === 'fr' ? 'Rôle :' : 'Role:'}</span> <strong>{ROLE_LABELS[createdMemberCreds.role] ?? createdMemberCreds.role}</strong></div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                const text =
+                  lang === 'fr'
+                    ? `Bonjour${createdMemberCreds.fullName ? ` ${createdMemberCreds.fullName}` : ''},\nVoici vos identifiants PressingLite (${createdMemberCreds.entrepriseNom}) :\nLien : ${window.location.origin}\nEmail : ${createdMemberCreds.email}\nMot de passe : ${createdMemberCreds.password ?? '(votre mot de passe habituel)'}`
+                    : `Hello${createdMemberCreds.fullName ? ` ${createdMemberCreds.fullName}` : ''},\nHere are your PressingLite credentials (${createdMemberCreds.entrepriseNom}):\nURL: ${window.location.origin}\nEmail: ${createdMemberCreds.email}\nPassword: ${createdMemberCreds.password ?? '(your existing password)'}`;
+                navigator.clipboard.writeText(text);
+                setCopiedMemberCreds(true);
+                setTimeout(() => setCopiedMemberCreds(false), 2000);
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-700 transition-colors"
+            >
+              {copiedMemberCreds ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+              {copiedMemberCreds ? (lang === 'fr' ? 'Copié !' : 'Copied!') : (lang === 'fr' ? 'Copier les identifiants' : 'Copy credentials')}
+            </button>
+            {createdMemberCreds.contact && createdMemberCreds.contact.replace(/[^\d]/g, '').length >= 8 && (
+              <a
+                href={buildWhatsAppUrl(
+                  createdMemberCreds.contact,
+                  lang === 'fr'
+                    ? `Bonjour${createdMemberCreds.fullName ? ` ${createdMemberCreds.fullName}` : ''},\n\nVotre compte membre pour *${createdMemberCreds.entrepriseNom}* sur PressingLite a été créé.\nLien : ${window.location.origin}\nEmail : ${createdMemberCreds.email}\nMot de passe : ${createdMemberCreds.password ?? '(votre mot de passe habituel)'}`
+                    : `Hello${createdMemberCreds.fullName ? ` ${createdMemberCreds.fullName}` : ''},\n\nYour team account for *${createdMemberCreds.entrepriseNom}* on PressingLite is ready.\nURL: ${window.location.origin}\nEmail: ${createdMemberCreds.email}\nPassword: ${createdMemberCreds.password ?? '(your existing password)'}`,
+                )}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-600 text-white text-xs font-medium hover:bg-green-700 transition-colors"
+              >
+                <MessageCircle className="w-3.5 h-3.5" />
+                {lang === 'fr' ? 'Envoyer par WhatsApp' : 'Send via WhatsApp'}
+              </a>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Duplicate company names alert banner */}
+      {(() => {
+        const nameCounts = new Map<string, EntrepriseRow[]>();
+        for (const ent of entreprises) {
+          const key = ent.nom.trim().toLowerCase();
+          if (!key) continue;
+          const arr = nameCounts.get(key) ?? [];
+          arr.push(ent);
+          nameCounts.set(key, arr);
+        }
+        const duplicateGroups = Array.from(nameCounts.values()).filter((g) => g.length > 1);
+        if (duplicateGroups.length === 0) return null;
+        return (
+          <div className="rounded-xl bg-amber-50 border border-amber-300 p-4 space-y-2">
+            <div className="flex items-start gap-2.5">
+              <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-amber-900">
+                  {lang === 'fr'
+                    ? `${duplicateGroups.length} doublon(s) d'entreprise détecté(s)`
+                    : `${duplicateGroups.length} duplicate company name(s) detected`}
+                </p>
+                <p className="text-xs text-amber-800 mt-0.5">
+                  {lang === 'fr'
+                    ? "Cliquez sur un doublon ci-dessous pour filtrer ses fiches, rattacher le membre à la vraie entreprise et supprimer la fiche en double."
+                    : 'Click a duplicate below to filter its entries, transfer the member to the main company, and remove the duplicate.'}
+                </p>
+                <div className="flex flex-wrap gap-2 mt-2">
+                  {duplicateGroups.map((group) => (
+                    <button
+                      key={group[0].nom}
+                      type="button"
+                      onClick={() => {
+                        setSearchQuery(group[0].nom);
+                        setStatutFilter('all');
+                        const pendingDup = group.find((g) => g.statut === 'pending') ?? group[1];
+                        if (pendingDup) setExpandedId(pendingDup.id);
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 text-white text-xs font-semibold hover:bg-amber-700 transition-colors"
+                    >
+                      <ArrowRightLeft className="w-3.5 h-3.5" />
+                      {group[0].nom} ({group.length}×)
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Search & filter bar */}
       <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-3 space-y-3">
         <div className="flex flex-col sm:flex-row sm:items-center gap-2 flex-wrap">
@@ -2405,15 +2683,11 @@ export default function SuperAdminPage() {
                         );
                       })}
                       <button
-                        onClick={() => {
-                          setShowAddMember(e.id);
-                          setMemberEmail('');
-                          setMemberRole('commercial');
-                        }}
+                        onClick={() => openAddMemberModal(e.id)}
                         className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border border-dashed border-slate-300 text-sm font-medium text-sky-600 hover:bg-sky-50 hover:border-sky-300 transition-colors"
                       >
                         <UserPlus className="w-4 h-4" />
-                        {lang === 'fr' ? 'Ajouter un utilisateur' : 'Add user'}
+                        {lang === 'fr' ? 'Créer / Ajouter un utilisateur' : 'Create / Add user'}
                       </button>
 
                       {/* GPS location section */}

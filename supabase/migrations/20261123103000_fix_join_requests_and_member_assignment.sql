@@ -227,7 +227,8 @@ $$;
 
 GRANT EXECUTE ON FUNCTION public.add_member_to_entreprise(text, uuid, text) TO authenticated;
 
--- 4. Upgrade add_team_member (Entreprise Admin): case-insensitive email, collecteur role, metadata copy
+-- 4. Upgrade add_team_member (Entreprise Admin): drop legacy 2-arg overload to prevent ambiguity, case-insensitive email, collecteur role, metadata copy
+DROP FUNCTION IF EXISTS public.add_team_member(text, text);
 CREATE OR REPLACE FUNCTION public.add_team_member(
   member_email text,
   member_role text,
@@ -365,4 +366,71 @@ END;
 $$;
 
 GRANT EXECUTE ON FUNCTION public.request_join_entreprise(text, text, text, text) TO authenticated;
+
+-- 6. Prevent Super Admin from accidentally creating duplicate company names
+CREATE OR REPLACE FUNCTION public.create_entreprise_admin(admin_email text, entreprise_nom text)
+RETURNS bigint
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public'
+AS $$
+DECLARE
+  v_clean_nom text := trim(COALESCE(entreprise_nom, ''));
+  v_admin_uid uuid;
+  v_full_name text;
+  v_contact text;
+  v_ent_id bigint;
+  v_existing_nom text;
+  v_key text;
+BEGIN
+  IF NOT public.is_super_admin() THEN
+    RAISE EXCEPTION 'Seul le super-administrateur peut créer une entreprise';
+  END IF;
+
+  IF v_clean_nom = '' THEN
+    RAISE EXCEPTION 'Le nom de l''entreprise est requis';
+  END IF;
+
+  -- Strictly forbid duplicate company names (case-insensitive)
+  SELECT nom INTO v_existing_nom
+  FROM public.entreprise
+  WHERE lower(trim(nom)) = lower(v_clean_nom)
+  LIMIT 1;
+
+  IF v_existing_nom IS NOT NULL THEN
+    RAISE EXCEPTION 'Une entreprise nommée « % » existe déjà. Ajoutez plutôt cet utilisateur comme membre de l''entreprise existante.', v_existing_nom;
+  END IF;
+
+  SELECT id,
+         NULLIF(trim(COALESCE(raw_user_meta_data ->> 'full_name', '')), ''),
+         NULLIF(trim(COALESCE(raw_user_meta_data ->> 'contact', '')), '')
+  INTO v_admin_uid, v_full_name, v_contact
+  FROM auth.users
+  WHERE lower(email) = lower(trim(admin_email))
+  LIMIT 1;
+
+  IF v_admin_uid IS NULL THEN
+    RAISE EXCEPTION 'Utilisateur introuvable. La personne doit d''abord créer un compte avec cet email.';
+  END IF;
+
+  INSERT INTO public.entreprise (user_id, nom, statut, telephone)
+  VALUES (v_admin_uid, v_clean_nom, 'active', v_contact)
+  ON CONFLICT (user_id) DO UPDATE SET nom = EXCLUDED.nom, statut = 'active'
+  RETURNING id INTO v_ent_id;
+
+  INSERT INTO public.entreprise_members (tenant_id, user_id, role, full_name, contact)
+  VALUES (v_admin_uid, v_admin_uid, 'admin', v_full_name, v_contact)
+  ON CONFLICT (tenant_id, user_id) DO UPDATE SET role = 'admin';
+
+  v_key := 'DEMO-' || to_char(CURRENT_DATE, 'YYYY') || '-' || upper(substr(md5(random()::text || clock_timestamp()::text), 1, 8));
+  INSERT INTO public.licences (entreprise_id, cle_licence, date_debut, date_fin, statut, type_licence, prix, created_by)
+  VALUES (v_ent_id, v_key, CURRENT_DATE, CURRENT_DATE + INTERVAL '30 days', 'active', 'demo', 0, auth.uid())
+  ON CONFLICT (entreprise_id) DO NOTHING;
+
+  RETURN v_ent_id;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.create_entreprise_admin(text, text) TO authenticated;
+
 

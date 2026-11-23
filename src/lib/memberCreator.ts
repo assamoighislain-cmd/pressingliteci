@@ -1,0 +1,269 @@
+import { createClient } from '@supabase/supabase-js';
+import { supabase, supabaseUrl, supabaseAnonKey } from '@/lib/supabase';
+import { notifyRealtimeMutation } from '@/lib/realtimeSync';
+
+/**
+ * Creates a temporary, isolated Supabase Auth client that NEVER touches
+ * localStorage or the currently signed-in admin/super-admin session.
+ */
+function createEphemeralAuthClient() {
+  return createClient(supabaseUrl, supabaseAnonKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+      storageKey: `ephemeral-member-creator-${Date.now()}`,
+    },
+  });
+}
+
+export function generateTemporaryPassword(length = 10): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+  const bytes = new Uint8Array(length);
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < length; i++) bytes[i] = Math.floor(Math.random() * 256);
+  }
+  return Array.from(bytes, (b) => chars[b % chars.length]).join('');
+}
+
+export interface CreateOrAttachMemberParams {
+  mode: 'create' | 'attach';
+  scope: 'team_admin' | 'super_admin';
+  email: string;
+  password?: string;
+  fullName?: string;
+  contact?: string;
+  role: string;
+  boutiqueId?: string | null;
+  targetTenantId?: string; // Required when scope === 'super_admin'
+}
+
+export interface CreateOrAttachMemberResult {
+  error: string | null;
+  memberUserId?: string | null;
+  createdNewAccount: boolean;
+  alreadyExisted: boolean;
+  email: string;
+  password?: string;
+}
+
+/**
+ * Creates a brand-new user account (without ever creating a duplicate company
+ * and without logging out the current admin) OR attaches an already-existing
+ * account directly into the target company.
+ */
+export async function createOrAttachCompanyMember(
+  params: CreateOrAttachMemberParams,
+): Promise<CreateOrAttachMemberResult> {
+  const cleanEmail = params.email.trim().toLowerCase();
+  const cleanName = params.fullName?.trim() || null;
+  const cleanContact = params.contact?.trim() || null;
+  const cleanPassword = params.password?.trim() || '';
+
+  if (!cleanEmail) {
+    return { error: "Veuillez saisir l'adresse email du membre.", createdNewAccount: false, alreadyExisted: false, email: cleanEmail };
+  }
+
+  let createdNewAccount = false;
+  let alreadyExisted = false;
+
+  // Step 1: If creating a brand-new member account, register them via an isolated
+  // ephemeral client WITHOUT entreprise_nom (so the DB trigger NEVER creates a duplicate company!)
+  if (params.mode === 'create') {
+    if (cleanPassword.length < 6) {
+      return {
+        error: 'Le mot de passe temporaire doit contenir au moins 6 caractères.',
+        createdNewAccount: false,
+        alreadyExisted: false,
+        email: cleanEmail,
+      };
+    }
+
+    const ephemeral = createEphemeralAuthClient();
+    const { data: signUpData, error: signUpErr } = await ephemeral.auth.signUp({
+      email: cleanEmail,
+      password: cleanPassword,
+      options: {
+        data: {
+          joining_existing_team: true,
+          ...(cleanName ? { full_name: cleanName } : {}),
+          ...(cleanContact ? { contact: cleanContact } : {}),
+        },
+      },
+    });
+
+    // Always clear ephemeral memory session immediately
+    try {
+      await ephemeral.auth.signOut({ scope: 'local' });
+    } catch {
+      // Ignore
+    }
+
+    if (signUpErr) {
+      const msgLower = signUpErr.message.toLowerCase();
+      if (
+        msgLower.includes('already registered') ||
+        msgLower.includes('already exists') ||
+        msgLower.includes('user already')
+      ) {
+        // Account already exists in auth.users — DO NOT fail! Proceed to attach them directly!
+        alreadyExisted = true;
+      } else {
+        return {
+          error: signUpErr.message,
+          createdNewAccount: false,
+          alreadyExisted: false,
+          email: cleanEmail,
+        };
+      }
+    } else if (signUpData.user) {
+      // Supabase returns empty identities[] when email confirmation is enabled and user already exists
+      const identities = (signUpData.user as { identities?: unknown[] }).identities;
+      if (Array.isArray(identities) && identities.length === 0) {
+        alreadyExisted = true;
+      } else {
+        createdNewAccount = true;
+      }
+    }
+  }
+
+  // Step 2: Attach the user to the company using the authenticated admin/super-admin client
+  let memberUid: string | null = null;
+
+  if (params.scope === 'super_admin') {
+    if (!params.targetTenantId) {
+      return {
+        error: 'Entreprise cible introuvable.',
+        createdNewAccount,
+        alreadyExisted,
+        email: cleanEmail,
+      };
+    }
+
+    let { data: rpcData, error: rpcErr } = await supabase.rpc('add_member_to_entreprise', {
+      member_email: cleanEmail,
+      target_tenant_id: params.targetTenantId,
+      member_role: params.role,
+    });
+
+    // Fallback if live unpatched RPC doesn't yet accept 'collecteur'
+    if (rpcErr && params.role === 'collecteur' && rpcErr.message.toLowerCase().includes('invalide')) {
+      const retry = await supabase.rpc('add_member_to_entreprise', {
+        member_email: cleanEmail,
+        target_tenant_id: params.targetTenantId,
+        member_role: 'commercial',
+      });
+      rpcErr = retry.error;
+      rpcData = retry.data;
+      if (!rpcErr && typeof rpcData === 'string') {
+        await supabase
+          .from('entreprise_members')
+          .update({ role: 'collecteur' })
+          .eq('tenant_id', params.targetTenantId)
+          .eq('user_id', rpcData);
+      }
+    }
+
+    if (rpcErr) {
+      return {
+        error: rpcErr.message,
+        createdNewAccount,
+        alreadyExisted,
+        email: cleanEmail,
+      };
+    }
+
+    if (typeof rpcData === 'string') {
+      memberUid = rpcData;
+    }
+
+    // Populate full_name and contact immediately on entreprise_members
+    if (memberUid && (cleanName || cleanContact)) {
+      const updates: Record<string, string> = {};
+      if (cleanName) updates.full_name = cleanName;
+      if (cleanContact) updates.contact = cleanContact;
+      await supabase
+        .from('entreprise_members')
+        .update(updates)
+        .eq('tenant_id', params.targetTenantId)
+        .eq('user_id', memberUid);
+    }
+  } else {
+    // scope === 'team_admin'
+    const resolvedBoutiqueId = params.role !== 'admin' && params.boutiqueId ? params.boutiqueId : null;
+
+    let { data: rpcData, error: rpcErr } = await supabase.rpc('add_team_member', {
+      member_email: cleanEmail,
+      member_role: params.role,
+      member_boutique_id: resolvedBoutiqueId,
+    });
+
+    // Fallback if live DB has older 2-arg add_team_member or rejects 'collecteur'
+    if (rpcErr) {
+      const lowerErr = rpcErr.message.toLowerCase();
+      if (params.role === 'collecteur' && lowerErr.includes('invalide')) {
+        const retry = await supabase.rpc('add_team_member', {
+          member_email: cleanEmail,
+          member_role: 'commercial',
+          member_boutique_id: resolvedBoutiqueId,
+        });
+        rpcErr = retry.error;
+        rpcData = retry.data;
+        if (!rpcErr && typeof rpcData === 'string') {
+          await supabase
+            .from('entreprise_members')
+            .update({ role: 'collecteur' })
+            .eq('user_id', rpcData);
+        }
+      } else if (lowerErr.includes('could not find the function') || rpcErr.code === 'PGRST202') {
+        const retry = await supabase.rpc('add_team_member', {
+          member_email: cleanEmail,
+          member_role: params.role,
+        });
+        rpcErr = retry.error;
+        rpcData = retry.data;
+      }
+    }
+
+    if (rpcErr) {
+      return {
+        error: rpcErr.message,
+        createdNewAccount,
+        alreadyExisted,
+        email: cleanEmail,
+      };
+    }
+
+    if (typeof rpcData === 'string') {
+      memberUid = rpcData;
+    }
+
+    // Populate full_name, contact, and boutique_id immediately via tenant admin RLS
+    if (memberUid) {
+      const updates: Record<string, string | null> = {};
+      if (cleanName) updates.full_name = cleanName;
+      if (cleanContact) updates.contact = cleanContact;
+      if (resolvedBoutiqueId) updates.boutique_id = resolvedBoutiqueId;
+      if (Object.keys(updates).length > 0) {
+        let q = supabase.from('entreprise_members').update(updates).eq('user_id', memberUid);
+        if (params.targetTenantId) {
+          q = q.eq('tenant_id', params.targetTenantId);
+        }
+        await q;
+      }
+    }
+  }
+
+  notifyRealtimeMutation('entreprise_members', true);
+
+  return {
+    error: null,
+    memberUserId: memberUid,
+    createdNewAccount,
+    alreadyExisted,
+    email: cleanEmail,
+    password: createdNewAccount ? cleanPassword : undefined,
+  };
+}
