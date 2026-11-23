@@ -1,7 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useI18n } from '@/lib/i18n';
-import { formatPrice, formatDateShort } from '@/types';
+import {
+  formatPrice,
+  formatDateShort,
+  parseTraitementFromNotes,
+  stripTraitementTagFromNotes,
+  formatNotesWithTraitementTag,
+  buildWhatsAppUrl,
+} from '@/types';
 import {
   Lock,
   Receipt,
@@ -18,15 +25,15 @@ import {
   Calendar,
   Sparkles,
   Navigation,
- Truck,
- CalendarClock,
- Download,
- Smartphone,
- Share,
- Monitor,
- CheckCircle2,
- X,
- UserPlus,
+  Truck,
+  CalendarClock,
+  Download,
+  Smartphone,
+  Share,
+  Monitor,
+  CheckCircle2,
+  X,
+  UserPlus,
   Store,
   Clock,
   Zap,
@@ -38,6 +45,9 @@ import {
   FileText,
   AlertCircle,
   RefreshCw,
+  MessageCircle,
+  ArrowLeftRight,
+  ShoppingBag,
 } from 'lucide-react';
 import { usePwaInstall } from '@/hooks/usePwaInstall';
 import { ClientLocationMapPicker } from '@/components/DeliveryMap';
@@ -127,7 +137,14 @@ interface PortalTypeTraitement {
   libelle: string;
   coefficient: number;
   nb_jours: number;
+  isFallback?: boolean;
 }
+
+const FALLBACK_PORTAL_TYPES_TRAITEMENT: PortalTypeTraitement[] = [
+  { id: 'fallback:normal', libelle: 'NORMAL', coefficient: 1, nb_jours: 3, isFallback: true },
+  { id: 'fallback:express', libelle: 'EXPRESS', coefficient: 1.5, nb_jours: 2, isFallback: true },
+  { id: 'fallback:super_express', libelle: 'SUPER EXPRESS', coefficient: 2, nb_jours: 1, isFallback: true },
+];
 
 interface OrderArticle {
   id: string;
@@ -142,6 +159,50 @@ interface OrderArticle {
   couleur: string;
   signe_particulier: string;
   griffe: string;
+}
+
+const TIME_SLOTS: { value: string; fr: string; en: string }[] = [
+  { value: 'Matin (8h-12h)', fr: 'Matin (8h–12h)', en: 'Morning (8am–12pm)' },
+  { value: 'Après-midi (13h-17h)', fr: 'Après-midi (13h–17h)', en: 'Afternoon (1pm–5pm)' },
+  { value: 'Soir (17h-20h)', fr: 'Soir (17h–20h)', en: 'Evening (5pm–8pm)' },
+];
+
+const DAY_LABELS_MAP: Record<string, { fr: string; en: string }> = {
+  lundi: { fr: 'Lundi', en: 'Monday' },
+  mardi: { fr: 'Mardi', en: 'Tuesday' },
+  mercredi: { fr: 'Mercredi', en: 'Wednesday' },
+  jeudi: { fr: 'Jeudi', en: 'Thursday' },
+  vendredi: { fr: 'Vendredi', en: 'Friday' },
+  samedi: { fr: 'Samedi', en: 'Saturday' },
+  dimanche: { fr: 'Dimanche', en: 'Sunday' },
+};
+
+function composeDayAndSlot(day: string, slot: string): string | null {
+  const cleanDay = day.trim();
+  const cleanSlot = slot.trim();
+  if (cleanDay && cleanSlot) return `${cleanDay} · ${cleanSlot}`;
+  if (cleanDay) return cleanDay;
+  if (cleanSlot) return cleanSlot;
+  return null;
+}
+
+function parseDayAndSlot(raw: string | null | undefined): { day: string; slot: string } {
+  if (!raw) return { day: '', slot: '' };
+  const parts = raw.split('·').map((s) => s.trim()).filter(Boolean);
+  if (parts.length === 0) return { day: '', slot: '' };
+  if (parts.length === 1) {
+    const isSlotOnly = TIME_SLOTS.some((s) => s.value === parts[0]);
+    return isSlotOnly ? { day: '', slot: parts[0] } : { day: parts[0].toLowerCase(), slot: '' };
+  }
+  return { day: parts[0].toLowerCase(), slot: parts.slice(1).join(' · ') };
+}
+
+function formatDayAndSlotLabel(raw: string | null | undefined, fr: boolean): string {
+  if (!raw) return '';
+  const { day, slot } = parseDayAndSlot(raw);
+  const dayLabel = day ? (DAY_LABELS_MAP[day]?.[fr ? 'fr' : 'en'] ?? day) : '';
+  if (dayLabel && slot) return `${dayLabel} · ${slot}`;
+  return dayLabel || slot;
 }
 
 function uid(): string {
@@ -183,11 +244,13 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
   const [gpsError, setGpsError] = useState<string | null>(null);
   const [pickupDays, setPickupDays] = useState<string[]>([]);
   const [selectedPickupDay, setSelectedPickupDay] = useState<string>('');
+  const [selectedPickupSlot, setSelectedPickupSlot] = useState<string>('');
   const [deliveryRequested, setDeliveryRequested] = useState(false);
   const [deliveryAddress, setDeliveryAddress] = useState('');
   const [deliveryLat, setDeliveryLat] = useState<number | null>(null);
   const [deliveryLng, setDeliveryLng] = useState<number | null>(null);
   const [selectedDeliveryDay, setSelectedDeliveryDay] = useState<string>('');
+  const [selectedDeliverySlot, setSelectedDeliverySlot] = useState<string>('');
   const [sameAddressAsPickup, setSameAddressAsPickup] = useState(false);
   const [showPickupMap, setShowPickupMap] = useState(false);
   const [showDeliveryMap, setShowDeliveryMap] = useState(false);
@@ -334,8 +397,8 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
     }
   }
 
-  async function loadReleve(c: string) {
-    setLoadingReleve(true);
+  const loadReleve = useCallback(async (c: string, silent = false) => {
+    if (!silent) setLoadingReleve(true);
     try {
       const { data, error } = await supabase.rpc('portal_get_releve', {
         p_code: c,
@@ -345,11 +408,33 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
       const result = data as { depots?: PortalDepot[] };
       setDepots(result?.depots ?? []);
     } catch {
-      setDepots([]);
+      if (!silent) setDepots([]);
     } finally {
-      setLoadingReleve(false);
+      if (!silent) setLoadingReleve(false);
     }
-  }
+  }, [entrepriseId]);
+
+  // Automatic background status refresh when client is tracking orders on Relevé tab
+  useEffect(() => {
+    if (!client || view !== 'releve') return;
+    const cleanCode = code.trim().toUpperCase();
+    if (!cleanCode) return;
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void loadReleve(cleanCode, true);
+      }
+    }, 30000);
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void loadReleve(cleanCode, true);
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [client, view, code, loadReleve]);
 
   // Load catalog, treatment types, article variants, and pickup days via portal RPCs
   const loadPortalCatalogAndTypes = useCallback(async () => {
@@ -370,15 +455,16 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
       }
 
       let resolvedTypes: PortalTypeTraitement[] = [];
-      if (!typesRes.error && Array.isArray(typesRes.data)) {
+      if (!typesRes.error && Array.isArray(typesRes.data) && typesRes.data.length > 0) {
         resolvedTypes = (typesRes.data as PortalTypeTraitement[]).map((t) => ({
           id: t.id,
           libelle: t.libelle,
           coefficient: Number(t.coefficient) || 1,
           nb_jours: Number(t.nb_jours) || 1,
+          isFallback: false,
         }));
       } else {
-        // Fallback: if portal RPC fails (e.g. before SQL patch is applied), try direct read if permitted
+        // Fallback 1: try direct read if permitted (e.g. authenticated session or public policy)
         const fallbackRes = await supabase
           .from('types_traitement')
           .select('id, libelle, coefficient, nb_jours')
@@ -389,9 +475,11 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
             libelle: t.libelle,
             coefficient: Number(t.coefficient) || 1,
             nb_jours: Number(t.nb_jours) || 1,
+            isFallback: false,
           }));
-        } else if (typesRes.error) {
-          setTypesLoadError(typesRes.error.message);
+        } else {
+          // Fallback 2: always provide selectable standard treatments so clients are never blocked
+          resolvedTypes = FALLBACK_PORTAL_TYPES_TRAITEMENT.map((t) => ({ ...t }));
         }
       }
 
@@ -419,11 +507,11 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
       if (days.length > 0) {
         setSelectedPickupDay((prev) => prev || days[0]);
       }
-    } catch (err) {
+    } catch {
       setCatalog([]);
-      setTypesTraitement([]);
+      setTypesTraitement(FALLBACK_PORTAL_TYPES_TRAITEMENT.map((t) => ({ ...t })));
+      setSelectedTypeTraitementId((prev) => prev || FALLBACK_PORTAL_TYPES_TRAITEMENT[0].id);
       setArticleVariants([]);
-      setTypesLoadError(err instanceof Error ? err.message : 'Erreur de chargement');
     } finally {
       setTypesLoading(false);
     }
@@ -448,6 +536,53 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
       // Ignore storage errors
     }
   }, [client, loadPortalCatalogAndTypes, entrepriseId, code]);
+
+  // If fallback treatment types are active, enrich them with any real DB type_traitement_id seen in the client's depots
+  useEffect(() => {
+    if (depots.length === 0) return;
+    setTypesTraitement((prev) => {
+      if (prev.length > 0 && prev.every((t) => !t.isFallback)) return prev;
+      const fromDepots = new Map<string, PortalTypeTraitement>();
+      for (const d of depots) {
+        if (!d.type_traitement_id) continue;
+        const label = (d.traitement ?? '').trim() || (Number(d.coefficient) > 1 ? `EXPRESS ×${d.coefficient}` : 'NORMAL');
+        const key = label.toLowerCase();
+        if (!fromDepots.has(key)) {
+          const coef = Number(d.coefficient) || 1;
+          fromDepots.set(key, {
+            id: d.type_traitement_id,
+            libelle: label,
+            coefficient: coef,
+            nb_jours: coef >= 2 ? 1 : coef > 1 ? 2 : 3,
+            isFallback: false,
+          });
+        }
+      }
+      if (fromDepots.size === 0) return prev;
+      const baseList = prev.length > 0 ? prev : FALLBACK_PORTAL_TYPES_TRAITEMENT;
+      const merged: PortalTypeTraitement[] = [];
+      const seenKeys = new Set<string>();
+      for (const item of baseList) {
+        const key = item.libelle.trim().toLowerCase();
+        const real = fromDepots.get(key);
+        merged.push(real ?? item);
+        seenKeys.add(key);
+      }
+      for (const [key, real] of fromDepots.entries()) {
+        if (!seenKeys.has(key)) merged.push(real);
+      }
+      merged.sort((a, b) => a.coefficient - b.coefficient || a.libelle.localeCompare(b.libelle));
+      return merged;
+    });
+  }, [depots]);
+
+  // Keep selectedTypeTraitementId valid whenever typesTraitement upgrades from fallback to real UUID
+  useEffect(() => {
+    if (typesTraitement.length === 0) return;
+    if (!selectedTypeTraitementId || !typesTraitement.some((t) => t.id === selectedTypeTraitementId)) {
+      setSelectedTypeTraitementId(typesTraitement[0].id);
+    }
+  }, [typesTraitement, selectedTypeTraitementId]);
 
   // Keep delivery address in sync with pickup address when "same address" is toggled on
   useEffect(() => {
@@ -545,7 +680,18 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
     if (depot.traitement && depot.traitement.trim()) {
       return depot.traitement.trim();
     }
+    const fromNotes = parseTraitementFromNotes(depot.notes);
+    if (fromNotes) return fromNotes.libelle;
     return null;
+  }
+
+  function resolveDepotTreatmentCoefficient(depot: PortalDepot): number {
+    if (depot.type_traitement_id) {
+      return Number(depot.coefficient) || 1;
+    }
+    const fromNotes = parseTraitementFromNotes(depot.notes);
+    if (fromNotes) return fromNotes.coefficient;
+    return Number(depot.coefficient) || 1;
   }
 
   function addArticleToOrder(cat: CatalogArticle) {
@@ -624,6 +770,73 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
 
   function removeOrderArticle(id: string) {
     setOrderArticles((prev) => prev.filter((a) => a.id !== id));
+  }
+
+  function addQuickPickupBag() {
+    setOrderArticles((prev) => {
+      const alreadyHas = prev.some(
+        (a) => a.prix_unitaire === 0 && a.designation.toLowerCase().includes('inventorier'),
+      );
+      if (alreadyHas) return prev;
+      return [
+        ...prev,
+        {
+          id: uid(),
+          article_id: null,
+          variant_id: null,
+          designation: fr
+            ? 'Lot de linge à inventorier à la collecte'
+            : 'Laundry bag to inventory at pickup',
+          base_designation: fr
+            ? 'Lot de linge à inventorier à la collecte'
+            : 'Laundry bag to inventory at pickup',
+          prix_unitaire: 0,
+          quantite: 1,
+          nb_pieces: 1,
+          prix_total: 0,
+          couleur: '',
+          signe_particulier: 'AUCUN',
+          griffe: 'AUCUN',
+        },
+      ];
+    });
+    setOrderError(null);
+  }
+
+  function applyServiceMode(mode: 'roundtrip' | 'pickup' | 'delivery' | 'drop_off') {
+    if (mode === 'roundtrip') {
+      setPickupRequested(true);
+      setDeliveryRequested(true);
+      setSameAddressAsPickup(true);
+      if (savedHomeAddress && !pickupAddress && pickupLat === null) {
+        setPickupAddress(savedHomeAddress.address);
+        setPickupLat(savedHomeAddress.lat);
+        setPickupLng(savedHomeAddress.lng);
+      }
+    } else if (mode === 'pickup') {
+      setPickupRequested(true);
+      setDeliveryRequested(false);
+      setSameAddressAsPickup(false);
+      if (savedHomeAddress && !pickupAddress && pickupLat === null) {
+        setPickupAddress(savedHomeAddress.address);
+        setPickupLat(savedHomeAddress.lat);
+        setPickupLng(savedHomeAddress.lng);
+      }
+    } else if (mode === 'delivery') {
+      setPickupRequested(false);
+      setDeliveryRequested(true);
+      setSameAddressAsPickup(false);
+      if (savedHomeAddress && !deliveryAddress && deliveryLat === null) {
+        setDeliveryAddress(savedHomeAddress.address);
+        setDeliveryLat(savedHomeAddress.lat);
+        setDeliveryLng(savedHomeAddress.lng);
+      }
+    } else {
+      setPickupRequested(false);
+      setDeliveryRequested(false);
+      setSameAddressAsPickup(false);
+    }
+    setOrderError(null);
   }
 
   const orderTotal = orderArticles.reduce((sum, a) => sum + a.prix_total, 0);
@@ -766,13 +979,17 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
     setOrderError(null);
     setOrderSuccess(false);
     try {
+      const selectedType = typesTraitement.find((t) => t.id === selectedTypeTraitementId) ?? null;
+      const isFallbackType = Boolean(selectedType?.isFallback);
       const coef = getSelectedCoefficient();
       const articlesJson = orderArticles.map((a) => {
         const qte = a.quantite === '' ? 1 : Math.max(1, Number(a.quantite) || 1);
         const prixTrait = a.prix_unitaire * coef;
         return {
           designation: a.designation,
-          prix_unitaire: a.prix_unitaire,
+          // When DB RPC is unpatched (fallback treatment), bake the coefficient into prix_unitaire
+          // so server-computed total (v_coef = 1.0) matches the client's selected treatment price.
+          prix_unitaire: isFallbackType ? prixTrait : a.prix_unitaire,
           prix_traitement: prixTrait,
           quantite: qte,
           nb_pieces: a.nb_pieces,
@@ -793,23 +1010,30 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
         saveHomeAddressLocally(finalDeliveryAddr, finalDeliveryLat, finalDeliveryLng);
       }
 
+      const finalNotes = isFallbackType && selectedType
+        ? formatNotesWithTraitementTag(orderNotes, selectedType.libelle, selectedType.coefficient)
+        : (stripTraitementTagFromNotes(orderNotes) || null);
+      const fallbackRetraitDate = isFallbackType && selectedType
+        ? new Date(Date.now() + selectedType.nb_jours * 86400000).toISOString()
+        : null;
+
       const { data, error } = await supabase.rpc('portal_create_depot', {
         p_code: code.trim().toUpperCase(),
         e_id: entrepriseId,
         p_articles: articlesJson,
-        p_notes: orderNotes.trim() || null,
-        p_date_retrait: null,
-        p_type_traitement_id: selectedTypeTraitementId || null,
+        p_notes: finalNotes,
+        p_date_retrait: fallbackRetraitDate,
+        p_type_traitement_id: isFallbackType ? null : (selectedTypeTraitementId || null),
         p_pickup_requested: pickupRequested,
         p_pickup_address: pickupRequested ? (pickupAddress.trim() || null) : null,
         p_pickup_latitude: pickupRequested ? pickupLat : null,
         p_pickup_longitude: pickupRequested ? pickupLng : null,
-        p_pickup_day: pickupRequested ? (selectedPickupDay || null) : null,
+        p_pickup_day: pickupRequested ? composeDayAndSlot(selectedPickupDay, selectedPickupSlot) : null,
         p_delivery_requested: deliveryRequested,
         p_delivery_address: deliveryRequested ? (finalDeliveryAddr.trim() || null) : null,
         p_delivery_latitude: deliveryRequested ? finalDeliveryLat : null,
         p_delivery_longitude: deliveryRequested ? finalDeliveryLng : null,
-        p_delivery_day: deliveryRequested ? (selectedDeliveryDay || null) : null,
+        p_delivery_day: deliveryRequested ? composeDayAndSlot(selectedDeliveryDay, selectedDeliverySlot) : null,
       });
 
       if (error) throw error;
@@ -824,11 +1048,13 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
       setPickupLat(null);
       setPickupLng(null);
       setSelectedPickupDay(pickupDays.length > 0 ? pickupDays[0] : '');
+      setSelectedPickupSlot('');
       setDeliveryRequested(false);
       setDeliveryAddress('');
       setDeliveryLat(null);
       setDeliveryLng(null);
       setSelectedDeliveryDay('');
+      setSelectedDeliverySlot('');
       setSameAddressAsPickup(false);
       setShowPickupMap(false);
       setShowDeliveryMap(false);
@@ -843,13 +1069,27 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
   }
 
   function startEditOrder(depot: PortalDepot) {
+    const parsedFromNotes = !depot.type_traitement_id ? parseTraitementFromNotes(depot.notes) : null;
+    const matchedByLabel = !depot.type_traitement_id && (depot.traitement || parsedFromNotes?.libelle)
+      ? typesTraitement.find(
+          (t) => t.libelle.trim().toLowerCase() === (depot.traitement || parsedFromNotes?.libelle || '').trim().toLowerCase(),
+        )
+      : null;
+    const preAppliedCoef = !depot.type_traitement_id && parsedFromNotes && parsedFromNotes.coefficient > 1
+      ? parsedFromNotes.coefficient
+      : 1;
+
     setEditingDepotId(depot.id);
     setEditError(null);
     setView('commande');
     setOrderSuccess(false);
     setOrderError(null);
-    setOrderNotes(depot.notes ?? '');
-    setSelectedTypeTraitementId(depot.type_traitement_id ?? (typesTraitement.length > 0 ? typesTraitement[0].id : ''));
+    setOrderNotes(stripTraitementTagFromNotes(depot.notes));
+    setSelectedTypeTraitementId(
+      depot.type_traitement_id ??
+      matchedByLabel?.id ??
+      (typesTraitement.length > 0 ? typesTraitement[0].id : ''),
+    );
     setOrderArticles(depot.articles.map((a) => {
       const matchedCatalog = catalog.find(
         (c) => c.designation === a.designation || a.designation.startsWith(`${c.designation} (`),
@@ -861,13 +1101,16 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
               a.designation === `${matchedCatalog.designation} (${v.designation})`,
           )
         : undefined;
+      const baseUnitPrice = preAppliedCoef > 1
+        ? Math.round((Number(a.prix_unitaire) || 0) / preAppliedCoef)
+        : (Number(a.prix_unitaire) || 0);
       return {
         id: uid(),
         article_id: matchedCatalog?.id ?? null,
         variant_id: matchedVariant?.id ?? null,
         designation: a.designation,
         base_designation: matchedCatalog?.designation ?? a.designation,
-        prix_unitaire: Number(a.prix_unitaire) || 0,
+        prix_unitaire: baseUnitPrice,
         quantite: Math.max(1, Number(a.quantite) || 1),
         nb_pieces: Math.max(1, Number(a.nb_pieces) || 1),
         prix_total: Number(a.prix_total) || 0,
@@ -876,16 +1119,20 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
         griffe: a.griffe ?? 'AUCUN',
       };
     }));
+    const parsedPickup = parseDayAndSlot(depot.pickup_day);
+    const parsedDelivery = parseDayAndSlot(depot.delivery_day);
     setPickupRequested(depot.pickup_requested ?? false);
     setPickupAddress(depot.pickup_address ?? '');
     setPickupLat(depot.pickup_latitude ?? null);
     setPickupLng(depot.pickup_longitude ?? null);
-    setSelectedPickupDay(depot.pickup_day ?? (pickupDays.length > 0 ? pickupDays[0] : ''));
+    setSelectedPickupDay(parsedPickup.day || (pickupDays.length > 0 ? pickupDays[0] : ''));
+    setSelectedPickupSlot(parsedPickup.slot);
     setDeliveryRequested(depot.delivery_requested ?? false);
     setDeliveryAddress(depot.delivery_address ?? '');
     setDeliveryLat(depot.delivery_latitude ?? null);
     setDeliveryLng(depot.delivery_longitude ?? null);
-    setSelectedDeliveryDay(depot.delivery_day ?? '');
+    setSelectedDeliveryDay(parsedDelivery.day);
+    setSelectedDeliverySlot(parsedDelivery.slot);
     const sameAddr =
       Boolean(depot.pickup_requested) &&
       Boolean(depot.delivery_requested) &&
@@ -911,11 +1158,13 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
     setPickupLat(null);
     setPickupLng(null);
     setSelectedPickupDay(pickupDays.length > 0 ? pickupDays[0] : '');
+    setSelectedPickupSlot('');
     setDeliveryRequested(false);
     setDeliveryAddress('');
     setDeliveryLat(null);
     setDeliveryLng(null);
     setSelectedDeliveryDay('');
+    setSelectedDeliverySlot('');
     setSameAddressAsPickup(false);
     setShowPickupMap(false);
     setShowDeliveryMap(false);
@@ -935,13 +1184,15 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
     setEditError(null);
     setOrderError(null);
     try {
+      const selectedType = typesTraitement.find((t) => t.id === selectedTypeTraitementId) ?? null;
+      const isFallbackType = Boolean(selectedType?.isFallback);
       const coef = getSelectedCoefficient();
       const articlesJson = orderArticles.map((a) => {
         const qte = a.quantite === '' ? 1 : Math.max(1, Number(a.quantite) || 1);
         const prixTrait = a.prix_unitaire * coef;
         return {
           designation: a.designation,
-          prix_unitaire: a.prix_unitaire,
+          prix_unitaire: isFallbackType ? prixTrait : a.prix_unitaire,
           prix_traitement: prixTrait,
           quantite: qte,
           nb_pieces: a.nb_pieces,
@@ -967,17 +1218,17 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
         e_id: entrepriseId,
         p_depot_id: editingDepotId,
         p_articles: articlesJson,
-        p_type_traitement_id: selectedTypeTraitementId || null,
+        p_type_traitement_id: isFallbackType ? null : (selectedTypeTraitementId || null),
         p_pickup_requested: pickupRequested,
         p_pickup_address: pickupRequested ? (pickupAddress.trim() || null) : null,
         p_pickup_latitude: pickupRequested ? pickupLat : null,
         p_pickup_longitude: pickupRequested ? pickupLng : null,
-        p_pickup_day: pickupRequested ? (selectedPickupDay || null) : null,
+        p_pickup_day: pickupRequested ? composeDayAndSlot(selectedPickupDay, selectedPickupSlot) : null,
         p_delivery_requested: deliveryRequested,
         p_delivery_address: deliveryRequested ? (finalDeliveryAddr.trim() || null) : null,
         p_delivery_latitude: deliveryRequested ? finalDeliveryLat : null,
         p_delivery_longitude: deliveryRequested ? finalDeliveryLng : null,
-        p_delivery_day: deliveryRequested ? (selectedDeliveryDay || null) : null,
+        p_delivery_day: deliveryRequested ? composeDayAndSlot(selectedDeliveryDay, selectedDeliverySlot) : null,
       });
 
       if (error) throw error;
@@ -990,11 +1241,13 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
       setPickupLat(null);
       setPickupLng(null);
       setSelectedPickupDay(pickupDays.length > 0 ? pickupDays[0] : '');
+      setSelectedPickupSlot('');
       setDeliveryRequested(false);
       setDeliveryAddress('');
       setDeliveryLat(null);
       setDeliveryLng(null);
       setSelectedDeliveryDay('');
+      setSelectedDeliverySlot('');
       setSameAddressAsPickup(false);
       setShowPickupMap(false);
       setShowDeliveryMap(false);
@@ -1492,7 +1745,7 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
                             {(() => {
                               const label = resolveDepotTreatmentLabel(depot);
                               if (!label) return null;
-                              const coef = Number(depot.coefficient) || 1;
+                              const coef = resolveDepotTreatmentCoefficient(depot);
                               return (
                                 <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">
                                   <Sparkles className="w-3 h-3" />
@@ -1562,46 +1815,54 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
                       </div>
 
                       {/* Logistics details (pickup / delivery / notes) */}
-                      {(depot.pickup_requested || depot.delivery_requested || depot.notes) && (
-                        <div className="px-5 py-2.5 bg-slate-50/40 border-b border-slate-50 space-y-1.5 text-xs">
-                          {depot.pickup_requested && (
-                            <div className="flex items-start gap-2 text-amber-800">
-                              <Truck className="w-3.5 h-3.5 text-amber-600 flex-shrink-0 mt-0.5" />
-                              <div className="min-w-0 flex-1">
-                                <span className="font-semibold">{fr ? 'Collecte :' : 'Pickup:'}</span>{' '}
-                                {depot.pickup_day && <span className="capitalize font-medium">{depot.pickup_day} · </span>}
-                                <span>{depot.pickup_address || (fr ? 'Position GPS partagée' : 'GPS location shared')}</span>
-                                {Number(depot.frais_collecte || 0) > 0 && (
-                                  <span className="ml-1.5 text-amber-700 font-medium">
-                                    ({formatPrice(Number(depot.frais_collecte))})
-                                  </span>
-                                )}
+                      {(() => {
+                        const cleanNotes = stripTraitementTagFromNotes(depot.notes);
+                        if (!depot.pickup_requested && !depot.delivery_requested && !cleanNotes) return null;
+                        return (
+                          <div className="px-5 py-2.5 bg-slate-50/40 border-b border-slate-50 space-y-1.5 text-xs">
+                            {depot.pickup_requested && (
+                              <div className="flex items-start gap-2 text-amber-800">
+                                <Truck className="w-3.5 h-3.5 text-amber-600 flex-shrink-0 mt-0.5" />
+                                <div className="min-w-0 flex-1">
+                                  <span className="font-semibold">{fr ? 'Collecte :' : 'Pickup:'}</span>{' '}
+                                  {depot.pickup_day && (
+                                    <span className="font-medium">{formatDayAndSlotLabel(depot.pickup_day, fr)} · </span>
+                                  )}
+                                  <span>{depot.pickup_address || (fr ? 'Position GPS partagée' : 'GPS location shared')}</span>
+                                  {Number(depot.frais_collecte || 0) > 0 && (
+                                    <span className="ml-1.5 text-amber-700 font-medium">
+                                      ({formatPrice(Number(depot.frais_collecte))})
+                                    </span>
+                                  )}
+                                </div>
                               </div>
-                            </div>
-                          )}
-                          {depot.delivery_requested && (
-                            <div className="flex items-start gap-2 text-sky-800">
-                              <Home className="w-3.5 h-3.5 text-sky-600 flex-shrink-0 mt-0.5" />
-                              <div className="min-w-0 flex-1">
-                                <span className="font-semibold">{fr ? 'Livraison :' : 'Delivery:'}</span>{' '}
-                                {depot.delivery_day && <span className="capitalize font-medium">{depot.delivery_day} · </span>}
-                                <span>{depot.delivery_address || (fr ? 'Position GPS partagée' : 'GPS location shared')}</span>
-                                {Number(depot.frais_livraison || 0) > 0 && (
-                                  <span className="ml-1.5 text-sky-700 font-medium">
-                                    ({formatPrice(Number(depot.frais_livraison))})
-                                  </span>
-                                )}
+                            )}
+                            {depot.delivery_requested && (
+                              <div className="flex items-start gap-2 text-sky-800">
+                                <Home className="w-3.5 h-3.5 text-sky-600 flex-shrink-0 mt-0.5" />
+                                <div className="min-w-0 flex-1">
+                                  <span className="font-semibold">{fr ? 'Livraison :' : 'Delivery:'}</span>{' '}
+                                  {depot.delivery_day && (
+                                    <span className="font-medium">{formatDayAndSlotLabel(depot.delivery_day, fr)} · </span>
+                                  )}
+                                  <span>{depot.delivery_address || (fr ? 'Position GPS partagée' : 'GPS location shared')}</span>
+                                  {Number(depot.frais_livraison || 0) > 0 && (
+                                    <span className="ml-1.5 text-sky-700 font-medium">
+                                      ({formatPrice(Number(depot.frais_livraison))})
+                                    </span>
+                                  )}
+                                </div>
                               </div>
-                            </div>
-                          )}
-                          {depot.notes && (
-                            <div className="flex items-start gap-2 text-slate-600">
-                              <FileText className="w-3.5 h-3.5 text-slate-400 flex-shrink-0 mt-0.5" />
-                              <span className="italic">{depot.notes}</span>
-                            </div>
-                          )}
-                        </div>
-                      )}
+                            )}
+                            {cleanNotes && (
+                              <div className="flex items-start gap-2 text-slate-600">
+                                <FileText className="w-3.5 h-3.5 text-slate-400 flex-shrink-0 mt-0.5" />
+                                <span className="italic">{cleanNotes}</span>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
 
                       <div className="px-5 py-3 space-y-1.5">
                         {depot.articles.map((art) => (
@@ -1621,6 +1882,35 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
                         <span className="text-slate-500">{fr ? 'Payé' : 'Paid'}: <span className="text-emerald-600 font-medium">{formatPrice(paye)}</span></span>
                         <span className="text-slate-500">{fr ? 'Reste' : 'Remaining'}: <span className={reste > 0 ? 'text-red-600 font-medium' : 'text-slate-400'}>{formatPrice(reste)}</span></span>
                       </div>
+                      {client.entreprise_telephone && depot.statut !== 'RETIRE' && (() => {
+                        const refLabel = depot.numero ?? (fr ? 'ma commande en attente' : 'my pending order');
+                        const waText = fr
+                          ? `Bonjour ${client.entreprise_nom}, je suis ${client.client_nom}. Je souhaite un suivi concernant ${refLabel}.`
+                          : `Hello ${client.entreprise_nom}, this is ${client.client_nom}. I'd like an update on ${refLabel}.`;
+                        const waHref = buildWhatsAppUrl(client.entreprise_telephone, waText);
+                        return (
+                          <div className="px-5 py-2.5 border-t border-slate-50 bg-slate-50/40 flex flex-wrap items-center gap-2">
+                            {waHref && (
+                              <a
+                                href={waHref}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-medium hover:bg-emerald-100 transition-colors"
+                              >
+                                <MessageCircle className="w-3.5 h-3.5" />
+                                {fr ? 'Contacter sur WhatsApp' : 'Message on WhatsApp'}
+                              </a>
+                            )}
+                            <a
+                              href={`tel:${client.entreprise_telephone}`}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-600 text-xs font-medium hover:bg-slate-50 transition-colors"
+                            >
+                              <Phone className="w-3.5 h-3.5" />
+                              {fr ? 'Appeler le pressing' : 'Call dry cleaner'}
+                            </a>
+                          </div>
+                        );
+                      })()}
                       {depot.statut === 'COMMANDE' && (
                         <div className="px-5 pb-3.5 pt-2 border-t border-slate-50 space-y-2">
                           <div className="flex gap-2">
@@ -1718,6 +2008,85 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
                     </button>
                   </div>
                 )}
+
+                {/* Service mode quick selector — always visible so clients immediately see door-to-door options */}
+                <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-5">
+                  <div className="flex items-center gap-2 mb-3">
+                    <ArrowLeftRight className="w-4 h-4 text-sky-500" />
+                    <h3 className="text-sm font-semibold text-slate-900">
+                      {fr ? 'Mode de prise en charge' : 'Service mode'}
+                    </h3>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2.5">
+                    {([
+                      {
+                        key: 'roundtrip' as const,
+                        active: pickupRequested && deliveryRequested,
+                        icon: ArrowLeftRight,
+                        title: fr ? 'Collecte + Livraison' : 'Pickup + Delivery',
+                        sub: fr ? 'Aller-retour à domicile' : 'Full door-to-door',
+                        badge: fr ? 'Complet' : 'Full',
+                      },
+                      {
+                        key: 'pickup' as const,
+                        active: pickupRequested && !deliveryRequested,
+                        icon: Truck,
+                        title: fr ? 'Collecte à domicile' : 'Home pickup',
+                        sub: fr ? 'Retrait au pressing' : 'Shop pickup after',
+                        badge: null,
+                      },
+                      {
+                        key: 'delivery' as const,
+                        active: !pickupRequested && deliveryRequested,
+                        icon: Home,
+                        title: fr ? 'Livraison à domicile' : 'Home delivery',
+                        sub: fr ? 'Je dépose au pressing' : 'I drop off at shop',
+                        badge: null,
+                      },
+                      {
+                        key: 'drop_off' as const,
+                        active: !pickupRequested && !deliveryRequested,
+                        icon: Store,
+                        title: fr ? 'Au pressing' : 'In-store',
+                        sub: fr ? 'Dépôt et retrait sur place' : 'Drop off & pick up',
+                        badge: null,
+                      },
+                    ]).map((opt) => {
+                      const Icon = opt.icon;
+                      return (
+                        <button
+                          key={opt.key}
+                          type="button"
+                          onClick={() => applyServiceMode(opt.key)}
+                          className={`p-3 rounded-xl border text-left transition-all flex items-start gap-2.5 ${
+                            opt.active
+                              ? 'border-sky-500 bg-sky-50/70 ring-1 ring-sky-200'
+                              : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/60'
+                          }`}
+                        >
+                          <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
+                            opt.active ? 'bg-sky-500 text-white' : 'bg-slate-100 text-slate-500'
+                          }`}>
+                            <Icon className="w-4 h-4" />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <p className={`text-xs font-semibold leading-tight ${opt.active ? 'text-sky-900' : 'text-slate-800'}`}>
+                                {opt.title}
+                              </p>
+                              {opt.badge && (
+                                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">
+                                  {opt.badge}
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[11px] text-slate-500 mt-0.5 leading-snug">{opt.sub}</p>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
 
                 {/* Treatment type selector — always visible so client explicitly picks treatment */}
                 <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-5">
@@ -1817,9 +2186,42 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
                   </div>
                 )}
 
-                {/* Catalog search */}
+                {/* Catalog search + quick browse */}
                 <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-5">
-                  <h3 className="text-sm font-semibold text-slate-900 mb-3">{fr ? 'Ajouter des articles' : 'Add items'}</h3>
+                  <div className="flex items-center justify-between gap-2 mb-3">
+                    <h3 className="text-sm font-semibold text-slate-900">{fr ? 'Ajouter des articles' : 'Add items'}</h3>
+                    {catalog.length > 0 && (
+                      <span className="text-xs text-slate-400">
+                        {filteredCatalog.length} {fr ? 'disponible(s)' : 'available'}
+                      </span>
+                    )}
+                  </div>
+                  {pickupRequested && (
+                    <button
+                      type="button"
+                      onClick={addQuickPickupBag}
+                      className="w-full mb-3 p-3 rounded-xl bg-amber-50 border border-amber-200 hover:bg-amber-100/70 transition-colors flex items-center justify-between gap-3 text-left"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="w-8 h-8 rounded-lg bg-amber-500 text-white flex items-center justify-center flex-shrink-0">
+                          <ShoppingBag className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-xs font-semibold text-amber-900">
+                            {fr ? 'Collecte rapide sans inventaire' : 'Quick pickup without listing items'}
+                          </p>
+                          <p className="text-[11px] text-amber-800/80">
+                            {fr
+                              ? 'Le collecteur comptera et chiffrera vos pièces sur place'
+                              : 'Our collector will count and price your items on site'}
+                          </p>
+                        </div>
+                      </div>
+                      <span className="text-xs font-semibold text-amber-800 bg-white border border-amber-200 px-2.5 py-1 rounded-lg flex-shrink-0">
+                        {fr ? '+ Ajouter' : '+ Add'}
+                      </span>
+                    </button>
+                  )}
                   <div className="relative mb-3">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                     <input
@@ -1830,14 +2232,14 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
                       className="w-full pl-10 pr-4 py-2.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent"
                     />
                   </div>
-                  {searchTerm.trim() && (
-                    <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                  {catalog.length > 0 && (
+                    <div className="space-y-1.5 max-h-56 overflow-y-auto">
                       {filteredCatalog.length === 0 ? (
                         <p className="text-xs text-slate-400 text-center py-3">
                           {fr ? 'Aucun article trouvé.' : 'No item found.'}
                         </p>
                       ) : (
-                        filteredCatalog.map((cat) => {
+                        (searchTerm.trim() ? filteredCatalog : filteredCatalog.slice(0, 10)).map((cat) => {
                           const coef = getSelectedCoefficient();
                           const adjustedPrice = Number(cat.prix_unitaire) * coef;
                           return (
@@ -1864,6 +2266,13 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
                             </button>
                           );
                         })
+                      )}
+                      {!searchTerm.trim() && filteredCatalog.length > 10 && (
+                        <p className="text-[11px] text-slate-400 text-center pt-1">
+                          {fr
+                            ? `Tapez un mot-clé pour filtrer parmi les ${filteredCatalog.length} articles.`
+                            : `Type a keyword to filter across all ${filteredCatalog.length} items.`}
+                        </p>
                       )}
                     </div>
                   )}
@@ -1980,9 +2389,8 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
                   </div>
                 )}
 
-                {/* Pickup option */}
-                {orderArticles.length > 0 && (
-                  <div className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
+                {/* Pickup option — always accessible */}
+                <div className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
                     <button
                       type="button"
                       onClick={() => setPickupRequested(!pickupRequested)}
@@ -2040,16 +2448,7 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
                             </label>
                             <div className="flex flex-wrap gap-2">
                               {pickupDays.map((day) => {
-                                const dayLabels: Record<string, { fr: string; en: string }> = {
-                                  lundi: { fr: 'Lundi', en: 'Mon' },
-                                  mardi: { fr: 'Mardi', en: 'Tue' },
-                                  mercredi: { fr: 'Mercredi', en: 'Wed' },
-                                  jeudi: { fr: 'Jeudi', en: 'Thu' },
-                                  vendredi: { fr: 'Vendredi', en: 'Fri' },
-                                  samedi: { fr: 'Samedi', en: 'Sat' },
-                                  dimanche: { fr: 'Dimanche', en: 'Sun' },
-                                };
-                                const label = dayLabels[day]?.[lang === 'fr' ? 'fr' : 'en'] ?? day;
+                                const label = DAY_LABELS_MAP[day]?.[fr ? 'fr' : 'en'] ?? day;
                                 return (
                                   <button
                                     type="button"
@@ -2068,6 +2467,32 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
                             </div>
                           </div>
                         )}
+
+                        <div>
+                          <label className="block text-xs font-medium text-slate-500 mb-1.5">
+                            {fr ? 'Créneau horaire de collecte (optionnel)' : 'Preferred pickup time slot (optional)'}
+                          </label>
+                          <div className="flex flex-wrap gap-1.5">
+                            {TIME_SLOTS.map((slot) => {
+                              const active = selectedPickupSlot === slot.value;
+                              return (
+                                <button
+                                  type="button"
+                                  key={slot.value}
+                                  onClick={() => setSelectedPickupSlot(active ? '' : slot.value)}
+                                  className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-all ${
+                                    active
+                                      ? 'bg-amber-500 text-white border-amber-500 shadow-xs'
+                                      : 'bg-white border-slate-200 text-slate-600 hover:border-amber-200 hover:bg-amber-50/50'
+                                  }`}
+                                >
+                                  <Clock className="w-3 h-3" />
+                                  {fr ? slot.fr : slot.en}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
 
                         <div>
                           <label className="block text-xs font-medium text-slate-500 mb-1.5">
@@ -2154,12 +2579,10 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
                         )}
                       </div>
                     )}
-                  </div>
-                )}
+                </div>
 
-                {/* Delivery option */}
-                {orderArticles.length > 0 && (
-                  <div className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
+                {/* Delivery option — always accessible */}
+                <div className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
                     <button
                       type="button"
                       onClick={() => {
@@ -2248,34 +2671,51 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
                               ? pickupDays
                               : ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi']
                             ).map((day) => {
-                              const dayLabels: Record<string, { fr: string; en: string }> = {
-                                lundi: { fr: 'Lundi', en: 'Mon' },
-                                mardi: { fr: 'Mardi', en: 'Tue' },
-                                mercredi: { fr: 'Mercredi', en: 'Wed' },
-                                jeudi: { fr: 'Jeudi', en: 'Thu' },
-                                vendredi: { fr: 'Vendredi', en: 'Fri' },
-                                samedi: { fr: 'Samedi', en: 'Sat' },
-                                dimanche: { fr: 'Dimanche', en: 'Sun' },
-                              };
-                              const label = dayLabels[day]?.[fr ? 'fr' : 'en'] ?? day;
-                              const isSelected = selectedDeliveryDay === day;
-                              return (
-                                <button
-                                  type="button"
-                                  key={day}
-                                  onClick={() => setSelectedDeliveryDay(isSelected ? '' : day)}
-                                  className={`px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-all ${
-                                    isSelected
-                                      ? 'bg-sky-500 text-white border-sky-500 shadow-xs'
-                                      : 'bg-white border-slate-200 text-slate-600 hover:border-sky-200 hover:bg-sky-50/50'
-                                  }`}
-                                >
-                                  {label}
-                                </button>
-                              );
-                            })}
+                                const label = DAY_LABELS_MAP[day]?.[fr ? 'fr' : 'en'] ?? day;
+                                const isSelected = selectedDeliveryDay === day;
+                                return (
+                                  <button
+                                    type="button"
+                                    key={day}
+                                    onClick={() => setSelectedDeliveryDay(isSelected ? '' : day)}
+                                    className={`px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-all ${
+                                      isSelected
+                                        ? 'bg-sky-500 text-white border-sky-500 shadow-xs'
+                                        : 'bg-white border-slate-200 text-slate-600 hover:border-sky-200 hover:bg-sky-50/50'
+                                    }`}
+                                  >
+                                    {label}
+                                  </button>
+                                );
+                              })}
+                            </div>
                           </div>
-                        </div>
+
+                          <div>
+                            <label className="block text-xs font-medium text-slate-500 mb-1.5">
+                              {fr ? 'Créneau horaire de livraison (optionnel)' : 'Preferred delivery time slot (optional)'}
+                            </label>
+                            <div className="flex flex-wrap gap-1.5">
+                              {TIME_SLOTS.map((slot) => {
+                                const active = selectedDeliverySlot === slot.value;
+                                return (
+                                  <button
+                                    type="button"
+                                    key={slot.value}
+                                    onClick={() => setSelectedDeliverySlot(active ? '' : slot.value)}
+                                    className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-all ${
+                                      active
+                                        ? 'bg-sky-500 text-white border-sky-500 shadow-xs'
+                                        : 'bg-white border-slate-200 text-slate-600 hover:border-sky-200 hover:bg-sky-50/50'
+                                    }`}
+                                  >
+                                    <Clock className="w-3 h-3" />
+                                    {fr ? slot.fr : slot.en}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
 
                         {!sameAddressAsPickup && (
                           <>
@@ -2366,8 +2806,7 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
                         )}
                       </div>
                     )}
-                  </div>
-                )}
+                </div>
 
                 {/* Special instructions / notes */}
                 {orderArticles.length > 0 && (

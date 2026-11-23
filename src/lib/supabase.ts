@@ -4,18 +4,36 @@ const DEFAULT_SUPABASE_URL = 'https://jijjtwmobfzkwzkozjyb.supabase.co';
 const DEFAULT_SUPABASE_ANON_KEY =
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imppamp0d21vYmZ6a3d6a296anliIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MzI5MzUsImV4cCI6MjEwMzAwODkzNX0.uPb8rJXJVtEohNggAcwINsiB3VKLO8OKNNM4rX2UO7s';
 
-const envUrl = import.meta.env.VITE_SUPABASE_URL?.trim();
-const envAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim();
+function stripQuotes(value?: string): string {
+  if (!value) return '';
+  return value.trim().replace(/^['"]+|['"]+$/g, '').trim();
+}
+
+function isValidSupabaseApiKey(key: string): boolean {
+  if (!key || key === 'your-supabase-anon-key' || key.startsWith('MY_')) return false;
+  if (/^https?:\/\//i.test(key)) return false;
+  // Legacy JWT anon key (3 dot-separated base64url segments starting with eyJ)
+  if (key.startsWith('eyJ') && key.split('.').length === 3 && key.length > 40) {
+    return true;
+  }
+  // New Supabase publishable key format
+  if (key.startsWith('sb_publishable_') && key.length > 20) {
+    return true;
+  }
+  return false;
+}
+
+const envUrl = stripQuotes(import.meta.env.VITE_SUPABASE_URL);
+const envAnonKey = stripQuotes(import.meta.env.VITE_SUPABASE_ANON_KEY);
 
 export const supabaseUrl =
-  envUrl && envUrl.startsWith('http') && !envUrl.includes('your-project.supabase.co')
+  envUrl && /^https?:\/\//i.test(envUrl) && !envUrl.includes('your-project.supabase.co')
     ? envUrl.replace(/\/+$/, '')
     : DEFAULT_SUPABASE_URL;
 
-export const supabaseAnonKey =
-  envAnonKey && envAnonKey !== 'your-supabase-anon-key'
-    ? envAnonKey
-    : DEFAULT_SUPABASE_ANON_KEY;
+export const supabaseAnonKey = isValidSupabaseApiKey(envAnonKey)
+  ? envAnonKey
+  : DEFAULT_SUPABASE_ANON_KEY;
 
 /**
  * Offline-resilient fetch wrapper for Supabase:

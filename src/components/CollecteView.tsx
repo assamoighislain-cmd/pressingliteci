@@ -5,16 +5,21 @@ import { useI18n } from '@/lib/i18n';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import { notifyRealtimeMutation } from '@/lib/realtimeSync';
 import {
+  ArticleCatalog,
   DepotWithArticles,
   ModeReglementRow,
   TypeTraitement,
   buildWhatsAppUrl,
+  computeDateRetraitPrevueById,
   formatDate,
   formatPrice,
+  getCoefficientById,
   getTraitementLabelById,
+  parseTraitementFromNotes,
+  stripTraitementTagFromNotes,
 } from '@/types';
 import { LogisticsTourMap, type LogisticsMapStop } from '@/components/DeliveryMap';
-import { isValidCoordinatePair } from '@/lib/googleMaps';
+import { buildMultiStopGoogleMapsUrl, isValidCoordinatePair } from '@/lib/googleMaps';
 import {
   Truck,
   MapPin,
@@ -61,12 +66,26 @@ const DAY_LABELS: Record<string, { fr: string; en: string }> = {
   dimanche: { fr: 'Dimanche', en: 'Sunday' },
 };
 
+function extractBaseDayKey(raw: string | null | undefined): string {
+  if (!raw) return '';
+  return raw.split('·')[0].trim().toLowerCase();
+}
+
+function formatDayAndSlot(raw: string | null | undefined, fr: boolean): string {
+  if (!raw) return '';
+  const [dayPart, ...slotParts] = raw.split('·').map((s) => s.trim());
+  const dayLabel = DAY_LABELS[dayPart.toLowerCase()]?.[fr ? 'fr' : 'en'] ?? dayPart;
+  const slot = slotParts.join(' · ');
+  return slot ? `${dayLabel} · ${slot}` : dayLabel;
+}
+
 export default function CollecteView() {
   const { t, lang } = useI18n();
   const fr = lang === 'fr';
   const [depots, setDepots] = useState<DepotWithArticles[]>([]);
   const [typesTraitement, setTypesTraitement] = useState<TypeTraitement[]>([]);
   const [modesReglement, setModesReglement] = useState<ModeReglementRow[]>([]);
+  const [catalogArticles, setCatalogArticles] = useState<ArticleCatalog[]>([]);
   const [loading, setLoading] = useState(true);
   const [collectingId, setCollectingId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -78,19 +97,33 @@ export default function CollecteView() {
   // Reception & verification modal state
   const [modalDepot, setModalDepot] = useState<DepotWithArticles | null>(null);
   const [draftArticles, setDraftArticles] = useState<CollectArticleDraft[]>([]);
+  const [draftTypeTraitementId, setDraftTypeTraitementId] = useState<string | null>(null);
   const [draftNotes, setDraftNotes] = useState('');
   const [paymentMode, setPaymentMode] = useState('');
   const [paymentAmount, setPaymentAmount] = useState('');
   const [modalError, setModalError] = useState<string | null>(null);
+  const [catalogPickerId, setCatalogPickerId] = useState('');
+  const [collectedReceipt, setCollectedReceipt] = useState<{
+    numero: string;
+    clientNom: string;
+    clientPhone: string | null;
+    total: number;
+    paid: number;
+    piecesCount: number;
+    traitementLabel: string;
+    whatsappUrl: string | null;
+  } | null>(null);
 
   const loadCollectes = useCallback(async () => {
-    const [all, types, modes] = await Promise.all([
+    const [all, types, modes, catalog] = await Promise.all([
       db.getAllDepotsWithClient(),
       db.getTypesTraitement(),
       db.getModesReglement(),
+      db.getArticles(),
     ]);
     setTypesTraitement(types);
     setModesReglement(modes);
+    setCatalogArticles(catalog);
     setDepots(all.filter((d) => d.pickup_requested && !d.collected_at && d.statut !== 'RETIRE'));
     setLoading(false);
   }, []);
@@ -104,14 +137,15 @@ export default function CollecteView() {
   const availableDays = useMemo(() => {
     const set = new Set<string>();
     depots.forEach((d) => {
-      if (d.pickup_day) set.add(d.pickup_day);
+      const baseDay = extractBaseDayKey(d.pickup_day);
+      if (baseDay) set.add(baseDay);
     });
     return Array.from(set);
   }, [depots]);
 
   const filteredDepots = useMemo(() => {
     return depots.filter((d) => {
-      if (selectedDayFilter !== 'ALL' && d.pickup_day !== selectedDayFilter) return false;
+      if (selectedDayFilter !== 'ALL' && extractBaseDayKey(d.pickup_day) !== selectedDayFilter) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.trim().toLowerCase();
         const name = (d.client?.nom ?? '').toLowerCase();
@@ -141,7 +175,7 @@ export default function CollecteView() {
           phone: d.client?.telephone ?? null,
           lat: Number(d.pickup_latitude),
           lng: Number(d.pickup_longitude),
-          badge: d.pickup_day ? (DAY_LABELS[d.pickup_day]?.[fr ? 'fr' : 'en'] ?? d.pickup_day) : (fr ? 'Collecte' : 'Pickup'),
+          badge: d.pickup_day ? formatDayAndSlot(d.pickup_day, fr) : (fr ? 'Collecte' : 'Pickup'),
           pinBg: '#d97706',
           pinBorder: '#b45309',
           amountLabel: `${formatPrice(Number(d.total))} · ${d.articles?.length ?? 0} art.`,
@@ -150,13 +184,30 @@ export default function CollecteView() {
       });
   }, [filteredDepots, fr]);
 
+  const multiStopRouteUrl = useMemo(() => {
+    return buildMultiStopGoogleMapsUrl(
+      mapStops.map((s) => ({ lat: s.lat, lng: s.lng })),
+    );
+  }, [mapStops]);
+
   function openCollectModal(depot: DepotWithArticles) {
+    const parsedFromNotes = !depot.type_traitement_id ? parseTraitementFromNotes(depot.notes) : null;
+    const matchedType = !depot.type_traitement_id && parsedFromNotes
+      ? typesTraitement.find((tt) => tt.libelle.trim().toLowerCase() === parsedFromNotes.libelle.trim().toLowerCase())
+      : null;
+    const preAppliedCoef = !depot.type_traitement_id && parsedFromNotes && matchedType && parsedFromNotes.coefficient > 1
+      ? parsedFromNotes.coefficient
+      : 1;
+
     setModalDepot(depot);
+    setDraftTypeTraitementId(depot.type_traitement_id ?? matchedType?.id ?? null);
     setDraftArticles(
       (depot.articles ?? []).map((a) => ({
         id: a.id,
         designation: a.designation,
-        prix_unitaire: Number(a.prix_unitaire) || 0,
+        prix_unitaire: preAppliedCoef > 1
+          ? Math.round((Number(a.prix_unitaire) || 0) / preAppliedCoef)
+          : (Number(a.prix_unitaire) || 0),
         quantite: Math.max(1, Number(a.quantite) || 1),
         nb_pieces: Math.max(1, Number(a.nb_pieces) || 1),
         couleur: a.couleur ?? '',
@@ -164,7 +215,7 @@ export default function CollecteView() {
         griffe: a.griffe ?? '',
       })),
     );
-    setDraftNotes(depot.notes ?? '');
+    setDraftNotes(stripTraitementTagFromNotes(depot.notes));
     setPaymentMode('');
     setPaymentAmount('');
     setModalError(null);
@@ -173,6 +224,7 @@ export default function CollecteView() {
   function closeCollectModal() {
     setModalDepot(null);
     setDraftArticles([]);
+    setDraftTypeTraitementId(null);
     setDraftNotes('');
     setPaymentMode('');
     setPaymentAmount('');
@@ -194,13 +246,39 @@ export default function CollecteView() {
     ]);
   }
 
+  function addCatalogArticleToDraft(articleId: string) {
+    const cat = catalogArticles.find((a) => a.id === articleId);
+    if (!cat) return;
+    setDraftArticles((prev) => {
+      // Remove placeholder "Lot de linge à inventorier" row automatically once real articles are added
+      const cleaned = prev.filter(
+        (a) => !(a.prix_unitaire === 0 && a.designation.toLowerCase().includes('inventorier')),
+      );
+      return [
+        ...cleaned,
+        {
+          designation: cat.designation,
+          prix_unitaire: Number(cat.prix_unitaire) || 0,
+          quantite: 1,
+          nb_pieces: Math.max(1, Number(cat.nb_pieces) || 1),
+          couleur: '',
+          signe_particulier: '',
+          griffe: '',
+        },
+      ];
+    });
+    setCatalogPickerId('');
+  }
+
   function removeDraftArticle(idx: number) {
     setDraftArticles((prev) => prev.filter((_, i) => i !== idx));
   }
 
   function computeModalTotals() {
     if (!modalDepot) return { articlesTotal: 0, fees: 0, grandTotal: 0 };
-    const coef = Number(modalDepot.coefficient) || 1;
+    const coef = draftTypeTraitementId
+      ? getCoefficientById(draftTypeTraitementId, typesTraitement)
+      : (Number(modalDepot.coefficient) || 1);
     const articlesTotal = draftArticles.reduce((sum, a) => sum + a.prix_unitaire * coef * Math.max(1, a.quantite), 0);
     const fees = (Number(modalDepot.frais_collecte) || 0) + (Number(modalDepot.frais_livraison) || 0);
     return { articlesTotal, fees, grandTotal: articlesTotal + fees };
@@ -233,7 +311,10 @@ export default function CollecteView() {
         assignedNumero = numeroResult.numero;
       }
 
-      const coef = Number(modalDepot.coefficient) || 1;
+      const selectedTrait = draftTypeTraitementId
+        ? typesTraitement.find((tt) => tt.id === draftTypeTraitementId) ?? null
+        : null;
+      const coef = selectedTrait ? Number(selectedTrait.coefficient) : (Number(modalDepot.coefficient) || 1);
       const { grandTotal } = computeModalTotals();
       const paid = parseFloat(paymentAmount) || 0;
 
@@ -244,6 +325,12 @@ export default function CollecteView() {
         total: grandTotal,
         notes: draftNotes.trim() || null,
       };
+      if (selectedTrait) {
+        updatePayload.type_traitement_id = selectedTrait.id;
+        updatePayload.traitement = selectedTrait.libelle;
+        updatePayload.coefficient = coef;
+        updatePayload.date_retrait_prevue = computeDateRetraitPrevueById(now, selectedTrait.id, typesTraitement).toISOString();
+      }
       if (modalDepot.statut === 'COMMANDE') {
         updatePayload.date_depot = now.toISOString();
       }
@@ -287,6 +374,34 @@ export default function CollecteView() {
         await db.insertAvance(modalDepot.id, Math.min(paid, grandTotal), paymentMode);
       }
 
+      const piecesCount = validArticles.reduce(
+        (sum, a) => sum + Math.max(1, a.quantite) * Math.max(1, a.nb_pieces),
+        0,
+      );
+      const traitementLabel = selectedTrait?.libelle
+        ?? getTraitementLabelById(modalDepot.type_traitement_id, typesTraitement, modalDepot.traitement, modalDepot.notes);
+      const articlesLines = validArticles
+        .map((a) => `• ${a.designation.trim()} (×${Math.max(1, a.quantite)}) — ${formatPrice(a.prix_unitaire * coef * Math.max(1, a.quantite))}`)
+        .join('\n');
+      const paidFinal = paymentMode && paid > 0 ? Math.min(paid, grandTotal) : 0;
+      const resteFinal = Math.max(0, grandTotal - paidFinal);
+      const receiptMsg = fr
+        ? `Bonjour ${modalDepot.client?.nom ?? ''},\nVotre linge a bien été collecté !\n\nTicket : ${assignedNumero}\nTraitement : ${traitementLabel} (×${coef})\nPièces vérifiées : ${piecesCount}\n${articlesLines}\n\nTotal : ${formatPrice(grandTotal)}${paidFinal > 0 ? `\nPayé à la collecte : ${formatPrice(paidFinal)}` : ''}\nReste à régler : ${formatPrice(resteFinal)}\n\nMerci pour votre confiance !`
+        : `Hello ${modalDepot.client?.nom ?? ''},\nYour laundry has been collected!\n\nTicket: ${assignedNumero}\nTreatment: ${traitementLabel} (×${coef})\nVerified pieces: ${piecesCount}\n${articlesLines}\n\nTotal: ${formatPrice(grandTotal)}${paidFinal > 0 ? `\nPaid at pickup: ${formatPrice(paidFinal)}` : ''}\nBalance due: ${formatPrice(resteFinal)}\n\nThank you!`;
+
+      setCollectedReceipt({
+        numero: assignedNumero,
+        clientNom: modalDepot.client?.nom ?? 'Client',
+        clientPhone: modalDepot.client?.telephone ?? null,
+        total: grandTotal,
+        paid: paidFinal,
+        piecesCount,
+        traitementLabel,
+        whatsappUrl: modalDepot.client?.telephone
+          ? buildWhatsAppUrl(modalDepot.client.telephone, receiptMsg)
+          : null,
+      });
+
       notifyRealtimeMutation('depots');
       setDepots((prev) => prev.filter((d) => d.id !== modalDepot.id));
       closeCollectModal();
@@ -323,6 +438,44 @@ export default function CollecteView() {
         </p>
       </div>
 
+      {/* Post-collection confirmation & WhatsApp receipt */}
+      {collectedReceipt && (
+        <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="space-y-0.5">
+            <p className="text-sm font-semibold text-emerald-900 flex items-center gap-1.5">
+              <Check className="w-4 h-4 text-emerald-600" />
+              {fr
+                ? `Collecte confirmée — Ticket ${collectedReceipt.numero}`
+                : `Pickup confirmed — Ticket ${collectedReceipt.numero}`}
+            </p>
+            <p className="text-xs text-emerald-800">
+              {collectedReceipt.clientNom} · {collectedReceipt.piecesCount} {fr ? 'pièce(s)' : 'piece(s)'} · {collectedReceipt.traitementLabel} · <strong>{formatPrice(collectedReceipt.total)}</strong>
+            </p>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {collectedReceipt.whatsappUrl && (
+              <a
+                href={collectedReceipt.whatsappUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 transition-colors"
+              >
+                <MessageCircle className="w-3.5 h-3.5" />
+                {fr ? 'Envoyer reçu WhatsApp' : 'Send WhatsApp receipt'}
+              </a>
+            )}
+            <button
+              type="button"
+              onClick={() => setCollectedReceipt(null)}
+              className="p-1.5 rounded-lg text-emerald-700 hover:bg-emerald-100"
+              aria-label={fr ? 'Fermer' : 'Close'}
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Filters & Map toggle */}
       {depots.length > 0 && (
         <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-3.5 space-y-3">
@@ -353,6 +506,17 @@ export default function CollecteView() {
                   : (fr ? `Carte tournée (${mapStops.length})` : `Route map (${mapStops.length})`)}
               </button>
             )}
+            {multiStopRouteUrl && mapStops.length >= 2 && (
+              <a
+                href={multiStopRouteUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-700 transition-colors"
+              >
+                <Navigation className="w-3.5 h-3.5" />
+                {fr ? `Tournée Maps (${Math.min(mapStops.length, 10)})` : `Maps Route (${Math.min(mapStops.length, 10)})`}
+              </a>
+            )}
           </div>
 
           {availableDays.length > 0 && (
@@ -369,7 +533,7 @@ export default function CollecteView() {
                 {fr ? 'Tous les jours' : 'All days'} ({depots.length})
               </button>
               {availableDays.map((day) => {
-                const count = depots.filter((d) => d.pickup_day === day).length;
+                const count = depots.filter((d) => extractBaseDayKey(d.pickup_day) === day).length;
                 return (
                   <button
                     type="button"
@@ -455,7 +619,11 @@ export default function CollecteView() {
                       <p className="text-xs text-slate-400 mt-0.5">
                         {formatDate(depot.date_depot)}
                         {' · '}
-                        {getTraitementLabelById(depot.type_traitement_id, typesTraitement, depot.traitement)} (×{Number(depot.coefficient)})
+                        {getTraitementLabelById(depot.type_traitement_id, typesTraitement, depot.traitement, depot.notes)} (×{
+                          depot.type_traitement_id
+                            ? Number(depot.coefficient)
+                            : (parseTraitementFromNotes(depot.notes)?.coefficient ?? Number(depot.coefficient))
+                        })
                       </p>
                       <div className="flex flex-wrap items-center gap-3 mt-1">
                         {depot.client?.telephone && (
@@ -494,7 +662,7 @@ export default function CollecteView() {
                     <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-100">
                       <CalendarClock className="w-4 h-4 text-amber-600 flex-shrink-0" />
                       <span className="text-sm font-medium text-amber-800">
-                        {DAY_LABELS[depot.pickup_day]?.[fr ? 'fr' : 'en'] ?? depot.pickup_day}
+                        {formatDayAndSlot(depot.pickup_day, fr)}
                       </span>
                     </div>
                   )}
@@ -504,10 +672,10 @@ export default function CollecteView() {
                       <p className="text-sm text-sky-800">{depot.pickup_address}</p>
                     </div>
                   )}
-                  {depot.notes && (
+                  {stripTraitementTagFromNotes(depot.notes) && (
                     <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-slate-50 border border-slate-100">
                       <FileText className="w-4 h-4 text-slate-400 flex-shrink-0 mt-0.5" />
-                      <p className="text-xs text-slate-600 italic">{depot.notes}</p>
+                      <p className="text-xs text-slate-600 italic">{stripTraitementTagFromNotes(depot.notes)}</p>
                     </div>
                   )}
                   {depot.pickup_latitude !== null && depot.pickup_longitude !== null && (
@@ -583,7 +751,11 @@ export default function CollecteView() {
                   {fr ? 'Réception & vérification à la collecte' : 'Pickup intake & verification'}
                 </h3>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  {modalDepot.client?.nom} · {getTraitementLabelById(modalDepot.type_traitement_id, typesTraitement, modalDepot.traitement)} (×{Number(modalDepot.coefficient)})
+                  {modalDepot.client?.nom} · {getTraitementLabelById(draftTypeTraitementId ?? modalDepot.type_traitement_id, typesTraitement, modalDepot.traitement, modalDepot.notes)} (×{
+                    draftTypeTraitementId
+                      ? getCoefficientById(draftTypeTraitementId, typesTraitement)
+                      : (parseTraitementFromNotes(modalDepot.notes)?.coefficient ?? Number(modalDepot.coefficient))
+                  })
                 </p>
               </div>
               <button type="button" onClick={closeCollectModal} className="text-slate-400 hover:text-slate-600">
@@ -600,6 +772,26 @@ export default function CollecteView() {
                 </div>
               )}
 
+              {typesTraitement.length > 0 && (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wide mb-1.5">
+                    {fr ? 'Type de traitement' : 'Treatment type'}
+                  </label>
+                  <select
+                    value={draftTypeTraitementId ?? ''}
+                    onChange={(e) => setDraftTypeTraitementId(e.target.value || null)}
+                    className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  >
+                    <option value="">{fr ? 'Conserver le traitement actuel' : 'Keep current treatment'}</option>
+                    {typesTraitement.map((tt) => (
+                      <option key={tt.id} value={tt.id}>
+                        {tt.libelle} (×{tt.coefficient} · {tt.nb_jours}{fr ? 'j' : 'd'})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               {/* Verified items */}
               <div>
                 <div className="flex items-center justify-between mb-2">
@@ -612,11 +804,37 @@ export default function CollecteView() {
                     className="inline-flex items-center gap-1 text-xs font-medium text-sky-600 hover:text-sky-700"
                   >
                     <Plus className="w-3.5 h-3.5" />
-                    {fr ? 'Ajouter un article' : 'Add item'}
+                    {fr ? 'Ligne libre' : 'Custom row'}
                   </button>
                 </div>
+                {catalogArticles.length > 0 && (
+                  <div className="mb-2.5 flex items-center gap-2">
+                    <select
+                      value={catalogPickerId}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setCatalogPickerId(val);
+                        if (val) addCatalogArticleToDraft(val);
+                      }}
+                      className="flex-1 px-2.5 py-2 rounded-lg border border-sky-200 bg-sky-50/40 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    >
+                      <option value="">
+                        {fr ? '+ Ajouter rapidement depuis le catalogue…' : '+ Quick-add from catalog…'}
+                      </option>
+                      {catalogArticles.map((cat) => (
+                        <option key={cat.id} value={cat.id}>
+                          {cat.designation} — {formatPrice(Number(cat.prix_unitaire))}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <div className="space-y-2">
-                  {draftArticles.map((art, idx) => (
+                  {draftArticles.map((art, idx) => {
+                    const liveCoef = draftTypeTraitementId
+                      ? getCoefficientById(draftTypeTraitementId, typesTraitement)
+                      : (Number(modalDepot.coefficient) || 1);
+                    return (
                     <div key={idx} className="p-3 rounded-lg border border-slate-200/80 space-y-2">
                       <div className="flex items-center gap-2">
                         <input
@@ -667,11 +885,12 @@ export default function CollecteView() {
                           />
                         </div>
                         <span className="ml-auto text-xs font-semibold text-slate-700">
-                          {formatPrice(art.prix_unitaire * (Number(modalDepot.coefficient) || 1) * art.quantite)}
+                          {formatPrice(art.prix_unitaire * liveCoef * art.quantite)}
                         </span>
                       </div>
                     </div>
-                  ))}
+                  );
+                  })}
                 </div>
               </div>
 

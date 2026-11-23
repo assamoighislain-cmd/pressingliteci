@@ -292,16 +292,55 @@ export function getTraitementLabel(
   return types.find((t) => t.libelle === code)?.libelle ?? code;
 }
 
+const TRAITEMENT_TAG_RE = /\[Traitement:\s*([^(\]]+?)(?:\s*\(\s*[×x]\s*([\d.]+)\s*\))?\s*\]/i;
+
+export function parseTraitementFromNotes(
+  notes?: string | null,
+): { libelle: string; coefficient: number } | null {
+  if (!notes) return null;
+  const match = notes.match(TRAITEMENT_TAG_RE);
+  if (!match) return null;
+  const libelle = match[1].trim();
+  const coef = match[2] ? parseFloat(match[2]) : 1;
+  if (!libelle) return null;
+  return {
+    libelle,
+    coefficient: Number.isFinite(coef) && coef > 0 ? coef : 1,
+  };
+}
+
+export function stripTraitementTagFromNotes(notes?: string | null): string {
+  if (!notes) return '';
+  return notes
+    .replace(TRAITEMENT_TAG_RE, '')
+    .replace(/^\s*[-·|\n]+/, '')
+    .trim();
+}
+
+export function formatNotesWithTraitementTag(
+  notes: string,
+  libelle: string,
+  coefficient: number,
+): string {
+  const cleanNotes = stripTraitementTagFromNotes(notes);
+  const coefPart = coefficient !== 1 ? ` (×${coefficient})` : ' (×1)';
+  const tag = `[Traitement: ${libelle.trim()}${coefPart}]`;
+  return cleanNotes ? `${tag}\n${cleanNotes}` : tag;
+}
+
 export function getTraitementLabelById(
   id: string | null,
   types: TypeTraitement[],
   fallback?: string,
+  notes?: string | null,
 ): string {
   if (id) {
     const found = types.find((t) => t.id === id)?.libelle;
     if (found) return found;
   }
   if (fallback && fallback.trim()) return fallback;
+  const fromNotes = parseTraitementFromNotes(notes);
+  if (fromNotes) return fromNotes.libelle;
   return '—';
 }
 

@@ -48,5 +48,78 @@ export function formatCoordsDisplay(lat: number, lng: number): string {
 }
 
 export function buildGoogleMapsDirectionsUrl(lat: number, lng: number): string {
-  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${lat},${lng}`)}`;
+  return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${lat},${lng}`)}`;
 }
+
+function haversineDistanceKm(a: GeoPoint, b: GeoPoint): number {
+  const R = 6371;
+  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
+  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((a.lat * Math.PI) / 180) *
+      Math.cos((b.lat * Math.PI) / 180) *
+      Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.asin(Math.sqrt(h));
+}
+
+export function orderStopsNearestNeighbor<T extends GeoPoint>(
+  stops: T[],
+  origin?: GeoPoint | null,
+): T[] {
+  if (stops.length <= 1) return [...stops];
+  const remaining = [...stops];
+  const ordered: T[] = [];
+  let current: GeoPoint = origin ?? remaining[0];
+
+  while (remaining.length > 0) {
+    let bestIdx = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < remaining.length; i++) {
+      const dist = haversineDistanceKm(current, remaining[i]);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestIdx = i;
+      }
+    }
+    const [next] = remaining.splice(bestIdx, 1);
+    ordered.push(next);
+    current = next;
+  }
+  return ordered;
+}
+
+/**
+ * Builds a single Google Maps multi-stop driving route URL for up to 10 stops
+ * (Google Maps web limit: 1 destination + up to 9 waypoints).
+ */
+export function buildMultiStopGoogleMapsUrl(
+  stops: GeoPoint[],
+  origin?: GeoPoint | null,
+): string | null {
+  const valid = stops.filter((s) => isValidCoordinatePair(s.lat, s.lng));
+  if (valid.length === 0) return null;
+
+  const ordered = orderStopsNearestNeighbor(valid, origin).slice(0, 10);
+  const destination = ordered[ordered.length - 1];
+  const waypoints = ordered.slice(0, -1);
+
+  const params = new URLSearchParams({
+    api: '1',
+    travelmode: 'driving',
+    destination: `${destination.lat},${destination.lng}`,
+  });
+
+  if (origin && isValidCoordinatePair(origin.lat, origin.lng)) {
+    params.set('origin', `${origin.lat},${origin.lng}`);
+  }
+  if (waypoints.length > 0) {
+    params.set(
+      'waypoints',
+      waypoints.map((w) => `${w.lat},${w.lng}`).join('|'),
+    );
+  }
+
+  return `https://www.google.com/maps/dir/?${params.toString()}`;
+}
+

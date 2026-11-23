@@ -1,0 +1,76 @@
+name: Deploy Supabase (Migrations & Edge Functions)
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'supabase/migrations/**'
+      - 'supabase/functions/**'
+      - 'supabase/config.toml'
+      - '.github/workflows/supabase-deploy.yml'
+  workflow_dispatch:
+    inputs:
+      deploy_functions:
+        description: 'Déployer aussi les Edge Functions (send-push-notification)'
+        required: false
+        default: true
+        type: boolean
+
+concurrency:
+  group: supabase-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Push SQL Migrations & Edge Functions
+    runs-on: ubuntu-latest
+
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Vérifier les secrets GitHub requis
+        run: |
+          missing=0
+          if [ -z "$SUPABASE_ACCESS_TOKEN" ]; then
+            echo "::error::Secret manquant : SUPABASE_ACCESS_TOKEN (créez-le sur https://supabase.com/dashboard/account/tokens)"
+            missing=1
+          fi
+          if [ -z "$SUPABASE_PROJECT_ID" ]; then
+            echo "::error::Secret manquant : SUPABASE_PROJECT_ID (Project Settings → General → Reference ID)"
+            missing=1
+          fi
+          if [ -z "$SUPABASE_DB_PASSWORD" ]; then
+            echo "::error::Secret manquant : SUPABASE_DB_PASSWORD (mot de passe de la base PostgreSQL Supabase)"
+            missing=1
+          fi
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Installer Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Lier le projet Supabase
+        run: |
+          supabase link --project-ref "$SUPABASE_PROJECT_ID" --password "$SUPABASE_DB_PASSWORD"
+
+      - name: Appliquer les migrations SQL (supabase db push)
+        run: |
+          supabase db push --include-all --password "$SUPABASE_DB_PASSWORD"
+
+      - name: Déployer les Edge Functions
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.deploy_functions != false }}
+        run: |
+          if [ -d "supabase/functions/send-push-notification" ]; then
+            supabase functions deploy send-push-notification --no-verify-jwt --project-ref "$SUPABASE_PROJECT_ID"
+          fi

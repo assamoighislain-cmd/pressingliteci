@@ -4,7 +4,7 @@ import { db } from '@/lib/db';
 import { useI18n } from '@/lib/i18n';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import { notifyRealtimeMutation } from '@/lib/realtimeSync';
-import { DepotWithArticles, DepotArticle, ModeReglementRow, formatPrice, formatDate, getTraitementLabelById, TypeTraitement, getCoefficientById, computeDateRetraitPrevueById } from '@/types';
+import { DepotWithArticles, DepotArticle, ModeReglementRow, formatPrice, formatDate, getTraitementLabelById, TypeTraitement, getCoefficientById, computeDateRetraitPrevueById, parseTraitementFromNotes, stripTraitementTagFromNotes } from '@/types';
 import { ShoppingBag, MapPin, Truck, CalendarClock, Phone, Package, ArrowRightLeft, Loader2, Pencil, X, Plus, Trash2, Save, Wallet, Banknote, Check, Clock, CheckCircle2, Home, TrendingUp } from 'lucide-react';
 
 interface ArticleDraft {
@@ -119,12 +119,20 @@ export default function CommandeView() {
   }
 
   function openEditModal(depot: DepotWithArticles) {
+    const parsedFromNotes = !depot.type_traitement_id ? parseTraitementFromNotes(depot.notes) : null;
+    const matchedType = !depot.type_traitement_id && parsedFromNotes
+      ? typesTraitement.find((tt) => tt.libelle.trim().toLowerCase() === parsedFromNotes.libelle.trim().toLowerCase())
+      : null;
+    const preAppliedCoef = !depot.type_traitement_id && parsedFromNotes && matchedType && parsedFromNotes.coefficient > 1
+      ? parsedFromNotes.coefficient
+      : 1;
+
     setEditingDepot(depot);
     setEditArticles(
       depot.articles.map((a: DepotArticle) => ({
         id: a.id,
         designation: a.designation,
-        prix_unitaire: Number(a.prix_unitaire),
+        prix_unitaire: preAppliedCoef > 1 ? Math.round(Number(a.prix_unitaire) / preAppliedCoef) : Number(a.prix_unitaire),
         quantite: a.quantite,
         nb_pieces: a.nb_pieces,
         couleur: a.couleur ?? '',
@@ -132,14 +140,14 @@ export default function CommandeView() {
         griffe: a.griffe ?? '',
       })),
     );
-    setEditNotes(depot.notes ?? '');
+    setEditNotes(stripTraitementTagFromNotes(depot.notes));
     setEditPickupRequested(depot.pickup_requested ?? false);
     setEditPickupAddress(depot.pickup_address ?? '');
     setEditPickupDay(depot.pickup_day ?? '');
     setEditDeliveryRequested(depot.delivery_requested ?? false);
     setEditDeliveryAddress(depot.delivery_address ?? '');
     setEditDeliveryDay(depot.delivery_day ?? '');
-    setEditTypeTraitementId(depot.type_traitement_id);
+    setEditTypeTraitementId(depot.type_traitement_id ?? matchedType?.id ?? null);
   }
 
   function closeEditModal() {
@@ -357,7 +365,11 @@ export default function CommandeView() {
                   <p className="text-xs text-slate-400 mt-0.5">
                     {formatDate(depot.date_depot)}
                     {' · '}
-                    {getTraitementLabelById(depot.type_traitement_id, typesTraitement, depot.traitement)} (×{Number(depot.coefficient)})
+                    {getTraitementLabelById(depot.type_traitement_id, typesTraitement, depot.traitement, depot.notes)} (×{
+                      depot.type_traitement_id
+                        ? Number(depot.coefficient)
+                        : (parseTraitementFromNotes(depot.notes)?.coefficient ?? Number(depot.coefficient))
+                    })
                   </p>
                   {depot.client?.telephone && (
                     <p className="text-xs text-slate-400 mt-0.5 flex items-center gap-1">

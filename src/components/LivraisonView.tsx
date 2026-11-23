@@ -12,9 +12,11 @@ import {
   formatDate,
   formatPrice,
   getTraitementLabelById,
+  parseTraitementFromNotes,
+  stripTraitementTagFromNotes,
 } from '@/types';
 import { LogisticsTourMap, type LogisticsMapStop } from '@/components/DeliveryMap';
-import { isValidCoordinatePair } from '@/lib/googleMaps';
+import { buildMultiStopGoogleMapsUrl, isValidCoordinatePair } from '@/lib/googleMaps';
 import {
   Truck,
   MapPin,
@@ -35,6 +37,7 @@ import {
   X,
   FileText,
   Sparkles,
+  Search,
 } from 'lucide-react';
 
 const DAY_LABELS: Record<string, { fr: string; en: string }> = {
@@ -49,6 +52,19 @@ const DAY_LABELS: Record<string, { fr: string; en: string }> = {
 
 type DeliveryFilter = 'ALL' | 'READY' | 'PROCESSING' | 'PENDING';
 
+function extractDeliveryBaseDay(rawDay: string | null | undefined): string {
+  if (!rawDay) return '';
+  return rawDay.split('·')[0].trim().toLowerCase();
+}
+
+function formatDeliveryDayAndSlot(rawDay: string | null | undefined, fr: boolean): string {
+  if (!rawDay) return '';
+  const parts = rawDay.split('·').map((p) => p.trim()).filter(Boolean);
+  const baseKey = parts[0]?.toLowerCase() ?? '';
+  const dayLabel = DAY_LABELS[baseKey]?.[fr ? 'fr' : 'en'] ?? parts[0] ?? rawDay;
+  return parts.length > 1 ? `${dayLabel} · ${parts.slice(1).join(' · ')}` : dayLabel;
+}
+
 export default function LivraisonView() {
   const { lang } = useI18n();
   const fr = lang === 'fr';
@@ -61,6 +77,8 @@ export default function LivraisonView() {
   const [markingReadyId, setMarkingReadyId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<DeliveryFilter>('ALL');
+  const [selectedDayFilter, setSelectedDayFilter] = useState<string>('ALL');
+  const [searchQuery, setSearchQuery] = useState('');
   const [showMap, setShowMap] = useState(false);
 
   // Delivery checkout & confirmation modal
@@ -68,6 +86,16 @@ export default function LivraisonView() {
   const [paymentMode, setPaymentMode] = useState('');
   const [paymentAmount, setPaymentAmount] = useState('');
   const [modalError, setModalError] = useState<string | null>(null);
+
+  // Post-delivery WhatsApp receipt banner
+  const [deliveredReceipt, setDeliveredReceipt] = useState<{
+    numero: string;
+    clientNom: string;
+    total: number;
+    collectedNow: number;
+    remainingAfter: number;
+    whatsappUrl: string | null;
+  } | null>(null);
 
   const loadLivraisons = useCallback(async () => {
     const [all, types, allAvances, modes] = await Promise.all([
@@ -122,14 +150,32 @@ export default function LivraisonView() {
     return { all: depots.length, ready, processing, pending };
   }, [depots]);
 
+  const availableDays = useMemo(() => {
+    const set = new Set<string>();
+    for (const d of depots) {
+      const base = extractDeliveryBaseDay(d.delivery_day);
+      if (base) set.add(base);
+    }
+    return Array.from(set);
+  }, [depots]);
+
   const filteredDepots = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
     return depots.filter((d) => {
-      if (filter === 'READY') return d.statut === 'EN_COURS' && Boolean(d.ready_for_delivery);
-      if (filter === 'PROCESSING') return d.statut === 'EN_COURS' && !d.ready_for_delivery;
-      if (filter === 'PENDING') return d.statut === 'COMMANDE';
+      if (filter === 'READY' && !(d.statut === 'EN_COURS' && Boolean(d.ready_for_delivery))) return false;
+      if (filter === 'PROCESSING' && !(d.statut === 'EN_COURS' && !d.ready_for_delivery)) return false;
+      if (filter === 'PENDING' && d.statut !== 'COMMANDE') return false;
+      if (selectedDayFilter !== 'ALL' && extractDeliveryBaseDay(d.delivery_day) !== selectedDayFilter) return false;
+      if (q) {
+        const name = (d.client?.nom ?? '').toLowerCase();
+        const phone = (d.client?.telephone ?? '').toLowerCase();
+        const addr = (d.delivery_address ?? '').toLowerCase();
+        const num = (d.numero ?? '').toLowerCase();
+        if (!name.includes(q) && !phone.includes(q) && !addr.includes(q) && !num.includes(q)) return false;
+      }
       return true;
     });
-  }, [depots, filter]);
+  }, [depots, filter, selectedDayFilter, searchQuery]);
 
   const mapStops = useMemo<LogisticsMapStop[]>(() => {
     return filteredDepots
@@ -161,6 +207,16 @@ export default function LivraisonView() {
         };
       });
   }, [filteredDepots, computeBalance, fr]);
+
+  const multiStopRouteUrl = useMemo(() => {
+    const readyCoords = filteredDepots
+      .filter((d) => d.statut === 'EN_COURS' && d.ready_for_delivery && isValidCoordinatePair(d.delivery_latitude, d.delivery_longitude))
+      .map((d) => ({ lat: Number(d.delivery_latitude), lng: Number(d.delivery_longitude) }));
+    const targetStops = readyCoords.length > 0
+      ? readyCoords
+      : mapStops.map((s) => ({ lat: s.lat, lng: s.lng }));
+    return buildMultiStopGoogleMapsUrl(targetStops);
+  }, [filteredDepots, mapStops]);
 
   async function handleMarkReady(depotId: string) {
     setMarkingReadyId(depotId);
@@ -229,6 +285,22 @@ export default function LivraisonView() {
       const updateError = await db.updateDepot(modalDepot.id, updatePayload);
       if (updateError) throw new Error(updateError);
 
+      const remainingAfter = Math.max(0, total - totalPaidAfter);
+      const waReceiptMsg = fr
+        ? `Bonjour ${modalDepot.client?.nom ?? ''},\nVotre commande ${modalDepot.numero ?? ''} vient d'être livrée à domicile !\n\nTotal : ${formatPrice(total)}${collectedNow > 0 ? `\nEncaissé à la livraison (${paymentMode}) : ${formatPrice(collectedNow)}` : ''}\nStatut règlement : ${remainingAfter <= 0 ? 'Soldé' : `Reste ${formatPrice(remainingAfter)}`}\n\nMerci pour votre confiance !`
+        : `Hello ${modalDepot.client?.nom ?? ''},\nYour order ${modalDepot.numero ?? ''} has been delivered!\n\nTotal: ${formatPrice(total)}${collectedNow > 0 ? `\nCollected on delivery (${paymentMode}): ${formatPrice(collectedNow)}` : ''}\nPayment status: ${remainingAfter <= 0 ? 'Paid in full' : `Balance ${formatPrice(remainingAfter)}`}\n\nThank you!`;
+
+      setDeliveredReceipt({
+        numero: modalDepot.numero ?? (fr ? 'Commande' : 'Order'),
+        clientNom: modalDepot.client?.nom ?? 'Client',
+        total,
+        collectedNow,
+        remainingAfter,
+        whatsappUrl: modalDepot.client?.telephone
+          ? buildWhatsAppUrl(modalDepot.client.telephone, waReceiptMsg)
+          : null,
+      });
+
       notifyRealtimeMutation('depots');
       setDepots((prev) => prev.filter((d) => d.id !== modalDepot.id));
       closeDeliverModal();
@@ -265,46 +337,145 @@ export default function LivraisonView() {
         </p>
       </div>
 
-      {/* Filters & Tour map button */}
-      {depots.length > 0 && (
-        <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-3.5 flex flex-wrap items-center justify-between gap-2.5">
-          <div className="flex flex-wrap gap-1.5">
-            {([
-              { key: 'ALL', label: fr ? 'Toutes' : 'All', count: counts.all },
-              { key: 'READY', label: fr ? 'Prêtes à livrer' : 'Ready', count: counts.ready },
-              { key: 'PROCESSING', label: fr ? 'En traitement' : 'Processing', count: counts.processing },
-              { key: 'PENDING', label: fr ? 'En attente' : 'Pending', count: counts.pending },
-            ] as const).map((tab) => (
-              <button
-                type="button"
-                key={tab.key}
-                onClick={() => setFilter(tab.key)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                  filter === tab.key
-                    ? 'bg-sky-500 text-white shadow-xs'
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                }`}
-              >
-                {tab.label} ({tab.count})
-              </button>
-            ))}
+      {/* Post-delivery confirmation & WhatsApp receipt */}
+      {deliveredReceipt && (
+        <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="space-y-0.5">
+            <p className="text-sm font-semibold text-emerald-900 flex items-center gap-1.5">
+              <Check className="w-4 h-4 text-emerald-600" />
+              {fr
+                ? `Livraison confirmée — ${deliveredReceipt.numero}`
+                : `Delivery confirmed — ${deliveredReceipt.numero}`}
+            </p>
+            <p className="text-xs text-emerald-800">
+              {deliveredReceipt.clientNom} · {formatPrice(deliveredReceipt.total)}
+              {deliveredReceipt.collectedNow > 0 && (
+                <> · {fr ? 'Encaissé :' : 'Collected:'} <strong>{formatPrice(deliveredReceipt.collectedNow)}</strong></>
+              )}
+              {deliveredReceipt.remainingAfter <= 0 && (
+                <> · <span className="font-semibold text-emerald-700">{fr ? 'Soldé' : 'Paid'}</span></>
+              )}
+            </p>
           </div>
-          {mapStops.length > 0 && (
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {deliveredReceipt.whatsappUrl && (
+              <a
+                href={deliveredReceipt.whatsappUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 transition-colors"
+              >
+                <MessageCircle className="w-3.5 h-3.5" />
+                {fr ? 'Envoyer reçu WhatsApp' : 'Send WhatsApp receipt'}
+              </a>
+            )}
             <button
               type="button"
-              onClick={() => setShowMap((v) => !v)}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors ${
-                showMap
-                  ? 'bg-sky-500 text-white border-sky-500'
-                  : 'bg-sky-50 text-sky-700 border-sky-200 hover:bg-sky-100'
-              }`}
+              onClick={() => setDeliveredReceipt(null)}
+              className="p-1.5 rounded-lg text-emerald-700 hover:bg-emerald-100"
+              aria-label={fr ? 'Fermer' : 'Close'}
             >
-              <MapIcon className="w-3.5 h-3.5" />
-              {showMap
-                ? (fr ? 'Masquer la carte' : 'Hide map')
-                : (fr ? `Carte livraison (${mapStops.length})` : `Delivery map (${mapStops.length})`)}
+              <X className="w-4 h-4" />
             </button>
-          )}
+          </div>
+        </div>
+      )}
+
+      {/* Filters, search & Tour map buttons */}
+      {depots.length > 0 && (
+        <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-3.5 space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative flex-1 min-w-[200px]">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder={fr ? 'Rechercher client, n° dépôt, adresse…' : 'Search client, ticket, address…'}
+                className="w-full pl-9 pr-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
+              />
+            </div>
+            {mapStops.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowMap((v) => !v)}
+                className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border text-xs font-medium transition-colors ${
+                  showMap
+                    ? 'bg-sky-500 text-white border-sky-500'
+                    : 'bg-sky-50 text-sky-700 border-sky-200 hover:bg-sky-100'
+                }`}
+              >
+                <MapIcon className="w-3.5 h-3.5" />
+                {showMap
+                  ? (fr ? 'Masquer la carte' : 'Hide map')
+                  : (fr ? `Carte livraison (${mapStops.length})` : `Delivery map (${mapStops.length})`)}
+              </button>
+            )}
+            {multiStopRouteUrl && mapStops.length >= 2 && (
+              <a
+                href={multiStopRouteUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-700 transition-colors"
+              >
+                <Navigation className="w-3.5 h-3.5" />
+                {fr ? `Tournée Maps (${Math.min(mapStops.length, 10)})` : `Maps Route (${Math.min(mapStops.length, 10)})`}
+              </a>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap gap-1.5">
+              {([
+                { key: 'ALL', label: fr ? 'Toutes' : 'All', count: counts.all },
+                { key: 'READY', label: fr ? 'Prêtes à livrer' : 'Ready', count: counts.ready },
+                { key: 'PROCESSING', label: fr ? 'En traitement' : 'Processing', count: counts.processing },
+                { key: 'PENDING', label: fr ? 'En attente' : 'Pending', count: counts.pending },
+              ] as const).map((tab) => (
+                <button
+                  type="button"
+                  key={tab.key}
+                  onClick={() => setFilter(tab.key)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                    filter === tab.key
+                      ? 'bg-sky-500 text-white shadow-xs'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  {tab.label} ({tab.count})
+                </button>
+              ))}
+            </div>
+            {availableDays.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                <button
+                  type="button"
+                  onClick={() => setSelectedDayFilter('ALL')}
+                  className={`px-2 py-1 rounded-md text-[11px] font-medium transition-colors ${
+                    selectedDayFilter === 'ALL'
+                      ? 'bg-slate-900 text-white'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  {fr ? 'Tous les jours' : 'All days'}
+                </button>
+                {availableDays.map((day) => (
+                  <button
+                    type="button"
+                    key={day}
+                    onClick={() => setSelectedDayFilter(day)}
+                    className={`px-2 py-1 rounded-md text-[11px] font-medium transition-colors ${
+                      selectedDayFilter === day
+                        ? 'bg-sky-600 text-white'
+                        : 'bg-sky-50 text-sky-700 hover:bg-sky-100'
+                    }`}
+                  >
+                    {DAY_LABELS[day]?.[fr ? 'fr' : 'en'] ?? day}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -368,7 +539,11 @@ export default function LivraisonView() {
                       <p className="text-xs text-slate-400 mt-0.5">
                         {formatDate(depot.date_depot)}
                         {' · '}
-                        {getTraitementLabelById(depot.type_traitement_id, typesTraitement, depot.traitement)} (×{Number(depot.coefficient)})
+                        {getTraitementLabelById(depot.type_traitement_id, typesTraitement, depot.traitement, depot.notes)} (×{
+                          depot.type_traitement_id
+                            ? Number(depot.coefficient)
+                            : (parseTraitementFromNotes(depot.notes)?.coefficient ?? Number(depot.coefficient))
+                        })
                       </p>
                       <div className="flex flex-wrap items-center gap-3 mt-1">
                         {depot.client?.telephone && (
@@ -416,7 +591,7 @@ export default function LivraisonView() {
                     <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-sky-50 border border-sky-100">
                       <Package className="w-4 h-4 text-sky-600 flex-shrink-0" />
                       <span className="text-sm font-medium text-sky-800">
-                        {DAY_LABELS[depot.delivery_day]?.[fr ? 'fr' : 'en'] ?? depot.delivery_day}
+                        {formatDeliveryDayAndSlot(depot.delivery_day, fr)}
                       </span>
                     </div>
                   )}
@@ -426,10 +601,10 @@ export default function LivraisonView() {
                       <p className="text-sm text-sky-800">{depot.delivery_address}</p>
                     </div>
                   )}
-                  {depot.notes && (
+                  {stripTraitementTagFromNotes(depot.notes) && (
                     <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-slate-50 border border-slate-100">
                       <FileText className="w-4 h-4 text-slate-400 flex-shrink-0 mt-0.5" />
-                      <p className="text-xs text-slate-600 italic">{depot.notes}</p>
+                      <p className="text-xs text-slate-600 italic">{stripTraitementTagFromNotes(depot.notes)}</p>
                     </div>
                   )}
                   {depot.delivery_latitude !== null && depot.delivery_longitude !== null && (

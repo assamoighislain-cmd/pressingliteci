@@ -113,6 +113,7 @@ END;
 $$;
 
 -- 4. Update ensure_trial_licence to explicitly create a 30-day Demo licence (type_licence = 'demo', prix = 0)
+DROP FUNCTION IF EXISTS public.ensure_trial_licence();
 CREATE OR REPLACE FUNCTION public.ensure_trial_licence()
 RETURNS void
 LANGUAGE plpgsql
@@ -150,7 +151,10 @@ BEGIN
 END;
 $$;
 
+GRANT EXECUTE ON FUNCTION public.ensure_trial_licence() TO authenticated;
+
 -- 5. Update create_entreprise_admin to explicitly activate a 30-day Demo licence
+DROP FUNCTION IF EXISTS public.create_entreprise_admin(text, text);
 CREATE OR REPLACE FUNCTION public.create_entreprise_admin(admin_email text, entreprise_nom text)
 RETURNS void
 LANGUAGE plpgsql
@@ -186,6 +190,8 @@ BEGIN
   ON CONFLICT (entreprise_id) DO NOTHING;
 END;
 $$;
+
+GRANT EXECUTE ON FUNCTION public.create_entreprise_admin(text, text) TO authenticated;
 
 -- 6. Update generate_licence RPC to support p_type_licence ('demo' | 'annuelle') and upsert safely
 CREATE OR REPLACE FUNCTION public.generate_licence(
@@ -226,7 +232,10 @@ BEGIN
 END;
 $$;
 
+GRANT EXECUTE ON FUNCTION public.generate_licence(bigint, date, date, numeric, text) TO authenticated;
+
 -- 7. Update get_licence_status to recognize both 'active' and 'demo' statuses
+DROP FUNCTION IF EXISTS public.get_licence_status();
 CREATE OR REPLACE FUNCTION public.get_licence_status()
 RETURNS TABLE(statut text, date_fin date, type_licence text)
 LANGUAGE plpgsql
@@ -256,6 +265,8 @@ BEGIN
   LIMIT 1;
 END;
 $$;
+
+GRANT EXECUTE ON FUNCTION public.get_licence_status() TO authenticated;
 
 -- 8. Fix notify_new_entreprise trigger so Super Admin receives audible Web Push even when the app is closed
 -- Uses supabase_anon_key from app_settings (since send-push-notification has verify_jwt = false)
