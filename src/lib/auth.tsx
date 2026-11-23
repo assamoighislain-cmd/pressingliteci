@@ -32,8 +32,10 @@ interface AuthContextValue {
   currentBoutique: Boutique | null;
   setBoutique: (b: Boutique) => void;
   reloadBoutiques: () => Promise<void>;
+  refreshMembership: () => Promise<void>;
+  requestJoinEntreprise: (entrepriseNom: string, fullName?: string, contact?: string, requestedRole?: string) => Promise<{ error: string | null; status?: 'pending' | 'already_member'; entrepriseNom?: string; needsAdminInvite?: boolean }>;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
-  signUp: (email: string, password: string, entrepriseNom: string, fullName: string, contact: string, depotStartNumber?: number | null, joiningExistingTeam?: boolean) => Promise<{ error: string | null; joinRequested?: boolean }>;
+  signUp: (email: string, password: string, entrepriseNom: string, fullName: string, contact: string, depotStartNumber?: number | null, joiningExistingTeam?: boolean) => Promise<{ error: string | null; joinRequested?: boolean; alreadyRegistered?: boolean; alreadyRegisteredSignedIn?: boolean; needsAdminInvite?: boolean }>;
   signOut: () => Promise<void>;
 }
 
@@ -462,7 +464,108 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { error: error?.message ?? null };
   }
 
-  async function signUp(email: string, password: string, entrepriseNom: string, fullName: string, contact: string, depotStartNumber?: number | null, joiningExistingTeam = false): Promise<{ error: string | null; joinRequested?: boolean }> {
+  async function refreshMembership(): Promise<void> {
+    await loadMembership(user);
+  }
+
+  async function requestJoinEntreprise(
+    entrepriseNom: string,
+    fullName?: string,
+    contact?: string,
+    requestedRole = 'commercial',
+  ): Promise<{ error: string | null; status?: 'pending' | 'already_member'; entrepriseNom?: string; needsAdminInvite?: boolean }> {
+    const cleanEntNom = entrepriseNom.trim();
+    if (!cleanEntNom) {
+      return { error: "Veuillez saisir le nom exact de l'entreprise." };
+    }
+
+    // 1. Primary path: SECURITY DEFINER RPC (works even with strict entreprise RLS)
+    const { data: rpcData, error: rpcErr } = await supabase.rpc('request_join_entreprise', {
+      p_entreprise_nom: cleanEntNom,
+      p_full_name: fullName?.trim() || null,
+      p_contact: contact?.trim() || null,
+      p_role: requestedRole,
+    });
+
+    if (!rpcErr) {
+      const payload = (rpcData as { status?: 'pending' | 'already_member'; entreprise_nom?: string } | null) ?? {};
+      return {
+        error: null,
+        status: payload.status ?? 'pending',
+        entrepriseNom: payload.entreprise_nom ?? cleanEntNom,
+      };
+    }
+
+    // If RPC exists and returned a real business error (e.g. company not found), surface it
+    const rpcMsg = (rpcErr.message || '').toLowerCase();
+    const isMissingRpc =
+      rpcErr.code === 'PGRST202' ||
+      rpcMsg.includes('could not find the function') ||
+      rpcMsg.includes('does not exist');
+
+    if (!isMissingRpc) {
+      return { error: rpcErr.message };
+    }
+
+    // 2. Fallback if migration not yet applied on live DB: attempt direct lookup + insert
+    try {
+      const { data: sessionData } = await supabase.auth.getUser();
+      const activeUser = sessionData.user ?? user;
+      if (!activeUser) {
+        return { error: 'Utilisateur non connecté.' };
+      }
+
+      const { data: targetEnt } = await supabase
+        .from('entreprise')
+        .select('user_id, nom')
+        .ilike('nom', cleanEntNom)
+        .limit(1)
+        .maybeSingle();
+
+      if (targetEnt?.user_id) {
+        const { error: insErr } = await supabase.from('join_requests').insert({
+          tenant_id: targetEnt.user_id,
+          user_id: activeUser.id,
+          user_email: (activeUser.email ?? '').toLowerCase(),
+          full_name: fullName?.trim() || (activeUser.user_metadata?.full_name as string) || null,
+          contact: contact?.trim() || (activeUser.user_metadata?.contact as string) || null,
+          requested_role: requestedRole,
+          status: 'pending',
+        });
+        if (!insErr || insErr.code === '23505') {
+          return {
+            error: null,
+            status: 'pending',
+            entrepriseNom: targetEnt.nom ?? cleanEntNom,
+          };
+        }
+      }
+    } catch {
+      // Fall through to admin-invite guidance
+    }
+
+    return {
+      error: null,
+      needsAdminInvite: true,
+      entrepriseNom: cleanEntNom,
+    };
+  }
+
+  async function signUp(
+    email: string,
+    password: string,
+    entrepriseNom: string,
+    fullName: string,
+    contact: string,
+    depotStartNumber?: number | null,
+    joiningExistingTeam = false,
+  ): Promise<{
+    error: string | null;
+    joinRequested?: boolean;
+    alreadyRegistered?: boolean;
+    alreadyRegisteredSignedIn?: boolean;
+    needsAdminInvite?: boolean;
+  }> {
     const cleanEmail = email.trim().toLowerCase();
     const cleanEntNom = entrepriseNom.trim();
     let gpsLat: string | null = null;
@@ -493,7 +596,50 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         },
       },
     });
-    if (error) return { error: error.message };
+
+    if (error) {
+      const lowerMsg = error.message.toLowerCase();
+      const isAlreadyRegistered =
+        lowerMsg.includes('already registered') ||
+        lowerMsg.includes('already exists') ||
+        lowerMsg.includes('user already');
+
+      if (isAlreadyRegistered) {
+        // If joining an existing team, try signing in directly with the provided credentials
+        // so the user doesn't hit a dead-end "User already registered" error!
+        if (joiningExistingTeam) {
+          const { data: signInData, error: signInErr } = await supabase.auth.signInWithPassword({
+            email: cleanEmail,
+            password,
+          });
+          if (!signInErr && signInData.session?.user) {
+            writeOfflineSessionBackup(signInData.session);
+            setSession(signInData.session);
+            setUser(signInData.session.user);
+
+            // Check if user already belongs to a company; if not and company name provided, send join request
+            const { data: existingTenant } = await supabase.rpc('get_tenant_id');
+            if (!existingTenant && cleanEntNom) {
+              const joinRes = await requestJoinEntreprise(cleanEntNom, fullName, contact);
+              if (joinRes.error) {
+                return { error: joinRes.error, alreadyRegisteredSignedIn: true };
+              }
+              return {
+                error: null,
+                joinRequested: joinRes.status === 'pending',
+                alreadyRegisteredSignedIn: true,
+                needsAdminInvite: joinRes.needsAdminInvite,
+              };
+            }
+            return { error: null, alreadyRegisteredSignedIn: true };
+          }
+          return { error: 'ALREADY_REGISTERED_WRONG_PASSWORD', alreadyRegistered: true };
+        }
+        return { error: 'ALREADY_REGISTERED', alreadyRegistered: true };
+      }
+
+      return { error: error.message };
+    }
 
     if (data.session?.user) {
       writeOfflineSessionBackup(data.session);
@@ -505,28 +651,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Joining an existing team: NEVER create a duplicate company!
     if (joiningExistingTeam) {
       if (cleanEntNom) {
-        try {
-          const { data: targetEnt } = await supabase
-            .from('entreprise')
-            .select('user_id')
-            .ilike('nom', cleanEntNom)
-            .limit(1)
-            .maybeSingle();
-
-          if (targetEnt?.user_id) {
-            await supabase.from('join_requests').insert({
-              tenant_id: targetEnt.user_id,
-              user_id: newUser.id,
-              user_email: cleanEmail,
-              full_name: fullName || null,
-              contact: contact || null,
-              requested_role: 'commercial',
-              status: 'pending',
-            });
-            return { error: null, joinRequested: true };
-          }
-        } catch {
-          // Best-effort: admin can still add the user by email
+        const joinRes = await requestJoinEntreprise(cleanEntNom, fullName, contact);
+        if (!joinRes.error && joinRes.status === 'pending') {
+          return { error: null, joinRequested: true };
+        }
+        if (joinRes.needsAdminInvite) {
+          return { error: null, needsAdminInvite: true };
         }
       }
       return { error: null };
@@ -683,6 +813,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     <AuthContext.Provider value={{
       user, session, loading, membershipLoading, role, tenantId, isSuperAdmin,
       boutiques, currentBoutique, setBoutique, reloadBoutiques,
+      refreshMembership, requestJoinEntreprise,
       signIn, signUp, signOut
     }}>
       {children}

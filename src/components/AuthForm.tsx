@@ -23,6 +23,7 @@ export default function AuthForm() {
   const [forgotLoading, setForgotLoading] = useState(false);
   const [forgotSent, setForgotSent] = useState(false);
   const [signupSuccess, setSignupSuccess] = useState<string | null>(null);
+  const [alreadyRegisteredEmail, setAlreadyRegisteredEmail] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
 
   async function handleForgotPassword(e: React.FormEvent) {
@@ -49,6 +50,7 @@ export default function AuthForm() {
     e.preventDefault();
     setLoading(true);
     setError(null);
+    setAlreadyRegisteredEmail(null);
 
     try {
       if (mode === 'signup' && !joining && !entrepriseNom.trim()) {
@@ -75,15 +77,32 @@ export default function AuthForm() {
           );
 
       if (result.error) {
-        setError(result.error);
+        if ('alreadyRegistered' in result && result.alreadyRegistered) {
+          setAlreadyRegisteredEmail(normalizedEmail);
+          if (result.error === 'ALREADY_REGISTERED_WRONG_PASSWORD') {
+            setError(
+              lang === 'fr'
+                ? `Un compte existe déjà avec l'adresse « ${normalizedEmail} », mais le mot de passe saisi ne correspond pas. Connectez-vous avec votre mot de passe actuel (ou réinitialisez-le), ou demandez à l'administrateur de votre entreprise de vous ajouter directement avec cet email.`
+                : `An account already exists for "${normalizedEmail}", but the password does not match. Sign in with your existing password (or reset it), or ask your company administrator to add you directly using this email.`,
+            );
+          } else {
+            setError(
+              lang === 'fr'
+                ? `Un compte existe déjà avec l'adresse « ${normalizedEmail} ». Vous n'avez pas besoin de vous réinscrire : connectez-vous directement avec cet email.`
+                : `An account already exists for "${normalizedEmail}". You do not need to register again: sign in directly with this email.`,
+            );
+          }
+        } else {
+          setError(result.error);
+        }
       } else if ('joinRequested' in result && result.joinRequested) {
         setSignupSuccess(lang === 'fr'
           ? `Votre demande pour rejoindre « ${entrepriseNom.trim()} » a été envoyée. L'administrateur de l'entreprise (ou le Super Admin) doit l'approuver pour activer votre accès.`
           : `Your request to join "${entrepriseNom.trim()}" has been sent. The company administrator (or Super Admin) must approve it to activate your access.`);
       } else if (mode === 'signup' && joining) {
         setSignupSuccess(lang === 'fr'
-          ? `Votre compte a été créé (${normalizedEmail}). L'administrateur de votre entreprise peut maintenant vous ajouter dans « Utilisateurs » avec cet email.`
-          : `Your account has been created (${normalizedEmail}). Your company administrator can now add you under "Users" using this email.`);
+          ? `Votre compte est prêt (${normalizedEmail}). L'administrateur de ${entrepriseNom.trim() ? `« ${entrepriseNom.trim()} »` : 'votre entreprise'} peut maintenant vous ajouter dans « Utilisateurs » avec cet email.`
+          : `Your account is ready (${normalizedEmail}). The administrator of ${entrepriseNom.trim() ? `"${entrepriseNom.trim()}"` : 'your company'} can now add you under "Users" using this email.`);
       } else if (mode === 'signup' && !joining) {
         setSignupSuccess(lang === 'fr'
           ? `Félicitations ! Votre entreprise « ${entrepriseNom.trim()} » a été créée avec une licence Démo gratuite de 30 jours activée automatiquement. Un administrateur va valider votre compte et vous serez notifié par message Push.`
@@ -268,11 +287,16 @@ export default function AuthForm() {
                         />
                       </div>
                     </div>
-                    <div className="rounded-lg bg-sky-50 border border-sky-100 p-3">
+                    <div className="rounded-lg bg-sky-50 border border-sky-100 p-3 space-y-1.5">
                       <p className="text-xs text-sky-700">
                         {lang === 'fr'
                           ? "Indiquez le nom exact de l'entreprise (ex: Ecoclair) pour envoyer une demande d'adhésion directe, ou laissez vide afin que votre administrateur vous ajoute avec votre email."
                           : 'Enter the exact company name to send a direct join request, or leave blank so your administrator can add you by email.'}
+                      </p>
+                      <p className="text-xs text-sky-600/90">
+                        {lang === 'fr'
+                          ? "Déjà un compte ? Connectez-vous directement dans « Connexion » (ou saisissez votre mot de passe actuel ici)."
+                          : 'Already have an account? Sign in directly under "Sign In" (or enter your existing password here).'}
                       </p>
                     </div>
                   </div>
@@ -324,8 +348,38 @@ export default function AuthForm() {
             </div>
 
             {error && !forgotOpen && (
-              <div className="rounded-lg bg-red-50 border border-red-200 p-3">
-                <p className="text-sm text-red-600">{error}</p>
+              <div className="rounded-lg bg-red-50 border border-red-200 p-3 space-y-2.5">
+                <p className="text-sm text-red-700">{error}</p>
+                {alreadyRegisteredEmail && (
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMode('signin');
+                        setEmail(alreadyRegisteredEmail);
+                        setError(null);
+                        setAlreadyRegisteredEmail(null);
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-sky-600 text-white text-xs font-medium hover:bg-sky-700 transition-colors"
+                    >
+                      {lang === 'fr' ? 'Aller à la connexion' : 'Go to Sign In'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMode('signin');
+                        setForgotEmail(alreadyRegisteredEmail);
+                        setForgotOpen(true);
+                        setForgotSent(false);
+                        setError(null);
+                        setAlreadyRegisteredEmail(null);
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-white border border-red-200 text-red-700 text-xs font-medium hover:bg-red-100/60 transition-colors"
+                    >
+                      {lang === 'fr' ? 'Mot de passe oublié ?' : 'Forgot password?'}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 

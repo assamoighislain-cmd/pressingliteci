@@ -287,3 +287,82 @@ END;
 $$;
 
 GRANT EXECUTE ON FUNCTION public.add_team_member(text, text, uuid) TO authenticated;
+
+-- 5. Allow any authenticated user (including already-registered accounts) to request to join an existing company by name
+CREATE OR REPLACE FUNCTION public.request_join_entreprise(
+  p_entreprise_nom text,
+  p_full_name text DEFAULT NULL,
+  p_contact text DEFAULT NULL,
+  p_role text DEFAULT 'commercial'
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public'
+AS $$
+DECLARE
+  v_uid uuid := auth.uid();
+  v_clean_nom text := trim(COALESCE(p_entreprise_nom, ''));
+  v_role text := COALESCE(NULLIF(trim(p_role), ''), 'commercial');
+  v_target_tenant_id uuid;
+  v_target_nom text;
+  v_user_email text;
+  v_meta_full_name text;
+  v_meta_contact text;
+BEGIN
+  IF v_uid IS NULL THEN
+    RAISE EXCEPTION 'Utilisateur non authentifié';
+  END IF;
+
+  IF v_clean_nom = '' THEN
+    RAISE EXCEPTION 'Veuillez saisir le nom de l''entreprise à rejoindre.';
+  END IF;
+
+  IF v_role NOT IN ('gerant', 'commercial', 'collecteur') THEN
+    v_role := 'commercial';
+  END IF;
+
+  -- Prefer exact case-insensitive match (active/demo first), then partial match if unique
+  SELECT user_id, nom
+  INTO v_target_tenant_id, v_target_nom
+  FROM public.entreprise
+  WHERE lower(trim(nom)) = lower(v_clean_nom)
+  ORDER BY CASE WHEN statut IN ('active', 'demo') THEN 0 ELSE 1 END, id ASC
+  LIMIT 1;
+
+  IF v_target_tenant_id IS NULL THEN
+    RAISE EXCEPTION 'Aucune entreprise nommée « % » n''a été trouvée. Vérifiez l''orthographe exacte.', v_clean_nom;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM public.entreprise_members
+    WHERE tenant_id = v_target_tenant_id AND user_id = v_uid
+  ) THEN
+    RETURN jsonb_build_object('status', 'already_member', 'entreprise_nom', v_target_nom);
+  END IF;
+
+  SELECT email,
+         NULLIF(trim(COALESCE(raw_user_meta_data ->> 'full_name', '')), ''),
+         NULLIF(trim(COALESCE(raw_user_meta_data ->> 'contact', '')), '')
+  INTO v_user_email, v_meta_full_name, v_meta_contact
+  FROM auth.users
+  WHERE id = v_uid;
+
+  INSERT INTO public.join_requests (tenant_id, user_id, user_email, full_name, contact, requested_role, status)
+  VALUES (
+    v_target_tenant_id,
+    v_uid,
+    COALESCE(v_user_email, ''),
+    COALESCE(NULLIF(trim(p_full_name), ''), v_meta_full_name),
+    COALESCE(NULLIF(trim(p_contact), ''), v_meta_contact),
+    v_role,
+    'pending'
+  )
+  ON CONFLICT DO NOTHING;
+
+  RETURN jsonb_build_object('status', 'pending', 'entreprise_nom', v_target_nom);
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.request_join_entreprise(text, text, text, text) TO authenticated;
+
