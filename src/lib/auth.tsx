@@ -33,7 +33,7 @@ interface AuthContextValue {
   setBoutique: (b: Boutique) => void;
   reloadBoutiques: () => Promise<void>;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
-  signUp: (email: string, password: string, entrepriseNom: string, fullName: string, contact: string, depotStartNumber?: number | null) => Promise<{ error: string | null; joinRequested?: boolean }>;
+  signUp: (email: string, password: string, entrepriseNom: string, fullName: string, contact: string, depotStartNumber?: number | null, joiningExistingTeam?: boolean) => Promise<{ error: string | null; joinRequested?: boolean }>;
   signOut: () => Promise<void>;
 }
 
@@ -462,10 +462,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { error: error?.message ?? null };
   }
 
-  async function signUp(email: string, password: string, entrepriseNom: string, fullName: string, contact: string, depotStartNumber?: number | null): Promise<{ error: string | null; joinRequested?: boolean }> {
+  async function signUp(email: string, password: string, entrepriseNom: string, fullName: string, contact: string, depotStartNumber?: number | null, joiningExistingTeam = false): Promise<{ error: string | null; joinRequested?: boolean }> {
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanEntNom = entrepriseNom.trim();
     let gpsLat: string | null = null;
     let gpsLng: string | null = null;
-    if (entrepriseNom && 'geolocation' in navigator) {
+    if (!joiningExistingTeam && cleanEntNom && 'geolocation' in navigator) {
       try {
         const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
           navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 10000, maximumAge: 60000 });
@@ -478,11 +480,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     const { data, error } = await supabase.auth.signUp({
-      email,
+      email: cleanEmail,
       password,
       options: {
         data: {
-          ...(entrepriseNom ? { entreprise_nom: entrepriseNom } : {}),
+          ...(!joiningExistingTeam && cleanEntNom ? { entreprise_nom: cleanEntNom } : {}),
+          ...(joiningExistingTeam ? { joining_existing_team: true, target_entreprise_nom: cleanEntNom || null } : {}),
           ...(fullName ? { full_name: fullName } : {}),
           ...(contact ? { contact } : {}),
           ...(gpsLat ? { gps_latitude: gpsLat } : {}),
@@ -499,7 +502,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const newUser = data.user;
     if (!newUser) return { error: null };
 
-    if (entrepriseNom) {
+    // Joining an existing team: NEVER create a duplicate company!
+    if (joiningExistingTeam) {
+      if (cleanEntNom) {
+        try {
+          const { data: targetEnt } = await supabase
+            .from('entreprise')
+            .select('user_id')
+            .ilike('nom', cleanEntNom)
+            .limit(1)
+            .maybeSingle();
+
+          if (targetEnt?.user_id) {
+            await supabase.from('join_requests').insert({
+              tenant_id: targetEnt.user_id,
+              user_id: newUser.id,
+              user_email: cleanEmail,
+              full_name: fullName || null,
+              contact: contact || null,
+              requested_role: 'commercial',
+              status: 'pending',
+            });
+            return { error: null, joinRequested: true };
+          }
+        } catch {
+          // Best-effort: admin can still add the user by email
+        }
+      }
+      return { error: null };
+    }
+
+    if (cleanEntNom) {
       const { data: reqData } = await supabase
         .from('join_requests')
         .select('id')
@@ -512,7 +545,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       const { error: rpcError } = await supabase.rpc('signup_create_entreprise', {
-        entreprise_nom: entrepriseNom,
+        entreprise_nom: cleanEntNom,
       });
       if (rpcError) {
         console.warn('signup_create_entreprise RPC failed (trigger will handle it):', rpcError.message);

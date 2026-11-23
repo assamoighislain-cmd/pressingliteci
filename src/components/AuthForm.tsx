@@ -51,7 +51,7 @@ export default function AuthForm() {
     setError(null);
 
     try {
-      if (mode === 'signup' && !entrepriseNom.trim()) {
+      if (mode === 'signup' && !joining && !entrepriseNom.trim()) {
         setError(lang === 'fr'
           ? 'Veuillez saisir le nom de votre entreprise, ou cochez « Je rejoins une équipe existante ».'
           : 'Please enter your company name, or check "I am joining an existing team".');
@@ -60,17 +60,30 @@ export default function AuthForm() {
 
       const parsedStart = depotStartInput.trim() ? parseInt(depotStartInput.trim(), 10) : null;
       const validStart = parsedStart !== null && Number.isFinite(parsedStart) && parsedStart >= 1 ? parsedStart : null;
+      const normalizedEmail = email.trim().toLowerCase();
 
       const result = mode === 'signin'
-        ? await signIn(email.trim(), password)
-        : await signUp(email.trim(), password, joining ? '' : entrepriseNom.trim(), fullName.trim(), contact.trim(), joining ? null : validStart);
+        ? await signIn(normalizedEmail, password)
+        : await signUp(
+            normalizedEmail,
+            password,
+            entrepriseNom.trim(),
+            fullName.trim(),
+            contact.trim(),
+            joining ? null : validStart,
+            joining,
+          );
 
       if (result.error) {
         setError(result.error);
       } else if ('joinRequested' in result && result.joinRequested) {
         setSignupSuccess(lang === 'fr'
-          ? `Votre demande de rejoindre « ${entrepriseNom.trim()} » a été envoyée. L'administrateur de l'entreprise doit approuver votre demande avant que vous puissiez accéder au compte.`
-          : `Your request to join "${entrepriseNom.trim()}" has been sent. The company administrator must approve your request before you can access the account.`);
+          ? `Votre demande pour rejoindre « ${entrepriseNom.trim()} » a été envoyée. L'administrateur de l'entreprise (ou le Super Admin) doit l'approuver pour activer votre accès.`
+          : `Your request to join "${entrepriseNom.trim()}" has been sent. The company administrator (or Super Admin) must approve it to activate your access.`);
+      } else if (mode === 'signup' && joining) {
+        setSignupSuccess(lang === 'fr'
+          ? `Votre compte a été créé (${normalizedEmail}). L'administrateur de votre entreprise peut maintenant vous ajouter dans « Utilisateurs » avec cet email.`
+          : `Your account has been created (${normalizedEmail}). Your company administrator can now add you under "Users" using this email.`);
       } else if (mode === 'signup' && !joining) {
         setSignupSuccess(lang === 'fr'
           ? `Félicitations ! Votre entreprise « ${entrepriseNom.trim()} » a été créée avec une licence Démo gratuite de 30 jours activée automatiquement. Un administrateur va valider votre compte et vous serez notifié par message Push.`
@@ -237,12 +250,31 @@ export default function AuthForm() {
                   </>
                 )}
                 {joining && (
-                  <div className="rounded-lg bg-sky-50 border border-sky-100 p-3">
-                    <p className="text-xs text-sky-700">
-                      {lang === 'fr'
-                        ? "Créez votre compte avec le même email que celui utilisé par l'administrateur pour vous inviter. Une fois connecté, vous aurez accès à l'entreprise."
-                        : 'Create your account with the same email used by the administrator to invite you. Once logged in, you will have access to the company.'}
-                    </p>
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                        {lang === 'fr'
+                          ? "Nom de l'entreprise à rejoindre (optionnel)"
+                          : 'Company name to join (optional)'}
+                      </label>
+                      <div className="relative">
+                        <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                        <input
+                          type="text"
+                          value={entrepriseNom}
+                          onChange={(e) => setEntrepriseNom(e.target.value)}
+                          placeholder={lang === 'fr' ? 'Ex: Ecoclair' : 'Ex: Ecoclair'}
+                          className="w-full pl-10 pr-3 py-2.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent"
+                        />
+                      </div>
+                    </div>
+                    <div className="rounded-lg bg-sky-50 border border-sky-100 p-3">
+                      <p className="text-xs text-sky-700">
+                        {lang === 'fr'
+                          ? "Indiquez le nom exact de l'entreprise (ex: Ecoclair) pour envoyer une demande d'adhésion directe, ou laissez vide afin que votre administrateur vous ajoute avec votre email."
+                          : 'Enter the exact company name to send a direct join request, or leave blank so your administrator can add you by email.'}
+                      </p>
+                    </div>
                   </div>
                 )}
               </>

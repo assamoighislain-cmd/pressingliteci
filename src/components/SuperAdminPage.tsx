@@ -7,7 +7,7 @@ import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import { usePushNotifications, playApprovalSound, notifyCompanyDemoLicencePush } from '@/hooks/usePushNotifications';
 import { notifyRealtimeMutation } from '@/lib/realtimeSync';
 import { buildWhatsAppUrl } from '@/types';
-import { Building2, UserPlus, Crown, Loader2, X, Check, Shield, Mail, Users, ChevronDown, ChevronRight, Trash2, UserCog, Pencil, Phone, User, KeyRound, Calendar, Plus, Ban, Copy, TrendingUp, AlertTriangle, Clock, BarChart3, UserCheck, Search, Filter, ArrowUpDown, MapPin, Navigation, Activity, ShoppingBag, Package, Store, DollarSign, ArrowDownUp, MessageCircle, Send, ExternalLink, BellRing, BellOff, Volume2 } from 'lucide-react';
+import { Building2, UserPlus, Crown, Loader2, X, Check, Shield, Mail, Users, ChevronDown, ChevronRight, Trash2, UserCog, Pencil, Phone, User, KeyRound, Calendar, Plus, Ban, Copy, TrendingUp, AlertTriangle, Clock, BarChart3, UserCheck, Search, Filter, ArrowUpDown, MapPin, Navigation, Activity, ShoppingBag, Package, Store, DollarSign, ArrowDownUp, MessageCircle, Send, ExternalLink, BellRing, BellOff, Volume2, Truck, ArrowRightLeft } from 'lucide-react';
 
 type WhatsAppTemplateType = 'approval' | 'licence' | 'reminder' | 'custom';
 
@@ -81,12 +81,14 @@ const ROLE_COLORS: Record<string, string> = {
   admin: 'bg-amber-100 text-amber-700 border-amber-200',
   gerant: 'bg-sky-100 text-sky-700 border-sky-200',
   commercial: 'bg-slate-100 text-slate-600 border-slate-200',
+  collecteur: 'bg-orange-100 text-orange-700 border-orange-200',
 };
 
 const ROLE_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   admin: Crown,
   gerant: Shield,
   commercial: UserCog,
+  collecteur: Truck,
 };
 
 export default function SuperAdminPage() {
@@ -99,6 +101,7 @@ export default function SuperAdminPage() {
     admin: lang === 'fr' ? 'Administrateur' : 'Administrator',
     gerant: lang === 'fr' ? 'Gérant' : 'Manager',
     commercial: lang === 'fr' ? 'Commercial' : 'Sales',
+    collecteur: lang === 'fr' ? 'Collecteur' : 'Collector',
   };
   const [entreprises, setEntreprises] = useState<EntrepriseRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -116,6 +119,10 @@ export default function SuperAdminPage() {
   const [editFullName, setEditFullName] = useState('');
   const [editContact, setEditContact] = useState('');
   const [editEmail, setEditEmail] = useState('');
+  const [transferMember, setTransferMember] = useState<{ member: Member; fromEntreprise: EntrepriseRow } | null>(null);
+  const [transferTargetEntId, setTransferTargetEntId] = useState('');
+  const [transferRole, setTransferRole] = useState('commercial');
+  const [deleteEmptySourceEnt, setDeleteEmptySourceEnt] = useState(false);
   const [showLicenceModal, setShowLicenceModal] = useState<number | null>(null);
   const [licenceType, setLicenceType] = useState<'demo' | 'annuelle'>('demo');
   const [licenceStart, setLicenceStart] = useState('');
@@ -526,22 +533,59 @@ export default function SuperAdminPage() {
 
   async function handleAddMember(tenantId: string, entrepriseNom: string) {
     if (!isOnline) return;
-    if (!memberEmail.trim()) return;
+    const cleanEmail = memberEmail.trim().toLowerCase();
+    if (!cleanEmail) return;
     setSubmitting(true);
     setError(null);
     setSuccess(null);
 
     try {
-      const { error } = await supabase.rpc('add_member_to_entreprise', {
-        member_email: memberEmail.trim(),
+      let addedUid: string | null = null;
+      let { data: rpcData, error } = await supabase.rpc('add_member_to_entreprise', {
+        member_email: cleanEmail,
         target_tenant_id: tenantId,
         member_role: memberRole,
       });
 
+      // Fallback for unpatched live DB where add_member_to_entreprise didn't allow 'collecteur'
+      if (error && memberRole === 'collecteur' && error.message.toLowerCase().includes('invalide')) {
+        const retry = await supabase.rpc('add_member_to_entreprise', {
+          member_email: cleanEmail,
+          target_tenant_id: tenantId,
+          member_role: 'commercial',
+        });
+        error = retry.error;
+        rpcData = retry.data;
+        if (!error && typeof rpcData === 'string') {
+          await supabase
+            .from('entreprise_members')
+            .update({ role: 'collecteur' })
+            .eq('tenant_id', tenantId)
+            .eq('user_id', rpcData);
+        }
+      }
+
+      if (typeof rpcData === 'string') {
+        addedUid = rpcData;
+      }
+
       if (error) {
         setError(error.message);
       } else {
-        setSuccess(`${memberEmail.trim()} ${lang === 'fr' ? 'ajouté à' : 'added to'} ${entrepriseNom} ${lang === 'fr' ? 'en tant que' : 'as'} ${ROLE_LABELS[memberRole]}`);
+        notifyRealtimeMutation('entreprise_members', true);
+        const otherCompany = addedUid
+          ? entreprises.find(
+              (ent) => ent.user_id !== tenantId && ent.members.some((m) => m.user_id === addedUid),
+            )
+          : undefined;
+        const duplicateHint = otherCompany
+          ? (lang === 'fr'
+              ? ` — Attention : cet utilisateur appartient aussi à « ${otherCompany.nom} » (retirez-le de l'ancienne entreprise pour éviter tout conflit).`
+              : ` — Note: this user also belongs to "${otherCompany.nom}" (remove them from the old company to avoid conflicts).`)
+          : '';
+        setSuccess(
+          `${cleanEmail} ${lang === 'fr' ? 'ajouté à' : 'added to'} ${entrepriseNom} ${lang === 'fr' ? 'en tant que' : 'as'} ${ROLE_LABELS[memberRole] ?? memberRole}${duplicateHint}`,
+        );
         setMemberEmail('');
         setMemberRole('commercial');
         setShowAddMember(null);
@@ -549,6 +593,96 @@ export default function SuperAdminPage() {
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : (lang === 'fr' ? 'Erreur lors de l\'ajout' : 'Error during addition'));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  function openTransferModal(member: Member, fromEntreprise: EntrepriseRow) {
+    const candidates = entreprises.filter((ent) => ent.id !== fromEntreprise.id);
+    const sameNameActive = candidates.find(
+      (ent) =>
+        ent.nom.trim().toLowerCase() === fromEntreprise.nom.trim().toLowerCase() &&
+        (ent.statut === 'active' || ent.statut === 'demo'),
+    );
+    const sameNameAny = candidates.find(
+      (ent) => ent.nom.trim().toLowerCase() === fromEntreprise.nom.trim().toLowerCase(),
+    );
+    const firstActive = candidates.find((ent) => ent.statut === 'active' || ent.statut === 'demo');
+    const defaultTarget = sameNameActive ?? sameNameAny ?? firstActive ?? candidates[0];
+
+    const isPendingSingleDuplicate = fromEntreprise.statut === 'pending' && fromEntreprise.members.length <= 1;
+    setTransferMember({ member, fromEntreprise });
+    setTransferTargetEntId(defaultTarget ? String(defaultTarget.id) : '');
+    setTransferRole(isPendingSingleDuplicate ? 'commercial' : (member.role || 'commercial'));
+    setDeleteEmptySourceEnt(isPendingSingleDuplicate);
+  }
+
+  async function handleTransferMember() {
+    if (!isOnline || !transferMember || !transferTargetEntId) return;
+    const targetEnt = entreprises.find((ent) => String(ent.id) === transferTargetEntId);
+    if (!targetEnt) return;
+
+    const { member, fromEntreprise } = transferMember;
+    setSubmitting(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      // 1. Insert or update membership in target company (e.g. Ecoclair)
+      const { error: upsertErr } = await supabase
+        .from('entreprise_members')
+        .upsert(
+          {
+            tenant_id: targetEnt.user_id,
+            user_id: member.user_id,
+            role: transferRole,
+            full_name: member.full_name,
+            contact: member.contact,
+          },
+          { onConflict: 'tenant_id,user_id' },
+        );
+
+      if (upsertErr) {
+        setError(upsertErr.message);
+        return;
+      }
+
+      // 2. Remove old membership so get_tenant_id() cleanly resolves to the target company
+      const { error: deleteMemberErr } = await supabase
+        .from('entreprise_members')
+        .delete()
+        .eq('id', member.id);
+
+      if (deleteMemberErr) {
+        setError(deleteMemberErr.message);
+        return;
+      }
+
+      // 3. Optionally clean up the empty pending duplicate company
+      let deletedDuplicateNote = '';
+      if (deleteEmptySourceEnt && fromEntreprise.statut === 'pending' && fromEntreprise.members.length <= 1) {
+        const { error: delEntErr } = await supabase.rpc('delete_entreprise', { entreprise_id: fromEntreprise.id });
+        if (!delEntErr) {
+          deletedDuplicateNote =
+            lang === 'fr'
+              ? ` (doublon en attente « ${fromEntreprise.nom} » supprimé)`
+              : ` (pending duplicate "${fromEntreprise.nom}" deleted)`;
+        }
+      }
+
+      notifyRealtimeMutation('entreprise_members', true);
+      notifyRealtimeMutation('entreprise', true);
+      setSuccess(
+        lang === 'fr'
+          ? `${member.full_name || member.email} a été rattaché(e) à « ${targetEnt.nom} » en tant que ${ROLE_LABELS[transferRole] ?? transferRole}${deletedDuplicateNote}`
+          : `${member.full_name || member.email} has been moved to "${targetEnt.nom}" as ${ROLE_LABELS[transferRole] ?? transferRole}${deletedDuplicateNote}`,
+      );
+      setTransferMember(null);
+      setExpandedId(targetEnt.id);
+      await loadEntreprises();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : (lang === 'fr' ? 'Erreur lors du transfert' : 'Error during transfer'));
     } finally {
       setSubmitting(false);
     }
@@ -1432,6 +1566,7 @@ export default function SuperAdminPage() {
                 <option value="admin">{ROLE_LABELS.admin}</option>
                 <option value="gerant">{ROLE_LABELS.gerant}</option>
                 <option value="commercial">{ROLE_LABELS.commercial}</option>
+                <option value="collecteur">{ROLE_LABELS.collecteur}</option>
               </select>
             </div>
             <div className="flex gap-3 pt-2">
@@ -1451,6 +1586,118 @@ export default function SuperAdminPage() {
               >
                 {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserPlus className="w-4 h-4" />}
                 {submitting ? (lang === 'fr' ? 'Ajout…' : 'Adding…') : (lang === 'fr' ? 'Ajouter' : 'Add')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Transfer / Reattach member modal */}
+      {transferMember && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+          <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setTransferMember(null)} />
+          <div className="relative bg-white rounded-2xl shadow-xl w-full max-w-md p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-sky-100 text-sky-600 flex items-center justify-center flex-shrink-0">
+                  <ArrowRightLeft className="w-4 h-4" />
+                </div>
+                <h3 className="text-base font-semibold text-slate-900">
+                  {lang === 'fr' ? 'Transférer / Rattacher à une entreprise' : 'Transfer / Reattach to company'}
+                </h3>
+              </div>
+              <button onClick={() => setTransferMember(null)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="rounded-xl bg-slate-50 border border-slate-200 p-3 space-y-1">
+              <p className="text-sm font-semibold text-slate-900">
+                {transferMember.member.full_name || transferMember.member.email}
+              </p>
+              <p className="text-xs text-slate-500">{transferMember.member.email}</p>
+              <p className="text-xs text-slate-500">
+                {lang === 'fr' ? 'Entreprise actuelle :' : 'Current company:'}{' '}
+                <span className="font-medium text-slate-700">{transferMember.fromEntreprise.nom}</span>
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                {lang === 'fr' ? 'Entreprise de destination' : 'Destination company'}
+              </label>
+              <select
+                value={transferTargetEntId}
+                onChange={(e) => setTransferTargetEntId(e.target.value)}
+                className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent bg-white"
+              >
+                <option value="">{lang === 'fr' ? '— Choisir une entreprise —' : '— Select a company —'}</option>
+                {entreprises
+                  .filter((ent) => ent.id !== transferMember.fromEntreprise.id)
+                  .sort((a, b) => {
+                    const aActive = a.statut === 'active' || a.statut === 'demo' ? 0 : 1;
+                    const bActive = b.statut === 'active' || b.statut === 'demo' ? 0 : 1;
+                    if (aActive !== bActive) return aActive - bActive;
+                    return a.nom.localeCompare(b.nom);
+                  })
+                  .map((ent) => (
+                    <option key={ent.id} value={String(ent.id)}>
+                      {ent.nom} ({ent.statut === 'pending' ? (lang === 'fr' ? 'En attente' : 'Pending') : ent.statut === 'demo' ? (lang === 'fr' ? 'Démo' : 'Demo') : ent.statut === 'suspended' ? (lang === 'fr' ? 'Suspendue' : 'Suspended') : 'Active'})
+                    </option>
+                  ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                {lang === 'fr' ? 'Rôle dans la nouvelle entreprise' : 'Role in destination company'}
+              </label>
+              <select
+                value={transferRole}
+                onChange={(e) => setTransferRole(e.target.value)}
+                className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent bg-white"
+              >
+                <option value="admin">{ROLE_LABELS.admin}</option>
+                <option value="gerant">{ROLE_LABELS.gerant}</option>
+                <option value="commercial">{ROLE_LABELS.commercial}</option>
+                <option value="collecteur">{ROLE_LABELS.collecteur}</option>
+              </select>
+            </div>
+
+            {transferMember.fromEntreprise.statut === 'pending' && transferMember.fromEntreprise.members.length <= 1 && (
+              <label className="flex items-start gap-2.5 rounded-xl bg-amber-50 border border-amber-200 p-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={deleteEmptySourceEnt}
+                  onChange={(e) => setDeleteEmptySourceEnt(e.target.checked)}
+                  className="mt-0.5 rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+                />
+                <span className="text-xs text-amber-900">
+                  {lang === 'fr'
+                    ? `Supprimer aussi l'entreprise en attente « ${transferMember.fromEntreprise.nom} » après le transfert (doublon créé par erreur à l'inscription).`
+                    : `Also delete the pending company "${transferMember.fromEntreprise.nom}" after transfer (duplicate created on signup).`}
+                </span>
+              </label>
+            )}
+
+            <div className="flex gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setTransferMember(null)}
+                className="px-4 py-2.5 rounded-lg border border-slate-200 text-slate-600 text-sm font-medium hover:bg-slate-50 transition-colors"
+              >
+                {t('common.cancel')}
+              </button>
+              <button
+                type="button"
+                onClick={handleTransferMember}
+                disabled={submitting || !transferTargetEntId}
+                className="flex-1 px-4 py-2.5 rounded-lg bg-sky-500 text-white text-sm font-medium hover:bg-sky-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRightLeft className="w-4 h-4" />}
+                {submitting
+                  ? (lang === 'fr' ? 'Transfert…' : 'Transferring…')
+                  : (lang === 'fr' ? 'Rattacher maintenant' : 'Transfer now')}
               </button>
             </div>
           </div>
@@ -2058,6 +2305,39 @@ export default function SuperAdminPage() {
                   {/* Expanded members list */}
                   {isExpanded && (
                     <div className="bg-slate-50/30 border-t border-slate-100 px-4 py-3 space-y-2">
+                      {e.statut === 'pending' && e.members.length === 1 && (() => {
+                        const matchingEnt = entreprises.find(
+                          (other) =>
+                            other.id !== e.id &&
+                            other.nom.trim().toLowerCase() === e.nom.trim().toLowerCase(),
+                        );
+                        return (
+                          <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                            <div className="flex items-start gap-2 min-w-0">
+                              <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                              <p className="text-xs text-amber-900">
+                                {matchingEnt
+                                  ? (lang === 'fr'
+                                      ? `Doublon détecté : une entreprise « ${matchingEnt.nom} » existe déjà. Rattachez cet utilisateur à son équipe au lieu de valider une nouvelle entreprise.`
+                                      : `Duplicate detected: company "${matchingEnt.nom}" already exists. Attach this user to that team instead of approving a duplicate.`)
+                                  : (lang === 'fr'
+                                      ? 'Cet utilisateur devait-il rejoindre une entreprise existante ? Vous pouvez le rattacher directement.'
+                                      : 'Should this user belong to an existing company? You can transfer them directly.')}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => openTransferModal(e.members[0], e)}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 text-white text-xs font-medium hover:bg-amber-700 transition-colors flex-shrink-0 self-end sm:self-auto"
+                            >
+                              <ArrowRightLeft className="w-3.5 h-3.5" />
+                              {matchingEnt
+                                ? (lang === 'fr' ? `Rattacher à ${matchingEnt.nom}` : `Attach to ${matchingEnt.nom}`)
+                                : (lang === 'fr' ? 'Rattacher à une entreprise' : 'Attach to company')}
+                            </button>
+                          </div>
+                        );
+                      })()}
                       {e.members.map((m) => {
                         const RoleIcon = ROLE_ICONS[m.role] ?? UserCog;
                         return (
@@ -2086,6 +2366,14 @@ export default function SuperAdminPage() {
                                   </button>
                                 )}
                                 <button
+                                  type="button"
+                                  onClick={() => openTransferModal(m, e)}
+                                  className="p-2 rounded-lg text-slate-400 hover:text-amber-600 hover:bg-amber-50 transition-colors"
+                                  title={lang === 'fr' ? 'Transférer vers une autre entreprise' : 'Transfer to another company'}
+                                >
+                                  <ArrowRightLeft className="w-4 h-4" />
+                                </button>
+                                <button
                                   onClick={() => openEditModal(m)}
                                   className="p-2 rounded-lg text-slate-400 hover:text-sky-600 hover:bg-sky-50 transition-colors"
                                   title={lang === 'fr' ? 'Modifier le profil' : 'Edit profile'}
@@ -2110,6 +2398,7 @@ export default function SuperAdminPage() {
                                 <option value="admin">{ROLE_LABELS.admin}</option>
                                 <option value="gerant">{ROLE_LABELS.gerant}</option>
                                 <option value="commercial">{ROLE_LABELS.commercial}</option>
+                                <option value="collecteur">{ROLE_LABELS.collecteur}</option>
                               </select>
                             </div>
                           </div>

@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth';
 import { useI18n } from '@/lib/i18n';
-import { UserPlus, Trash2, Shield, Crown, UserCog, Mail, Loader2, X, Check, Pencil, Phone, User, UserCheck, Clock, Store, Truck } from 'lucide-react';
+import { useRealtimeSync } from '@/hooks/useRealtimeSync';
+import { UserPlus, Trash2, Shield, Crown, UserCog, Mail, Loader2, X, Check, Pencil, Phone, User, UserCheck, Clock, Store, Truck, RefreshCw } from 'lucide-react';
 
 interface Member {
   id: string;
@@ -40,9 +41,8 @@ const ROLE_COLORS: Record<string, string> = {
 };
 
 export default function TeamManagement() {
-  const { user, role } = useAuth();
+  const { user, role, tenantId, boutiques } = useAuth();
   const { t, lang } = useI18n();
-  const { boutiques } = useAuth();
 
   const ROLE_LABELS: Record<string, string> = {
     admin: lang === 'fr' ? 'Administrateur' : 'Administrator',
@@ -74,17 +74,16 @@ export default function TeamManagement() {
 
   const isAdmin = role === 'admin';
 
-  useEffect(() => {
-    loadMembers();
-    loadRequests();
-  }, []);
-
-  async function loadMembers() {
+  const loadMembers = useCallback(async () => {
     setLoading(true);
-    const { data, error } = await supabase
+    let query = supabase
       .from('entreprise_members')
       .select('id, user_id, role, created_at, full_name, contact, boutique_id')
       .order('created_at', { ascending: true });
+    if (tenantId) {
+      query = query.eq('tenant_id', tenantId);
+    }
+    const { data, error } = await query;
 
     if (error) {
       setError(error.message);
@@ -92,7 +91,7 @@ export default function TeamManagement() {
     } else {
       const rows = data ?? [];
       const userIds = rows.map((m) => m.user_id);
-      let emailMap: Record<string, string> = {};
+      const emailMap: Record<string, string> = {};
       if (userIds.length > 0) {
         const { data: emailData } = await supabase.rpc('get_member_emails', { user_ids: userIds });
         for (const e of (emailData as { user_id: string; email: string }[]) ?? []) {
@@ -106,14 +105,18 @@ export default function TeamManagement() {
       setMembers(enriched);
     }
     setLoading(false);
-  }
+  }, [tenantId]);
 
-  async function loadRequests() {
+  const loadRequests = useCallback(async () => {
     setRequestsLoading(true);
-    const { data, error } = await supabase
+    let query = supabase
       .from('join_requests')
       .select('id, user_email, full_name, contact, requested_role, status, created_at')
       .order('created_at', { ascending: false });
+    if (tenantId) {
+      query = query.eq('tenant_id', tenantId);
+    }
+    const { data, error } = await query;
 
     if (error) {
       setRequests([]);
@@ -121,7 +124,17 @@ export default function TeamManagement() {
       setRequests((data as JoinRequest[]) ?? []);
     }
     setRequestsLoading(false);
-  }
+  }, [tenantId]);
+
+  useEffect(() => {
+    void loadMembers();
+    void loadRequests();
+  }, [loadMembers, loadRequests]);
+
+  useRealtimeSync(['entreprise_members', 'join_requests'], () => {
+    void loadMembers();
+    void loadRequests();
+  });
 
   async function handleApprove(requestId: string) {
     setActionLoadingId(requestId);
@@ -167,9 +180,10 @@ export default function TeamManagement() {
     setError(null);
     setSuccess(null);
 
+    const normalizedEmail = inviteEmail.trim().toLowerCase();
     try {
-      const { data, error } = await supabase.rpc('add_team_member', {
-        member_email: inviteEmail.trim(),
+      const { error } = await supabase.rpc('add_team_member', {
+        member_email: normalizedEmail,
         member_role: inviteRole,
         member_boutique_id: inviteRole !== 'admin' && inviteBoutiqueId ? inviteBoutiqueId : null,
       });
@@ -177,7 +191,7 @@ export default function TeamManagement() {
       if (error) {
         setError(error.message);
       } else {
-        setSuccess(`${lang === 'fr' ? 'Membre ajouté' : 'Member added'}: ${inviteEmail.trim()}`);
+        setSuccess(`${lang === 'fr' ? 'Membre ajouté' : 'Member added'}: ${normalizedEmail}`);
         setInviteEmail('');
         setInviteRole('commercial');
         setInviteBoutiqueId('');
@@ -312,14 +326,25 @@ export default function TeamManagement() {
             {lang === 'fr' ? 'Gérez les membres de votre entreprise et leurs rôles.' : 'Manage your company members and their roles.'}
           </p>
         </div>
-        {activeTab === 'members' && (
+        <div className="flex items-center gap-2">
           <button
-            onClick={() => setShowInvite(true)}
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-sky-500 text-white text-sm font-medium hover:bg-sky-600 transition-colors"
+            type="button"
+            onClick={() => { void loadMembers(); void loadRequests(); }}
+            className="inline-flex items-center gap-1.5 px-3 py-2.5 rounded-lg border border-slate-200 bg-white text-slate-600 text-sm font-medium hover:bg-slate-50 transition-colors"
+            title={lang === 'fr' ? 'Actualiser la liste' : 'Refresh list'}
           >
-            <UserPlus className="w-4 h-4" /> {lang === 'fr' ? 'Ajouter un membre' : 'Add member'}
+            <RefreshCw className={`w-4 h-4 ${loading || requestsLoading ? 'animate-spin' : ''}`} />
+            {lang === 'fr' ? 'Actualiser' : 'Refresh'}
           </button>
-        )}
+          {activeTab === 'members' && (
+            <button
+              onClick={() => setShowInvite(true)}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-sky-500 text-white text-sm font-medium hover:bg-sky-600 transition-colors"
+            >
+              <UserPlus className="w-4 h-4" /> {lang === 'fr' ? 'Ajouter un membre' : 'Add member'}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Tabs */}
@@ -346,6 +371,26 @@ export default function TeamManagement() {
           )}
         </button>
       </div>
+
+      {activeTab === 'members' && requests.filter((r) => r.status === 'pending').length > 0 && (
+        <div className="rounded-xl bg-amber-50 border border-amber-200 p-3.5 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 text-sm text-amber-800">
+            <Clock className="w-4 h-4 text-amber-600 flex-shrink-0" />
+            <span>
+              {lang === 'fr'
+                ? `${requests.filter((r) => r.status === 'pending').length} demande(s) d'adhésion en attente d'approbation.`
+                : `${requests.filter((r) => r.status === 'pending').length} join request(s) pending approval.`}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setActiveTab('requests')}
+            className="px-3 py-1.5 rounded-lg bg-amber-500 text-white text-xs font-semibold hover:bg-amber-600 transition-colors"
+          >
+            {lang === 'fr' ? 'Voir les demandes' : 'View requests'}
+          </button>
+        </div>
+      )}
 
       {error && (
         <div className="rounded-lg bg-red-50 border border-red-200 p-3 flex items-start gap-2">
