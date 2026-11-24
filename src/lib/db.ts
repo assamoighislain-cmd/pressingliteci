@@ -43,6 +43,7 @@ import {
   generateOfflineRpcCode,
   prepareOfflineInsertRows,
   buildMutationLabel,
+  UUID_PK_TABLES,
   optimisticUpsertClient,
   optimisticPatchClient,
   optimisticRemoveClient,
@@ -344,8 +345,7 @@ function ensureDeterministicRowIds(
   table: TableName,
   rows: Record<string, unknown>[],
 ): Record<string, unknown>[] {
-  if (!QUEUEABLE_TABLES.has(table)) return rows;
-  // entreprise uses integer identity PK; all QUEUEABLE_TABLES use UUID id PK
+  if (!UUID_PK_TABLES.has(table)) return rows;
   return rows.map((r) => (r.id ? r : { ...r, id: generateUuid() }));
 }
 
