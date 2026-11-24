@@ -1,7 +1,17 @@
 import { useState, useEffect } from 'react';
 import { db } from '@/lib/db';
+import { useAuth } from '@/lib/auth';
 import { useI18n } from '@/lib/i18n';
-import { formatPrice, formatDateShort, getModeReglementLabel, ModeReglement, ModeReglementRow, Entreprise } from '@/types';
+import {
+  formatPrice,
+  formatDateShort,
+  getModeReglementLabel,
+  mergeBoutiqueHeaderIntoEntreprise,
+  ModeReglement,
+  ModeReglementRow,
+  Entreprise,
+  Boutique,
+} from '@/types';
 import QRCodeImage from '@/components/QRCodeImage';
 
 export type PrintFormat = 'a5' | 'ticket';
@@ -73,6 +83,9 @@ function TicketReceipt({
           <p style={{ fontSize: '16px', fontWeight: 700, margin: 0 }}>
             {[entreprise?.adresse, entreprise?.ville].filter(Boolean).join(', ')}
           </p>
+        )}
+        {entreprise?.email && (
+          <p style={{ fontSize: '15px', fontWeight: 700, margin: 0 }}>{entreprise.email}</p>
         )}
         {entreprise?.slogan && (
           <p style={{ fontSize: '16px', fontWeight: 700, margin: 0, fontStyle: 'italic' }}>{entreprise.slogan}</p>
@@ -280,6 +293,9 @@ function A5Receipt({
             {[entreprise?.adresse, entreprise?.ville].filter(Boolean).join(', ')}
           </p>
         )}
+        {entreprise?.email && (
+          <p className="text-[0.95em] text-slate-700 font-medium">{entreprise.email}</p>
+        )}
         {entreprise?.slogan && (
           <p className="text-[1em] text-slate-700 font-semibold">{entreprise.slogan}</p>
         )}
@@ -419,12 +435,15 @@ export default function PrintableReceipt({
   format,
   modesReglement = [],
   entreprise: entrepriseProp,
+  boutique: boutiqueProp,
 }: {
   data: ReceiptData;
   format: PrintFormat;
   modesReglement?: ModeReglementRow[];
   entreprise?: Entreprise | null;
+  boutique?: Boutique | null;
 }) {
+  const { currentBoutique } = useAuth();
   const [entrepriseState, setEntrepriseState] = useState<Entreprise | null>(null);
 
   useEffect(() => {
@@ -437,7 +456,9 @@ export default function PrintableReceipt({
     })();
   }, [entrepriseProp]);
 
-  const entreprise = entrepriseProp ?? entrepriseState;
+  const rawEntreprise = entrepriseProp ?? entrepriseState;
+  const activeBoutique = boutiqueProp !== undefined ? boutiqueProp : currentBoutique;
+  const effectiveEntreprise = mergeBoutiqueHeaderIntoEntreprise(rawEntreprise, activeBoutique);
   const isTicket = format === 'ticket';
   const formatClass = isTicket ? 'print-format-ticket' : 'print-format-a5';
 
@@ -445,9 +466,9 @@ export default function PrintableReceipt({
     <div className="print-receipt">
       <div className={formatClass}>
         {isTicket ? (
-          <TicketReceipt data={data} entreprise={entreprise} modesReglement={modesReglement} />
+          <TicketReceipt data={data} entreprise={effectiveEntreprise} modesReglement={modesReglement} />
         ) : (
-          <A5Receipt data={data} entreprise={entreprise} modesReglement={modesReglement} />
+          <A5Receipt data={data} entreprise={effectiveEntreprise} modesReglement={modesReglement} />
         )}
       </div>
     </div>

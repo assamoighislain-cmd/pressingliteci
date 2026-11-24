@@ -43,11 +43,11 @@ import PrintableReceipt, { ReceiptData, PrintFormat } from '@/components/Printab
 import PrintableLabels from '@/components/PrintableLabels';
 import { printWithFormat, printDepotLabels } from '@/lib/print';
 import { useAuth } from '@/lib/auth';
-import { Entreprise, DepotAvance } from '@/types';
+import { Entreprise, DepotAvance, resolveReceiptHeader } from '@/types';
 
 export default function RetraitView() {
   const { t, lang } = useI18n();
-  const { role } = useAuth();
+  const { role, boutiques, currentBoutique } = useAuth();
   const [searchTerm, setSearchTerm] = useState('');
   const [results, setResults] = useState<DepotWithArticles[]>([]);
   const [loading, setLoading] = useState(false);
@@ -70,6 +70,11 @@ export default function RetraitView() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [showLabels, setShowLabels] = useState(false);
   const [markingReady, setMarkingReady] = useState(false);
+
+  const selectedBoutique =
+    (selected?.boutique_id ? boutiques.find((b) => b.id === selected.boutique_id) : null) ??
+    currentBoutique;
+  const receiptHeader = resolveReceiptHeader(entreprise, selectedBoutique);
 
   useEffect(() => {
     (async () => {
@@ -462,12 +467,12 @@ export default function RetraitView() {
                 : retraitSuccessData.avanceAmount ?? 0;
               const reste = Math.max(0, retraitSuccessData.total - totalPaye);
               const waMessage = buildWhatsAppMessage({
-                entrepriseNom: entreprise?.nom,
-                entrepriseTelephone: entreprise?.telephone,
-                entrepriseAdresse: entreprise?.adresse,
-                entrepriseVille: entreprise?.ville,
-                entrepriseEmail: entreprise?.email,
-                entrepriseSlogan: entreprise?.slogan,
+                entrepriseNom: receiptHeader.nom,
+                entrepriseTelephone: receiptHeader.telephone,
+                entrepriseAdresse: receiptHeader.adresse,
+                entrepriseVille: receiptHeader.ville,
+                entrepriseEmail: receiptHeader.email,
+                entrepriseSlogan: receiptHeader.slogan,
                 entrepriseId: entreprise?.id,
                 numero: retraitSuccessData.numero,
                 clientNom: retraitSuccessData.clientNom,
@@ -506,7 +511,7 @@ export default function RetraitView() {
         </div>
 
         {/* Hidden printable receipt */}
-        {retraitSuccessData && <PrintableReceipt key={success} data={retraitSuccessData} format={printFormat} modesReglement={modesReglement} entreprise={entreprise} />}
+        {retraitSuccessData && <PrintableReceipt key={success} data={retraitSuccessData} format={printFormat} modesReglement={modesReglement} entreprise={entreprise} boutique={selectedBoutique} />}
       </div>
     );
   }
@@ -556,12 +561,12 @@ export default function RetraitView() {
                       : receipt.avanceAmount ?? 0;
                     const reste = Math.max(0, receipt.total - totalPaye);
                     const waMessage = buildWhatsAppMessage({
-                      entrepriseNom: entreprise?.nom,
-                      entrepriseTelephone: entreprise?.telephone,
-                      entrepriseAdresse: entreprise?.adresse,
-                      entrepriseVille: entreprise?.ville,
-                      entrepriseEmail: entreprise?.email,
-                      entrepriseSlogan: entreprise?.slogan,
+                      entrepriseNom: receiptHeader.nom,
+                      entrepriseTelephone: receiptHeader.telephone,
+                      entrepriseAdresse: receiptHeader.adresse,
+                      entrepriseVille: receiptHeader.ville,
+                      entrepriseEmail: receiptHeader.email,
+                      entrepriseSlogan: receiptHeader.slogan,
                       entrepriseId: entreprise?.id,
                       numero: receipt.numero,
                       portalCode: receipt.portalCode ?? null,
@@ -1057,12 +1062,12 @@ export default function RetraitView() {
                   : receipt.avanceAmount ?? 0;
                 const reste = Math.max(0, receipt.total - totalPaye);
                 const waMessage = buildWhatsAppMessage({
-                  entrepriseNom: entreprise?.nom,
-                  entrepriseTelephone: entreprise?.telephone,
-                  entrepriseAdresse: entreprise?.adresse,
-                  entrepriseVille: entreprise?.ville,
-                  entrepriseEmail: entreprise?.email,
-                  entrepriseSlogan: entreprise?.slogan,
+                  entrepriseNom: receiptHeader.nom,
+                  entrepriseTelephone: receiptHeader.telephone,
+                  entrepriseAdresse: receiptHeader.adresse,
+                  entrepriseVille: receiptHeader.ville,
+                  entrepriseEmail: receiptHeader.email,
+                  entrepriseSlogan: receiptHeader.slogan,
                   entrepriseId: entreprise?.id,
                   numero: receipt.numero,
                   clientNom: receipt.clientNom,
@@ -1093,7 +1098,7 @@ export default function RetraitView() {
               })()}
             </div>
             {detailReceiptData && (
-              <PrintableReceipt key={selected.id} data={detailReceiptData} format={printFormat} modesReglement={modesReglement} entreprise={entreprise} />
+              <PrintableReceipt key={selected.id} data={detailReceiptData} format={printFormat} modesReglement={modesReglement} entreprise={entreprise} boutique={selectedBoutique} />
             )}
           </div>
         ) : (
@@ -1134,12 +1139,12 @@ export default function RetraitView() {
                   : detailReceiptData.avanceAmount ?? 0;
                 const reste = Math.max(0, detailReceiptData.total - totalPaye);
                 const waMessage = buildWhatsAppMessage({
-                  entrepriseNom: entreprise?.nom,
-                  entrepriseTelephone: entreprise?.telephone,
-                  entrepriseAdresse: entreprise?.adresse,
-                  entrepriseVille: entreprise?.ville,
-                  entrepriseEmail: entreprise?.email,
-                  entrepriseSlogan: entreprise?.slogan,
+                  entrepriseNom: receiptHeader.nom,
+                  entrepriseTelephone: receiptHeader.telephone,
+                  entrepriseAdresse: receiptHeader.adresse,
+                  entrepriseVille: receiptHeader.ville,
+                  entrepriseEmail: receiptHeader.email,
+                  entrepriseSlogan: receiptHeader.slogan,
                   entrepriseId: entreprise?.id,
                   numero: detailReceiptData.numero,
                   clientNom: detailReceiptData.clientNom,
@@ -1170,7 +1175,7 @@ export default function RetraitView() {
               })()}
             </div>
             {detailReceiptData && (
-              <PrintableReceipt key={selected.id} data={detailReceiptData} format={printFormat} modesReglement={modesReglement} entreprise={entreprise} />
+              <PrintableReceipt key={selected.id} data={detailReceiptData} format={printFormat} modesReglement={modesReglement} entreprise={entreprise} boutique={selectedBoutique} />
             )}
             {showLabels && <PrintableLabels depot={selected} entreprise={entreprise} />}
           </div>

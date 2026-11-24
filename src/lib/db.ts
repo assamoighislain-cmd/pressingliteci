@@ -28,6 +28,8 @@ import {
   syncBoutiqueDepotStartSeqs,
   setBoutiqueGeo,
   hydrateBoutiquesWithGeo,
+  setBoutiqueReceiptHeader,
+  hydrateBoutiquesWithReceiptHeader,
   getDefaultBoutiqueId,
   getCompanyDepotStartSeq,
   setCompanyDepotStartSeq,
@@ -1878,7 +1880,7 @@ export const db = {
       return mapped;
     }, []);
     syncBoutiqueDepotStartSeqs(list);
-    return hydrateBoutiquesWithGeo(list);
+    return hydrateBoutiquesWithReceiptHeader(hydrateBoutiquesWithGeo(list));
   },
 
   async insertBoutique(row: {
@@ -1886,6 +1888,9 @@ export const db = {
     adresse?: string | null;
     ville?: string | null;
     telephone?: string | null;
+    email?: string | null;
+    slogan?: string | null;
+    message_pied?: string | null;
     depot_start_number?: number | null;
     depot_start_year?: number | null;
     latitude?: number | null;
@@ -1918,6 +1923,9 @@ export const db = {
       row.longitude <= 180;
     const normalizedLat = hasValidGeo ? Math.round(row.latitude! * 1_000_000) / 1_000_000 : null;
     const normalizedLng = hasValidGeo ? Math.round(row.longitude! * 1_000_000) / 1_000_000 : null;
+    const normalizedEmail = row.email?.trim() || null;
+    const normalizedSlogan = row.slogan?.trim() || null;
+    const normalizedFooter = row.message_pied?.trim() || null;
 
     let insertPayload: Record<string, unknown> = {
       nom: row.nom,
@@ -1925,6 +1933,9 @@ export const db = {
       ville: row.ville ?? null,
       telephone: row.telephone ?? null,
       tenant_id: tId,
+      ...(normalizedEmail ? { email: normalizedEmail } : {}),
+      ...(normalizedSlogan ? { slogan: normalizedSlogan } : {}),
+      ...(normalizedFooter ? { message_pied: normalizedFooter } : {}),
       ...(normalizedStart !== null
         ? { depot_start_number: normalizedStart, depot_start_year: targetYear }
         : {}),
@@ -1939,7 +1950,7 @@ export const db = {
       .select('*')
       .single();
 
-    for (let retry = 0; retry < 5 && error; retry++) {
+    for (let retry = 0; retry < 8 && error; retry++) {
       const missingCol = extractMissingSchemaColumn(error.message);
       if (!missingCol || !(missingCol in insertPayload)) break;
       insertPayload = stripColumnFromRow(insertPayload, missingCol);
@@ -1958,12 +1969,22 @@ export const db = {
     if (created?.id && normalizedLat !== null && normalizedLng !== null) {
       setBoutiqueGeo(created.id, normalizedLat, normalizedLng);
     }
+    if (created?.id) {
+      setBoutiqueReceiptHeader(created.id, {
+        email: normalizedEmail,
+        slogan: normalizedSlogan,
+        message_pied: normalizedFooter,
+      });
+    }
     return {
       data: created
         ? {
             ...created,
             latitude: created.latitude ?? normalizedLat,
             longitude: created.longitude ?? normalizedLng,
+            email: created.email ?? normalizedEmail,
+            slogan: created.slogan ?? normalizedSlogan,
+            message_pied: created.message_pied ?? normalizedFooter,
           }
         : null,
       error: null,
@@ -1977,6 +1998,9 @@ export const db = {
       adresse?: string | null;
       ville?: string | null;
       telephone?: string | null;
+      email?: string | null;
+      slogan?: string | null;
+      message_pied?: string | null;
       is_default?: boolean;
       depot_start_number?: number | null;
       depot_start_year?: number | null;
@@ -1993,6 +2017,14 @@ export const db = {
       ...values,
       updated_at: new Date().toISOString(),
     };
+
+    if ('email' in values || 'slogan' in values || 'message_pied' in values) {
+      setBoutiqueReceiptHeader(id, {
+        ...('email' in values ? { email: values.email?.trim() || null } : {}),
+        ...('slogan' in values ? { slogan: values.slogan?.trim() || null } : {}),
+        ...('message_pied' in values ? { message_pied: values.message_pied?.trim() || null } : {}),
+      });
+    }
 
     if ('latitude' in values || 'longitude' in values) {
       const hasValidGeo =

@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { formatPrice, formatDateShort, type Entreprise } from '@/types';
+import { useAuth } from '@/lib/auth';
+import { mergeBoutiqueHeaderIntoEntreprise, type Entreprise } from '@/types';
 
 export interface ReportColumn {
   key: string;
@@ -22,7 +22,9 @@ export interface ReportData {
 const ROWS_PER_PAGE = 25;
 
 export function PrintableReport({ data }: { data: ReportData }) {
-  const { title, subtitle, entreprise, columns, rows, summaryRows, periodLabel } = data;
+  const { currentBoutique } = useAuth();
+  const { title, subtitle, entreprise: rawEntreprise, columns, rows, summaryRows, periodLabel } = data;
+  const entreprise = mergeBoutiqueHeaderIntoEntreprise(rawEntreprise, currentBoutique);
   const totalPages = Math.max(1, Math.ceil(rows.length / ROWS_PER_PAGE));
 
   const pages: Record<string, unknown>[][] = [];

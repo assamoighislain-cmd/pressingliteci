@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { db } from '@/lib/db';
+import { useAuth } from '@/lib/auth';
 import { useI18n } from '@/lib/i18n';
 import {
   Client,
@@ -13,6 +14,7 @@ import {
   getTraitementLabelById,
   buildWhatsAppUrl,
   formatEntrepriseHeader,
+  resolveReceiptHeader,
 } from '@/types';
 import { Search, Receipt, Printer, ChevronRight, ArrowLeft, Phone, MessageCircle } from 'lucide-react';
 import type { Entreprise } from '@/types';
@@ -31,6 +33,7 @@ interface ReleveRow {
 
 export default function ReleveClient() {
   const { t, lang } = useI18n();
+  const { currentBoutique } = useAuth();
   const [searchTerm, setSearchTerm] = useState('');
   const [clients, setClients] = useState<Client[]>([]);
   const [loadingClients, setLoadingClients] = useState(false);
@@ -130,15 +133,21 @@ export default function ReleveClient() {
           <ArrowLeft className="w-4 h-4" /> {t('retrait.backToSearch')}
         </button>
 
-        {/* Print-only company header */}
-        <div className="hidden print:block text-center mb-4 pb-2 border-b border-slate-300">
-          <p className="text-lg font-bold">{entreprise?.nom ?? ''}</p>
-          {entreprise?.telephone && <p className="text-sm text-slate-500">{lang === 'fr' ? 'Tél' : 'Tel'}: {entreprise.telephone}</p>}
-          {(entreprise?.adresse || entreprise?.ville) && (
-            <p className="text-sm text-slate-500">{[entreprise?.adresse, entreprise?.ville].filter(Boolean).join(', ')}</p>
-          )}
-          {entreprise?.slogan && <p className="text-sm text-slate-500 mt-1">{entreprise.slogan}</p>}
-        </div>
+        {/* Print-only boutique receipt header */}
+        {(() => {
+          const releveHeader = resolveReceiptHeader(entreprise, currentBoutique);
+          return (
+            <div className="hidden print:block text-center mb-4 pb-2 border-b border-slate-300">
+              <p className="text-lg font-bold">{releveHeader.nom}</p>
+              {releveHeader.telephone && <p className="text-sm text-slate-500">{lang === 'fr' ? 'Tél' : 'Tel'}: {releveHeader.telephone}</p>}
+              {(releveHeader.adresse || releveHeader.ville) && (
+                <p className="text-sm text-slate-500">{[releveHeader.adresse, releveHeader.ville].filter(Boolean).join(', ')}</p>
+              )}
+              {releveHeader.email && <p className="text-sm text-slate-500">{releveHeader.email}</p>}
+              {releveHeader.slogan && <p className="text-sm text-slate-500 mt-1">{releveHeader.slogan}</p>}
+            </div>
+          );
+        })()}
 
         {/* Client header */}
         <div className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
@@ -162,13 +171,14 @@ export default function ReleveClient() {
                 </button>
                 {selectedClient.telephone && (() => {
                   const lignes: string[] = [];
+                  const releveHeader = resolveReceiptHeader(entreprise, currentBoutique);
                   const header = formatEntrepriseHeader({
-                    nom: entreprise?.nom,
-                    telephone: entreprise?.telephone,
-                    adresse: entreprise?.adresse,
-                    ville: entreprise?.ville,
-                    email: entreprise?.email,
-                    slogan: entreprise?.slogan,
+                    nom: releveHeader.nom,
+                    telephone: releveHeader.telephone,
+                    adresse: releveHeader.adresse,
+                    ville: releveHeader.ville,
+                    email: releveHeader.email,
+                    slogan: releveHeader.slogan,
                   });
                   if (header.length > 0) {
                     lignes.push(...header);

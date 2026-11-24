@@ -115,6 +115,7 @@ export interface Depot {
   frais_collecte: number;
   collected_at: string | null;
   ready_for_delivery?: boolean | null;
+  boutique_id?: string | null;
   created_at: string;
 }
 
@@ -187,8 +188,95 @@ export interface Boutique {
   depot_start_year?: number | null;
   latitude?: number | null;
   longitude?: number | null;
+  email?: string | null;
+  slogan?: string | null;
+  message_pied?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface ResolvedReceiptHeader {
+  nom: string;
+  adresse: string | null;
+  ville: string | null;
+  telephone: string | null;
+  email: string | null;
+  slogan: string | null;
+  message_pied: string | null;
+}
+
+/**
+ * Resolves the receipt/invoice header for a boutique:
+ * - Business name is always the boutique's own name (falling back to company name only if no boutique).
+ * - Address & city belong to the boutique itself (never leaking another branch's address when the boutique defines its own).
+ * - Phone, email, slogan and footer message use the boutique's values with clean fallback to company defaults.
+ */
+export function resolveReceiptHeader(
+  entreprise: Entreprise | null | undefined,
+  boutique: Boutique | null | undefined,
+): ResolvedReceiptHeader {
+  const bNom = boutique?.nom?.trim() || '';
+  const eNom = entreprise?.nom?.trim() || '';
+
+  const bAdresse = boutique?.adresse?.trim() || null;
+  const bVille = boutique?.ville?.trim() || null;
+  const boutiqueHasOwnLocation = Boolean(bAdresse || bVille);
+
+  return {
+    nom: bNom || eNom,
+    adresse: boutiqueHasOwnLocation ? bAdresse : (entreprise?.adresse?.trim() || null),
+    ville: boutiqueHasOwnLocation ? bVille : (entreprise?.ville?.trim() || null),
+    telephone: boutique?.telephone?.trim() || entreprise?.telephone?.trim() || null,
+    email: boutique?.email?.trim() || entreprise?.email?.trim() || null,
+    slogan: boutique?.slogan?.trim() || entreprise?.slogan?.trim() || null,
+    message_pied: boutique?.message_pied?.trim() || entreprise?.message_pied?.trim() || null,
+  };
+}
+
+export function mergeBoutiqueHeaderIntoEntreprise(
+  entreprise: Entreprise | null | undefined,
+  boutique: Boutique | null | undefined,
+): Entreprise | null {
+  if (!entreprise && !boutique) return null;
+  const h = resolveReceiptHeader(entreprise, boutique);
+  if (!entreprise) {
+    return {
+      id: boutique?.id ?? '',
+      nom: h.nom,
+      adresse: h.adresse,
+      ville: h.ville,
+      telephone: h.telephone,
+      email: h.email,
+      logo_url: null,
+      slogan: h.slogan,
+      message_pied: h.message_pied,
+      pickup_days: null,
+      phone_prefix: null,
+      hist_filters_commercial: null,
+      hist_filters_gerant: null,
+      fidelite_points_per_unit: 0,
+      fidelite_redeem_threshold: 0,
+      fidelite_redeem_value: 0,
+      dashboard_visible_roles: null,
+      delivery_base_fee: 0,
+      delivery_price_per_km: 0,
+      delivery_latitude: null,
+      delivery_longitude: null,
+      label_fields: null,
+      created_at: boutique?.created_at ?? '',
+      updated_at: boutique?.updated_at ?? '',
+    };
+  }
+  return {
+    ...entreprise,
+    nom: h.nom,
+    adresse: h.adresse,
+    ville: h.ville,
+    telephone: h.telephone,
+    email: h.email,
+    slogan: h.slogan,
+    message_pied: h.message_pied,
+  };
 }
 
 export interface FidelitePoints {

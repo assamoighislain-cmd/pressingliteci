@@ -103,8 +103,8 @@ export default function AuthForm() {
           } else if (lowerErr.includes('invalid login credentials')) {
             setError(
               lang === 'fr'
-                ? `Identifiants invalides pour « ${normalizedEmail} » : vérifiez le mot de passe (sans espace), ou assurez-vous que l'adresse email est bien confirmée dans Supabase. Si ce compte existait déjà auparavant, utilisez son ancien mot de passe ou « Mot de passe oublié ? ».`
-                : `Invalid login credentials for "${normalizedEmail}": check the password (no extra spaces), or verify that the email is confirmed in Supabase. If the account already existed, use its previous password or "Forgot password?".`,
+                ? `Email ou mot de passe incorrect pour « ${normalizedEmail} ». Si ce compte a été créé par un administrateur ou existait déjà auparavant, demandez-lui de cliquer sur l'icône Clé (🔑) dans « Utilisateurs » pour définir un nouveau mot de passe vérifié.`
+                : `Incorrect email or password for "${normalizedEmail}". If this account was created by an admin or already existed before, ask them to click the Key icon (🔑) under "Users" to set a verified password.`,
             );
           } else {
             setError(result.error);

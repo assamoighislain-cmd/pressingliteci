@@ -47,8 +47,69 @@ export interface CreateOrAttachMemberResult {
   alreadyExisted: boolean;
   needsEmailConfirmation: boolean;
   passwordUpdated?: boolean;
+  passwordResetMissingRpc?: boolean;
+  loginVerified?: boolean;
   email: string;
   password?: string;
+}
+
+export function buildMemberPasswordResetSql(email: string, password: string): string {
+  const safeEmail = email.trim().toLowerCase().replace(/'/g, "''");
+  const safePw = password.trim().replace(/'/g, "''");
+  return `CREATE OR REPLACE FUNCTION public.admin_reset_member_password(target_user_id uuid, new_password text)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'extensions' AS $$
+DECLARE v_ok boolean := false;
+BEGIN
+  IF new_password IS NULL OR length(trim(new_password)) < 6 THEN RAISE EXCEPTION 'Mot de passe trop court (min. 6 caractères).'; END IF;
+  IF public.is_super_admin() OR EXISTS (SELECT 1 FROM public.entreprise_members em WHERE em.user_id = target_user_id AND public.is_tenant_admin(em.tenant_id)) THEN v_ok := true; END IF;
+  IF NOT v_ok THEN RAISE EXCEPTION 'Accès refusé.'; END IF;
+  UPDATE auth.users SET encrypted_password = extensions.crypt(trim(new_password), extensions.gen_salt('bf')), email_confirmed_at = COALESCE(email_confirmed_at, now()), updated_at = now() WHERE id = target_user_id;
+END;
+$$;
+GRANT EXECUTE ON FUNCTION public.admin_reset_member_password(uuid, text) TO authenticated;
+
+UPDATE auth.users
+SET encrypted_password = extensions.crypt('${safePw}', extensions.gen_salt('bf')),
+    email_confirmed_at = COALESCE(email_confirmed_at, now()),
+    updated_at = now()
+WHERE lower(email) = lower('${safeEmail}')
+RETURNING id, email, email_confirmed_at;`;
+}
+
+/**
+ * Tests whether an email + password can actually sign in on Supabase
+ * using an isolated ephemeral client (never touches the admin's active session).
+ */
+export async function verifyMemberLogin(
+  email: string,
+  password: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const cleanEmail = email.trim().toLowerCase();
+  const cleanPw = password.trim();
+  if (!cleanEmail || cleanPw.length < 6) {
+    return { ok: false, error: 'Email ou mot de passe trop court (min. 6 caractères).' };
+  }
+  const ephemeral = createEphemeralAuthClient();
+  try {
+    const { data, error } = await ephemeral.auth.signInWithPassword({
+      email: cleanEmail,
+      password: cleanPw,
+    });
+    try {
+      await ephemeral.auth.signOut({ scope: 'local' });
+    } catch {
+      // Ignore
+    }
+    if (error) {
+      return { ok: false, error: error.message };
+    }
+    if (data.session?.user) {
+      return { ok: true };
+    }
+    return { ok: false, error: 'Aucune session retournée.' };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : 'Erreur réseau' };
+  }
 }
 
 export async function adminResetMemberPassword(
@@ -299,12 +360,15 @@ export async function createOrAttachCompanyMember(
 
   // Step 3: Best-effort auto-confirm email (and apply new password if account already existed in 'create' mode)
   let passwordUpdated = false;
+  let passwordResetMissingRpc = false;
   if (memberUid) {
     if (params.mode === 'create' && alreadyExisted && cleanPassword.length >= 6) {
       const resetRes = await adminResetMemberPassword(memberUid, cleanPassword);
       if (!resetRes.error) {
         passwordUpdated = true;
         needsEmailConfirmation = false;
+      } else if (resetRes.missingRpc) {
+        passwordResetMissingRpc = true;
       }
     } else if (needsEmailConfirmation) {
       const { error: confirmErr } = await supabase.rpc('confirm_member_email', {
@@ -316,6 +380,14 @@ export async function createOrAttachCompanyMember(
     }
   }
 
+  // Step 4: Verify live against Supabase Auth that the credentials actually sign in
+  let loginVerified = false;
+  const activePassword = createdNewAccount || passwordUpdated ? cleanPassword : undefined;
+  if (activePassword && !needsEmailConfirmation) {
+    const check = await verifyMemberLogin(cleanEmail, activePassword);
+    loginVerified = check.ok;
+  }
+
   notifyRealtimeMutation('entreprise_members', true);
 
   return {
@@ -325,7 +397,9 @@ export async function createOrAttachCompanyMember(
     alreadyExisted,
     needsEmailConfirmation,
     passwordUpdated,
+    passwordResetMissingRpc,
+    loginVerified,
     email: cleanEmail,
-    password: createdNewAccount || passwordUpdated ? cleanPassword : undefined,
+    password: activePassword,
   };
 }

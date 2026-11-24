@@ -2,7 +2,12 @@ import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/lib/auth';
 import { useI18n } from '@/lib/i18n';
 import { db } from '@/lib/db';
-import { formatDepotNumero, getBillingPointCode, getBoutiqueGeo } from '@/lib/dbOfflineHelpers';
+import {
+  formatDepotNumero,
+  getBillingPointCode,
+  getBoutiqueGeo,
+  getBoutiqueReceiptHeader,
+} from '@/lib/dbOfflineHelpers';
 import {
   buildGoogleMapsDirectionsUrl,
   formatCoordsDisplay,
@@ -14,7 +19,7 @@ import {
   BoutiquesOverviewMap,
   GoogleMapsProvider,
 } from '@/components/BoutiquesMap';
-import type { Boutique } from '@/types';
+import { resolveReceiptHeader, type Boutique, type Entreprise } from '@/types';
 import {
   Store,
   Plus,
@@ -30,6 +35,8 @@ import {
   Navigation,
   ExternalLink,
   Crosshair,
+  Receipt,
+  Mail,
 } from 'lucide-react';
 
 export default function BoutiquesPage() {
@@ -45,11 +52,16 @@ export default function BoutiquesPage() {
   const [focusNonce, setFocusNonce] = useState(0);
   const mapSectionRef = useRef<HTMLDivElement | null>(null);
 
+  const [entreprise, setEntreprise] = useState<Entreprise | null>(null);
+
   const [form, setForm] = useState({
     nom: '',
     adresse: '',
     ville: '',
     telephone: '',
+    email: '',
+    slogan: '',
+    message_pied: '',
     depot_start_number: '',
     latitude: '',
     longitude: '',
@@ -60,14 +72,17 @@ export default function BoutiquesPage() {
 
   useEffect(() => {
     setLoading(false);
+    void db.getEntreprise().then((e) => setEntreprise(e));
     const onRefreshTick = () => setCounterTick((v) => v + 1);
     window.addEventListener('pressinglite:depot-start-seq-changed', onRefreshTick);
     window.addEventListener('pressinglite:billing-point-changed', onRefreshTick);
     window.addEventListener('pressinglite:boutique-geo-changed', onRefreshTick);
+    window.addEventListener('pressinglite:boutique-header-changed', onRefreshTick);
     return () => {
       window.removeEventListener('pressinglite:depot-start-seq-changed', onRefreshTick);
       window.removeEventListener('pressinglite:billing-point-changed', onRefreshTick);
       window.removeEventListener('pressinglite:boutique-geo-changed', onRefreshTick);
+      window.removeEventListener('pressinglite:boutique-header-changed', onRefreshTick);
     };
   }, []);
 
@@ -94,9 +109,15 @@ export default function BoutiquesPage() {
 
   const boutiquesWithCoords: Boutique[] = boutiques.map((b) => {
     const coords = resolveBoutiqueCoords(b);
-    return coords
-      ? { ...b, latitude: coords.latitude, longitude: coords.longitude }
-      : { ...b, latitude: null, longitude: null };
+    const localHeader = getBoutiqueReceiptHeader(b.id);
+    return {
+      ...b,
+      latitude: coords ? coords.latitude : null,
+      longitude: coords ? coords.longitude : null,
+      email: b.email ?? localHeader?.email ?? null,
+      slogan: b.slogan ?? localHeader?.slogan ?? null,
+      message_pied: b.message_pied ?? localHeader?.message_pied ?? null,
+    };
   });
 
   function openCreate() {
@@ -106,6 +127,9 @@ export default function BoutiquesPage() {
       adresse: '',
       ville: '',
       telephone: '',
+      email: '',
+      slogan: '',
+      message_pied: '',
       depot_start_number: '',
       latitude: '',
       longitude: '',
@@ -118,11 +142,15 @@ export default function BoutiquesPage() {
     setEditingBoutique(b);
     const existingStart = resolveBoutiqueStartNumber(b);
     const existingCoords = resolveBoutiqueCoords(b);
+    const localHeader = getBoutiqueReceiptHeader(b.id);
     setForm({
       nom: b.nom,
       adresse: b.adresse ?? '',
       ville: b.ville ?? '',
       telephone: b.telephone ?? '',
+      email: b.email ?? localHeader?.email ?? '',
+      slogan: b.slogan ?? localHeader?.slogan ?? '',
+      message_pied: b.message_pied ?? localHeader?.message_pied ?? '',
       depot_start_number: existingStart !== null ? String(existingStart) : '',
       latitude: existingCoords ? String(existingCoords.latitude) : '',
       longitude: existingCoords ? String(existingCoords.longitude) : '',
@@ -185,6 +213,9 @@ export default function BoutiquesPage() {
           adresse: form.adresse.trim() || null,
           ville: form.ville.trim() || null,
           telephone: form.telephone.trim() || null,
+          email: form.email.trim() || null,
+          slogan: form.slogan.trim() || null,
+          message_pied: form.message_pied.trim() || null,
           depot_start_number: parsedStart,
           depot_start_year: parsedStart !== null ? currentYear : null,
           latitude: parsedLat,
@@ -204,6 +235,9 @@ export default function BoutiquesPage() {
           adresse: form.adresse.trim() || null,
           ville: form.ville.trim() || null,
           telephone: form.telephone.trim() || null,
+          email: form.email.trim() || null,
+          slogan: form.slogan.trim() || null,
+          message_pied: form.message_pied.trim() || null,
           depot_start_number: parsedStart,
           depot_start_year: parsedStart !== null ? currentYear : null,
           latitude: parsedLat,
@@ -550,6 +584,106 @@ export default function BoutiquesPage() {
                       />
                     </div>
                   </div>
+                </div>
+
+                {/* Per-boutique receipt header section */}
+                <div className="pt-2 border-t border-slate-100 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Receipt className="w-4 h-4 text-sky-600" />
+                    <span className="text-sm font-semibold text-slate-800">
+                      {lang === 'fr' ? 'En-tête du reçu de cette boutique' : 'Receipt header for this boutique'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500">
+                    {lang === 'fr'
+                      ? "Le nom de cette boutique s'affiche comme nom de l'entreprise sur ses reçus, avec sa propre adresse, ville et téléphone."
+                      : "This boutique's name appears as the business name on its receipts, with its own address, city, and phone."}
+                  </p>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700 mb-1">
+                      {lang === 'fr' ? 'Email de la boutique (optionnel)' : 'Boutique email (optional)'}
+                    </label>
+                    <div className="relative">
+                      <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                      <input
+                        type="email"
+                        value={form.email}
+                        onChange={(e) => setForm({ ...form, email: e.target.value })}
+                        placeholder={entreprise?.email || 'contact@boutique.com'}
+                        className="w-full pl-10 pr-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700 mb-1">
+                      {lang === 'fr' ? 'Slogan en en-tête (optionnel)' : 'Receipt header slogan (optional)'}
+                    </label>
+                    <input
+                      type="text"
+                      value={form.slogan}
+                      onChange={(e) => setForm({ ...form, slogan: e.target.value })}
+                      placeholder={entreprise?.slogan || (lang === 'fr' ? 'Ex: Qualité et rapidité' : 'e.g. Fast & spotless')}
+                      className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700 mb-1">
+                      {lang === 'fr' ? 'Message pied de reçu (optionnel)' : 'Receipt footer message (optional)'}
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={form.message_pied}
+                      onChange={(e) => setForm({ ...form, message_pied: e.target.value })}
+                      placeholder={entreprise?.message_pied || (lang === 'fr' ? 'Ex: Merci de votre confiance — Retrait sous 30 jours' : 'e.g. Thank you for your trust')}
+                      className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent resize-none"
+                    />
+                  </div>
+
+                  {/* Live receipt header preview */}
+                  {(() => {
+                    const preview = resolveReceiptHeader(entreprise, {
+                      id: editingBoutique?.id ?? 'preview',
+                      tenant_id: editingBoutique?.tenant_id ?? '',
+                      nom: form.nom,
+                      adresse: form.adresse || null,
+                      ville: form.ville || null,
+                      telephone: form.telephone || null,
+                      email: form.email || null,
+                      slogan: form.slogan || null,
+                      message_pied: form.message_pied || null,
+                      is_default: editingBoutique?.is_default ?? false,
+                      slug: null,
+                      created_at: '',
+                      updated_at: '',
+                    });
+                    return (
+                      <div className="rounded-xl bg-slate-50 border border-dashed border-slate-300 p-3 text-center space-y-0.5">
+                        <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-1">
+                          {lang === 'fr' ? 'Aperçu en-tête du reçu' : 'Receipt header preview'}
+                        </p>
+                        <p className="text-sm font-bold text-slate-900">
+                          {preview.nom || (lang === 'fr' ? 'Nom de la boutique' : 'Boutique name')}
+                        </p>
+                        {preview.telephone && (
+                          <p className="text-xs text-slate-600">Tél: {preview.telephone}</p>
+                        )}
+                        {(preview.adresse || preview.ville) && (
+                          <p className="text-xs text-slate-600">
+                            {[preview.adresse, preview.ville].filter(Boolean).join(', ')}
+                          </p>
+                        )}
+                        {preview.email && (
+                          <p className="text-[11px] text-slate-500">{preview.email}</p>
+                        )}
+                        {preview.slogan && (
+                          <p className="text-[11px] italic text-slate-500">{preview.slogan}</p>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* GPS Location Picker */}

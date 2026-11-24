@@ -3,7 +3,7 @@ import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth';
 import { useI18n } from '@/lib/i18n';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
-import { createOrAttachCompanyMember, generateTemporaryPassword, adminResetMemberPassword } from '@/lib/memberCreator';
+import { createOrAttachCompanyMember, generateTemporaryPassword, adminResetMemberPassword, verifyMemberLogin, buildMemberPasswordResetSql } from '@/lib/memberCreator';
 import { buildWhatsAppUrl } from '@/types';
 import { UserPlus, Trash2, Shield, Crown, UserCog, Mail, Loader2, X, Check, Pencil, Phone, User, UserCheck, Clock, Store, Truck, RefreshCw, Lock, Eye, EyeOff, Copy, Sparkles, MessageCircle, KeyRound, AlertTriangle } from 'lucide-react';
 
@@ -70,12 +70,16 @@ export default function TeamManagement() {
     contact?: string;
     role: string;
     needsEmailConfirmation?: boolean;
+    loginVerified?: boolean;
   } | null>(null);
   const [copiedCreds, setCopiedCreds] = useState(false);
+  const [copiedPwOnly, setCopiedPwOnly] = useState(false);
   const [resetPwMember, setResetPwMember] = useState<Member | null>(null);
   const [resetPwValue, setResetPwValue] = useState('');
   const [resetPwMissingRpc, setResetPwMissingRpc] = useState(false);
   const [copiedSql, setCopiedSql] = useState(false);
+  const [testingLogin, setTestingLogin] = useState(false);
+  const [loginTestResult, setLoginTestResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -245,6 +249,7 @@ export default function TeamManagement() {
             contact: inviteContact.trim() || undefined,
             role: inviteRole,
             needsEmailConfirmation: res.needsEmailConfirmation,
+            loginVerified: res.loginVerified,
           });
           setSuccess(
             lang === 'fr'
@@ -255,9 +260,25 @@ export default function TeamManagement() {
           setCreatedCredentials(null);
           setSuccess(
             lang === 'fr'
-              ? `Ce compte existait déjà (${res.email}) : il a été directement rattaché à votre entreprise avec son mot de passe existant (cliquez sur l'icône Clé pour définir un nouveau mot de passe).`
-              : `This account already existed (${res.email}): it has been attached directly to your company with its existing password (click the Key icon to set a new password).`,
+              ? `Ce compte existait déjà (${res.email}) : il a été rattaché à votre entreprise, mais son ancien mot de passe est toujours actif.`
+              : `This account already existed (${res.email}): it has been attached to your company, but its previous password is still active.`,
           );
+          if (res.passwordResetMissingRpc && res.memberUserId && invitePassword.trim().length >= 6) {
+            setResetPwMember({
+              id: res.memberUserId,
+              user_id: res.memberUserId,
+              role: inviteRole,
+              created_at: new Date().toISOString(),
+              email: res.email,
+              full_name: inviteFullName.trim() || null,
+              contact: inviteContact.trim() || null,
+              boutique_id: null,
+            });
+            setResetPwValue(invitePassword.trim());
+            setResetPwMissingRpc(true);
+            setCopiedSql(false);
+            setLoginTestResult(null);
+          }
         } else {
           setCreatedCredentials(null);
           setSuccess(`${lang === 'fr' ? 'Membre rattaché' : 'Member attached'}: ${res.email}`);
@@ -334,7 +355,36 @@ export default function TeamManagement() {
     setResetPwValue(generateTemporaryPassword(10));
     setResetPwMissingRpc(false);
     setCopiedSql(false);
+    setLoginTestResult(null);
     setError(null);
+  }
+
+  async function handleTestMemberLogin() {
+    if (!resetPwMember || resetPwValue.trim().length < 6) return;
+    setTestingLogin(true);
+    setLoginTestResult(null);
+    try {
+      const res = await verifyMemberLogin(resetPwMember.email, resetPwValue);
+      if (res.ok) {
+        setLoginTestResult({
+          ok: true,
+          text:
+            lang === 'fr'
+              ? `Connexion vérifiée ! « ${resetPwMember.email} » peut se connecter immédiatement avec ce mot de passe.`
+              : `Login verified! "${resetPwMember.email}" can sign in immediately with this password.`,
+        });
+      } else {
+        setLoginTestResult({
+          ok: false,
+          text:
+            lang === 'fr'
+              ? `Échec de connexion (${res.error ?? 'identifiants invalides'}) : ce mot de passe n'est pas celui enregistré dans Supabase pour « ${resetPwMember.email} ». Cliquez sur « Activer & appliquer » ou exécutez le SQL ci-dessous.`
+              : `Login failed (${res.error ?? 'invalid credentials'}): this password does not match what is stored in Supabase for "${resetPwMember.email}". Click "Activate & apply" or run the SQL below.`,
+        });
+      }
+    } finally {
+      setTestingLogin(false);
+    }
   }
 
   async function handleResetMemberPassword() {
@@ -359,6 +409,7 @@ export default function TeamManagement() {
           contact: resetPwMember.contact ?? undefined,
           role: resetPwMember.role,
           needsEmailConfirmation: false,
+          loginVerified: true,
         });
         setSuccess(
           lang === 'fr'
@@ -526,8 +577,14 @@ export default function TeamManagement() {
         <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-4 space-y-3">
           <div className="flex items-start justify-between gap-2">
             <div>
-              <p className="text-sm font-semibold text-emerald-900">
-                {lang === 'fr' ? 'Identifiants du nouveau membre prêts à partager' : 'New member credentials ready to share'}
+              <p className="text-sm font-semibold text-emerald-900 flex items-center gap-2 flex-wrap">
+                <span>{lang === 'fr' ? 'Identifiants du nouveau membre prêts à partager' : 'New member credentials ready to share'}</span>
+                {createdCredentials.loginVerified && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-600 text-white text-[11px] font-medium">
+                    <Check className="w-3 h-3" />
+                    {lang === 'fr' ? 'Connexion vérifiée' : 'Login verified'}
+                  </span>
+                )}
               </p>
               <p className="text-xs text-emerald-700 mt-0.5">
                 {lang === 'fr'
@@ -546,7 +603,21 @@ export default function TeamManagement() {
           <div className="rounded-lg bg-white border border-emerald-200 p-3 text-xs font-mono space-y-1 text-slate-800">
             <div><span className="text-slate-400">Email :</span> <strong>{createdCredentials.email}</strong></div>
             {createdCredentials.password && (
-              <div><span className="text-slate-400">{lang === 'fr' ? 'Mot de passe :' : 'Password:'}</span> <strong>{createdCredentials.password}</strong></div>
+              <div className="flex items-center justify-between gap-2">
+                <div><span className="text-slate-400">{lang === 'fr' ? 'Mot de passe :' : 'Password:'}</span> <strong>{createdCredentials.password}</strong></div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(createdCredentials.password ?? '');
+                    setCopiedPwOnly(true);
+                    setTimeout(() => setCopiedPwOnly(false), 1800);
+                  }}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-sans text-[11px] font-medium"
+                >
+                  {copiedPwOnly ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                  {copiedPwOnly ? (lang === 'fr' ? 'Copié' : 'Copied') : (lang === 'fr' ? 'Copier' : 'Copy')}
+                </button>
+              </div>
             )}
             <div><span className="text-slate-400">{lang === 'fr' ? 'Rôle :' : 'Role:'}</span> <strong>{ROLE_LABELS[createdCredentials.role] ?? createdCredentials.role}</strong></div>
           </div>
@@ -829,22 +900,30 @@ export default function TeamManagement() {
               <input
                 type="text"
                 value={resetPwValue}
-                onChange={(e) => setResetPwValue(e.target.value)}
+                onChange={(e) => { setResetPwValue(e.target.value); setLoginTestResult(null); }}
                 minLength={6}
                 className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-sky-500"
               />
             </div>
 
+            {loginTestResult && (
+              <div className={`rounded-xl border p-3 text-xs ${
+                loginTestResult.ok
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                  : 'bg-red-50 border-red-200 text-red-700'
+              }`}>
+                {loginTestResult.text}
+              </div>
+            )}
+
             {resetPwMissingRpc && (() => {
-              const safeEmail = resetPwMember.email.replace(/'/g, "''");
-              const safePw = resetPwValue.trim().replace(/'/g, "''");
-              const sqlSnippet = `UPDATE auth.users\nSET encrypted_password = extensions.crypt('${safePw}', extensions.gen_salt('bf')),\n    email_confirmed_at = COALESCE(email_confirmed_at, now()),\n    updated_at = now()\nWHERE lower(email) = lower('${safeEmail}');`;
+              const sqlSnippet = buildMemberPasswordResetSql(resetPwMember.email, resetPwValue);
               return (
                 <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 space-y-2">
                   <p className="text-xs font-medium text-amber-900">
                     {lang === 'fr'
-                      ? 'La migration SQL n’est pas encore exécutée sur Supabase. Exécutez cette commande dans Supabase → SQL Editor pour activer immédiatement ce compte :'
-                      : 'The SQL migration is not yet applied on Supabase. Run this in Supabase → SQL Editor to unlock this account immediately:'}
+                      ? 'La migration SQL n’est pas encore exécutée sur Supabase. Exécutez cette commande dans Supabase → SQL Editor pour appliquer ce mot de passe immédiatement (puis cliquez sur « Tester ») :'
+                      : 'The SQL migration is not yet applied on Supabase. Run this in Supabase → SQL Editor to apply this password immediately (then click "Test"):'}
                   </p>
                   <pre className="text-[11px] font-mono bg-white border border-amber-200 rounded-lg p-2.5 overflow-x-auto text-slate-800 whitespace-pre-wrap">{sqlSnippet}</pre>
                   <button
@@ -863,13 +942,22 @@ export default function TeamManagement() {
               );
             })()}
 
-            <div className="flex gap-3 pt-1">
+            <div className="flex flex-wrap gap-2 pt-1">
               <button
                 type="button"
                 onClick={() => setResetPwMember(null)}
-                className="px-4 py-2.5 rounded-lg border border-slate-200 text-slate-600 text-sm font-medium hover:bg-slate-50"
+                className="px-3.5 py-2.5 rounded-lg border border-slate-200 text-slate-600 text-sm font-medium hover:bg-slate-50"
               >
                 {t('common.cancel')}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleTestMemberLogin()}
+                disabled={testingLogin || resetPwValue.trim().length < 6}
+                className="px-3.5 py-2.5 rounded-lg border border-sky-200 bg-sky-50 text-sky-700 text-sm font-medium hover:bg-sky-100 disabled:opacity-50 flex items-center justify-center gap-1.5"
+              >
+                {testingLogin ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                {lang === 'fr' ? 'Tester' : 'Test'}
               </button>
               <button
                 type="button"

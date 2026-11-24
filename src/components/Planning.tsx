@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
+import { useAuth } from '@/lib/auth';
 import { useI18n } from '@/lib/i18n';
 import { db } from '@/lib/db';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
-import { DepotWithClient, DepotWithArticles, DepotAvance, TypeTraitement, ModeReglementRow, Entreprise, formatPrice, formatDate, formatDateShort, getTraitementLabelById, getModeReglementLabel, buildWhatsAppMessage, buildWhatsAppUrl } from '@/types';
+import { DepotWithClient, DepotWithArticles, DepotAvance, TypeTraitement, ModeReglementRow, Entreprise, formatPrice, formatDate, formatDateShort, getTraitementLabelById, getModeReglementLabel, buildWhatsAppMessage, buildWhatsAppUrl, resolveReceiptHeader } from '@/types';
 import { Calendar, Clock, Check, ChevronDown, ChevronRight, ArrowUpFromLine, RotateCcw, Package, MessageCircle, Printer } from 'lucide-react';
 import { PrintableReport, printReport, type ReportData } from '@/components/PrintableReport';
 
@@ -17,6 +18,7 @@ interface DateGroup {
 
 export default function Planning() {
   const { t, lang } = useI18n();
+  const { boutiques, currentBoutique } = useAuth();
   const [depots, setDepots] = useState<DepotWithClient[]>([]);
   const [typesTraitement, setTypesTraitement] = useState<TypeTraitement[]>([]);
   const [modesReglement, setModesReglement] = useState<ModeReglementRow[]>([]);
@@ -56,13 +58,17 @@ export default function Planning() {
     if (!phone) return null;
     const originalAvance = depot.mode_reglement === 'AVANCE' ? (Number(depot.avance_amount) ?? 0) : 0;
     const reste = Math.max(0, Number(depot.total) - originalAvance);
+    const depotBoutique =
+      (depot.boutique_id ? boutiques.find((b) => b.id === depot.boutique_id) : null) ??
+      currentBoutique;
+    const header = resolveReceiptHeader(entreprise, depotBoutique);
     const message = buildWhatsAppMessage({
-      entrepriseNom: entreprise?.nom,
-      entrepriseTelephone: entreprise?.telephone,
-      entrepriseAdresse: entreprise?.adresse,
-      entrepriseVille: entreprise?.ville,
-      entrepriseEmail: entreprise?.email,
-      entrepriseSlogan: entreprise?.slogan,
+      entrepriseNom: header.nom,
+      entrepriseTelephone: header.telephone,
+      entrepriseAdresse: header.adresse,
+      entrepriseVille: header.ville,
+      entrepriseEmail: header.email,
+      entrepriseSlogan: header.slogan,
       entrepriseId: entreprise?.id,
       numero: depot.numero,
       portalCode: depot.clients?.portal_code ?? null,

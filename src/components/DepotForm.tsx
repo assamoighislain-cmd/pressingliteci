@@ -48,7 +48,7 @@ import {
   formatClientCode,
   normalizeBillingPointCode,
 } from '@/lib/dbOfflineHelpers';
-import { Entreprise, buildWhatsAppMessage, buildWhatsAppUrl, getModeReglementLabel, applyPhonePrefix } from '@/types';
+import { Entreprise, buildWhatsAppMessage, buildWhatsAppUrl, getModeReglementLabel, applyPhonePrefix, resolveReceiptHeader } from '@/types';
 
 interface ArticleDraft {
   id: string;
@@ -912,13 +912,14 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
                 ? success.total
                 : success.avanceAmount ?? 0;
               const reste = Math.max(0, success.total - totalPaye);
+              const receiptHeader = resolveReceiptHeader(entreprise, currentBoutique);
               const waMessage = buildWhatsAppMessage({
-                entrepriseNom: entreprise?.nom,
-                entrepriseTelephone: entreprise?.telephone,
-                entrepriseAdresse: entreprise?.adresse,
-                entrepriseVille: entreprise?.ville,
-                entrepriseEmail: entreprise?.email,
-                entrepriseSlogan: entreprise?.slogan,
+                entrepriseNom: receiptHeader.nom,
+                entrepriseTelephone: receiptHeader.telephone,
+                entrepriseAdresse: receiptHeader.adresse,
+                entrepriseVille: receiptHeader.ville,
+                entrepriseEmail: receiptHeader.email,
+                entrepriseSlogan: receiptHeader.slogan,
                 entrepriseId: entreprise?.id,
                 numero: success.numero,
                 clientNom: selectedClient?.nom ?? '—',
@@ -961,7 +962,7 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
           </button>
         </div>
 
-        <PrintableReceipt data={receiptData} format={printFormat} modesReglement={modesReglement} entreprise={entreprise} />
+        <PrintableReceipt data={receiptData} format={printFormat} modesReglement={modesReglement} entreprise={entreprise} boutique={currentBoutique} />
       </div>
     );
   }

@@ -7,7 +7,7 @@ import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import { usePushNotifications, playApprovalSound, notifyCompanyDemoLicencePush } from '@/hooks/usePushNotifications';
 import { notifyRealtimeMutation } from '@/lib/realtimeSync';
 import { buildWhatsAppUrl } from '@/types';
-import { createOrAttachCompanyMember, generateTemporaryPassword, adminResetMemberPassword } from '@/lib/memberCreator';
+import { createOrAttachCompanyMember, generateTemporaryPassword, adminResetMemberPassword, verifyMemberLogin, buildMemberPasswordResetSql } from '@/lib/memberCreator';
 import { Building2, UserPlus, Crown, Loader2, X, Check, Shield, Mail, Users, ChevronDown, ChevronRight, Trash2, UserCog, Pencil, Phone, User, KeyRound, Calendar, Plus, Ban, Copy, TrendingUp, AlertTriangle, Clock, BarChart3, UserCheck, Search, Filter, ArrowUpDown, MapPin, Navigation, Activity, ShoppingBag, Package, Store, DollarSign, ArrowDownUp, MessageCircle, Send, ExternalLink, BellRing, BellOff, Volume2, Truck, ArrowRightLeft, Lock, Eye, EyeOff, Sparkles } from 'lucide-react';
 
 type WhatsAppTemplateType = 'approval' | 'licence' | 'reminder' | 'custom';
@@ -126,12 +126,16 @@ export default function SuperAdminPage() {
     contact?: string;
     role: string;
     needsEmailConfirmation?: boolean;
+    loginVerified?: boolean;
   } | null>(null);
   const [copiedMemberCreds, setCopiedMemberCreds] = useState(false);
+  const [copiedMemberPwOnly, setCopiedMemberPwOnly] = useState(false);
   const [resetPwMember, setResetPwMember] = useState<{ member: Member; entrepriseNom: string } | null>(null);
   const [resetPwValue, setResetPwValue] = useState('');
   const [resetPwMissingRpc, setResetPwMissingRpc] = useState(false);
   const [copiedResetSql, setCopiedResetSql] = useState(false);
+  const [testingMemberLogin, setTestingMemberLogin] = useState(false);
+  const [memberLoginTestResult, setMemberLoginTestResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -625,6 +629,7 @@ export default function SuperAdminPage() {
             contact: memberContact.trim() || undefined,
             role: memberRole,
             needsEmailConfirmation: res.needsEmailConfirmation,
+            loginVerified: res.loginVerified,
           });
           setSuccess(
             `${lang === 'fr' ? 'Membre prêt dans' : 'Member ready in'} « ${entrepriseNom} » : ${res.email} (${ROLE_LABELS[memberRole] ?? memberRole})${duplicateHint}`,
@@ -632,8 +637,25 @@ export default function SuperAdminPage() {
         } else if (res.alreadyExisted) {
           setCreatedMemberCreds(null);
           setSuccess(
-            `${lang === 'fr' ? 'Compte existant rattaché à' : 'Existing account attached to'} « ${entrepriseNom} » : ${res.email} (${ROLE_LABELS[memberRole] ?? memberRole}) — utilisez le bouton Clé si vous souhaitez réinitialiser son mot de passe.${duplicateHint}`,
+            `${lang === 'fr' ? 'Compte existant rattaché à' : 'Existing account attached to'} « ${entrepriseNom} » : ${res.email} (${ROLE_LABELS[memberRole] ?? memberRole}) — son ancien mot de passe est toujours actif.${duplicateHint}`,
           );
+          if (res.passwordResetMissingRpc && res.memberUserId && memberPassword.trim().length >= 6) {
+            setResetPwMember({
+              entrepriseNom,
+              member: {
+                id: res.memberUserId,
+                user_id: res.memberUserId,
+                role: memberRole,
+                email: res.email,
+                full_name: memberFullName.trim() || null,
+                contact: memberContact.trim() || null,
+              },
+            });
+            setResetPwValue(memberPassword.trim());
+            setResetPwMissingRpc(true);
+            setCopiedResetSql(false);
+            setMemberLoginTestResult(null);
+          }
         } else {
           setCreatedMemberCreds(null);
           setSuccess(
@@ -661,7 +683,36 @@ export default function SuperAdminPage() {
     setResetPwValue(generateTemporaryPassword(10));
     setResetPwMissingRpc(false);
     setCopiedResetSql(false);
+    setMemberLoginTestResult(null);
     setError(null);
+  }
+
+  async function handleTestMemberLoginSuperAdmin() {
+    if (!resetPwMember || resetPwValue.trim().length < 6) return;
+    setTestingMemberLogin(true);
+    setMemberLoginTestResult(null);
+    try {
+      const res = await verifyMemberLogin(resetPwMember.member.email, resetPwValue);
+      if (res.ok) {
+        setMemberLoginTestResult({
+          ok: true,
+          text:
+            lang === 'fr'
+              ? `Connexion vérifiée ! « ${resetPwMember.member.email} » peut se connecter immédiatement avec ce mot de passe.`
+              : `Login verified! "${resetPwMember.member.email}" can sign in immediately with this password.`,
+        });
+      } else {
+        setMemberLoginTestResult({
+          ok: false,
+          text:
+            lang === 'fr'
+              ? `Échec de connexion (${res.error ?? 'identifiants invalides'}) : ce mot de passe ne correspond pas à celui enregistré dans Supabase pour « ${resetPwMember.member.email} ». Cliquez sur « Activer & appliquer » ou exécutez le SQL ci-dessous.`
+              : `Login failed (${res.error ?? 'invalid credentials'}): this password does not match what is stored in Supabase for "${resetPwMember.member.email}". Click "Activate & apply" or run the SQL below.`,
+        });
+      }
+    } finally {
+      setTestingMemberLogin(false);
+    }
   }
 
   async function handleResetMemberPasswordSuperAdmin() {
@@ -687,6 +738,7 @@ export default function SuperAdminPage() {
           contact: resetPwMember.member.contact ?? undefined,
           role: resetPwMember.member.role,
           needsEmailConfirmation: false,
+          loginVerified: true,
         });
         setSuccess(
           lang === 'fr'
@@ -1950,22 +2002,30 @@ export default function SuperAdminPage() {
               <input
                 type="text"
                 value={resetPwValue}
-                onChange={(e) => setResetPwValue(e.target.value)}
+                onChange={(e) => { setResetPwValue(e.target.value); setMemberLoginTestResult(null); }}
                 minLength={6}
                 className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-sky-500"
               />
             </div>
 
+            {memberLoginTestResult && (
+              <div className={`rounded-xl border p-3 text-xs ${
+                memberLoginTestResult.ok
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                  : 'bg-red-50 border-red-200 text-red-700'
+              }`}>
+                {memberLoginTestResult.text}
+              </div>
+            )}
+
             {resetPwMissingRpc && (() => {
-              const safeEmail = resetPwMember.member.email.replace(/'/g, "''");
-              const safePw = resetPwValue.trim().replace(/'/g, "''");
-              const sqlSnippet = `UPDATE auth.users\nSET encrypted_password = extensions.crypt('${safePw}', extensions.gen_salt('bf')),\n    email_confirmed_at = COALESCE(email_confirmed_at, now()),\n    updated_at = now()\nWHERE lower(email) = lower('${safeEmail}');`;
+              const sqlSnippet = buildMemberPasswordResetSql(resetPwMember.member.email, resetPwValue);
               return (
                 <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 space-y-2">
                   <p className="text-xs font-medium text-amber-900">
                     {lang === 'fr'
-                      ? 'La migration SQL n’est pas encore exécutée sur Supabase. Exécutez cette commande dans Supabase → SQL Editor pour activer immédiatement ce compte :'
-                      : 'The SQL migration is not yet applied on Supabase. Run this in Supabase → SQL Editor to unlock this account immediately:'}
+                      ? 'La migration SQL n’est pas encore exécutée sur Supabase. Exécutez cette commande dans Supabase → SQL Editor pour appliquer ce mot de passe immédiatement (puis cliquez sur « Tester ») :'
+                      : 'The SQL migration is not yet applied on Supabase. Run this in Supabase → SQL Editor to apply this password immediately (then click "Test"):'}
                   </p>
                   <pre className="text-[11px] font-mono bg-white border border-amber-200 rounded-lg p-2.5 overflow-x-auto text-slate-800 whitespace-pre-wrap">{sqlSnippet}</pre>
                   <button
@@ -1984,13 +2044,22 @@ export default function SuperAdminPage() {
               );
             })()}
 
-            <div className="flex gap-3 pt-1">
+            <div className="flex flex-wrap gap-2 pt-1">
               <button
                 type="button"
                 onClick={() => setResetPwMember(null)}
-                className="px-4 py-2.5 rounded-lg border border-slate-200 text-slate-600 text-sm font-medium hover:bg-slate-50"
+                className="px-3.5 py-2.5 rounded-lg border border-slate-200 text-slate-600 text-sm font-medium hover:bg-slate-50"
               >
                 {t('common.cancel')}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleTestMemberLoginSuperAdmin()}
+                disabled={testingMemberLogin || resetPwValue.trim().length < 6}
+                className="px-3.5 py-2.5 rounded-lg border border-sky-200 bg-sky-50 text-sky-700 text-sm font-medium hover:bg-sky-100 disabled:opacity-50 flex items-center justify-center gap-1.5"
+              >
+                {testingMemberLogin ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                {lang === 'fr' ? 'Tester' : 'Test'}
               </button>
               <button
                 type="button"
@@ -2416,10 +2485,18 @@ export default function SuperAdminPage() {
         <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-4 space-y-3">
           <div className="flex items-start justify-between gap-2">
             <div>
-              <p className="text-sm font-semibold text-emerald-900">
-                {lang === 'fr'
-                  ? `Nouveau membre créé dans « ${createdMemberCreds.entrepriseNom} »`
-                  : `New member created in "${createdMemberCreds.entrepriseNom}"`}
+              <p className="text-sm font-semibold text-emerald-900 flex items-center gap-2 flex-wrap">
+                <span>
+                  {lang === 'fr'
+                    ? `Nouveau membre créé dans « ${createdMemberCreds.entrepriseNom} »`
+                    : `New member created in "${createdMemberCreds.entrepriseNom}"`}
+                </span>
+                {createdMemberCreds.loginVerified && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-600 text-white text-[11px] font-medium">
+                    <Check className="w-3 h-3" />
+                    {lang === 'fr' ? 'Connexion vérifiée' : 'Login verified'}
+                  </span>
+                )}
               </p>
               <p className="text-xs text-emerald-700 mt-0.5">
                 {lang === 'fr'
@@ -2438,7 +2515,21 @@ export default function SuperAdminPage() {
           <div className="rounded-lg bg-white border border-emerald-200 p-3 text-xs font-mono space-y-1 text-slate-800">
             <div><span className="text-slate-400">Email :</span> <strong>{createdMemberCreds.email}</strong></div>
             {createdMemberCreds.password && (
-              <div><span className="text-slate-400">{lang === 'fr' ? 'Mot de passe :' : 'Password:'}</span> <strong>{createdMemberCreds.password}</strong></div>
+              <div className="flex items-center justify-between gap-2">
+                <div><span className="text-slate-400">{lang === 'fr' ? 'Mot de passe :' : 'Password:'}</span> <strong>{createdMemberCreds.password}</strong></div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(createdMemberCreds.password ?? '');
+                    setCopiedMemberPwOnly(true);
+                    setTimeout(() => setCopiedMemberPwOnly(false), 1800);
+                  }}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-sans text-[11px] font-medium"
+                >
+                  {copiedMemberPwOnly ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                  {copiedMemberPwOnly ? (lang === 'fr' ? 'Copié' : 'Copied') : (lang === 'fr' ? 'Copier' : 'Copy')}
+                </button>
+              </div>
             )}
             <div><span className="text-slate-400">{lang === 'fr' ? 'Rôle :' : 'Role:'}</span> <strong>{ROLE_LABELS[createdMemberCreds.role] ?? createdMemberCreds.role}</strong></div>
           </div>

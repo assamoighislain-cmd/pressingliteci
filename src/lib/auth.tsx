@@ -14,6 +14,7 @@ import {
   setDepotStartSeq,
   syncBoutiqueDepotStartSeqs,
   hydrateBoutiquesWithGeo,
+  hydrateBoutiquesWithReceiptHeader,
 } from '@/lib/dbOfflineHelpers';
 import type { Boutique } from '@/types';
 import { notifyCompanyDemoLicencePush } from '@/hooks/usePushNotifications';
@@ -102,7 +103,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     initialBackup?.user?.id ? readCachedMembership(initialBackup.user.id) : null;
   const initialBoutiqueState = initialMembership
     ? resolveInitialBoutiqueSelection(
-        hydrateBoutiquesWithGeo(initialMembership.boutiques ?? []),
+        hydrateBoutiquesWithReceiptHeader(hydrateBoutiquesWithGeo(initialMembership.boutiques ?? [])),
         initialMembership.memberBoutiqueId,
       )
     : { list: [], selected: null };
@@ -140,7 +141,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   function applyBoutiquesList(bsInput: Boutique[], memberBoutiqueId: string | null) {
     syncBoutiqueDepotStartSeqs(bsInput);
-    const hydrated = hydrateBoutiquesWithGeo(bsInput);
+    const hydrated = hydrateBoutiquesWithReceiptHeader(hydrateBoutiquesWithGeo(bsInput));
     const { list, selected } = resolveInitialBoutiqueSelection(hydrated, memberBoutiqueId);
     setBoutiques(list);
     setCurrentBoutique(selected);
@@ -169,7 +170,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setCurrentBoutique(null);
       return [];
     }
-    const bs = hydrateBoutiquesWithGeo((data as unknown as Boutique[]) ?? []);
+    const bs = hydrateBoutiquesWithReceiptHeader(hydrateBoutiquesWithGeo((data as unknown as Boutique[]) ?? []));
     applyBoutiquesList(bs, memberBoutiqueId);
     return bs;
   }
@@ -455,7 +456,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function signIn(email: string, password: string): Promise<{ error: string | null }> {
     resetTenantCache();
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    const cleanEmail = email.trim().toLowerCase();
+    let { data, error } = await supabase.auth.signInWithPassword({ email: cleanEmail, password });
+
+    // If user accidentally copied a leading/trailing space in the password, retry once with trimmed password
+    if (
+      error &&
+      error.message.toLowerCase().includes('invalid login credentials') &&
+      password !== password.trim() &&
+      password.trim().length >= 6
+    ) {
+      const retry = await supabase.auth.signInWithPassword({
+        email: cleanEmail,
+        password: password.trim(),
+      });
+      data = retry.data;
+      error = retry.error;
+    }
+
     if (data?.session?.user) {
       writeOfflineSessionBackup(data.session);
       setSession(data.session);

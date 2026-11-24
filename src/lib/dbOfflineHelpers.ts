@@ -492,6 +492,124 @@ export function hydrateBoutiquesWithGeo<
   });
 }
 
+export interface BoutiqueReceiptHeaderLocal {
+  email: string | null;
+  slogan: string | null;
+  message_pied: string | null;
+}
+
+function boutiqueReceiptHeaderStorageKey(boutiqueId: string): string {
+  return `pressinglite_boutique_receipt_header_${boutiqueId}`;
+}
+
+export function getBoutiqueReceiptHeader(
+  boutiqueId: string | null,
+): BoutiqueReceiptHeaderLocal | null {
+  if (!boutiqueId) return null;
+  try {
+    const raw = localStorage.getItem(boutiqueReceiptHeaderStorageKey(boutiqueId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<BoutiqueReceiptHeaderLocal>;
+    return {
+      email: typeof parsed?.email === 'string' && parsed.email.trim() ? parsed.email.trim() : null,
+      slogan: typeof parsed?.slogan === 'string' && parsed.slogan.trim() ? parsed.slogan.trim() : null,
+      message_pied:
+        typeof parsed?.message_pied === 'string' && parsed.message_pied.trim()
+          ? parsed.message_pied.trim()
+          : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function setBoutiqueReceiptHeader(
+  boutiqueId: string | null,
+  header: Partial<BoutiqueReceiptHeaderLocal>,
+): void {
+  if (!boutiqueId) return;
+  const key = boutiqueReceiptHeaderStorageKey(boutiqueId);
+  try {
+    const existing = getBoutiqueReceiptHeader(boutiqueId) ?? {
+      email: null,
+      slogan: null,
+      message_pied: null,
+    };
+    const next: BoutiqueReceiptHeaderLocal = {
+      email: 'email' in header ? (header.email?.trim() || null) : existing.email,
+      slogan: 'slogan' in header ? (header.slogan?.trim() || null) : existing.slogan,
+      message_pied:
+        'message_pied' in header ? (header.message_pied?.trim() || null) : existing.message_pied,
+    };
+    if (!next.email && !next.slogan && !next.message_pied) {
+      localStorage.removeItem(key);
+    } else {
+      localStorage.setItem(key, JSON.stringify(next));
+    }
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('pressinglite:boutique-header-changed', {
+          detail: { boutiqueId, ...next },
+        }),
+      );
+    }
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+/**
+ * Hydrates per-boutique receipt header fields (email, slogan, message_pied) from Supabase rows
+ * when present, or merges locally persisted values if the SQL migration hasn't run yet.
+ */
+export function hydrateBoutiquesWithReceiptHeader<
+  T extends {
+    id: string;
+    email?: string | null;
+    slogan?: string | null;
+    message_pied?: string | null;
+  },
+>(boutiques: T[]): T[] {
+  if (!Array.isArray(boutiques) || boutiques.length === 0) return boutiques;
+  return boutiques.map((b) => {
+    if (!b?.id) return b;
+    const hasEmail = Object.prototype.hasOwnProperty.call(b, 'email') && b.email !== undefined;
+    const hasSlogan = Object.prototype.hasOwnProperty.call(b, 'slogan') && b.slogan !== undefined;
+    const hasFooter =
+      Object.prototype.hasOwnProperty.call(b, 'message_pied') && b.message_pied !== undefined;
+
+    if (hasEmail && hasSlogan && hasFooter) {
+      const normalized: BoutiqueReceiptHeaderLocal = {
+        email: b.email?.trim() || null,
+        slogan: b.slogan?.trim() || null,
+        message_pied: b.message_pied?.trim() || null,
+      };
+      const existing = getBoutiqueReceiptHeader(b.id);
+      if (
+        (!existing && (normalized.email || normalized.slogan || normalized.message_pied)) ||
+        (existing &&
+          (existing.email !== normalized.email ||
+            existing.slogan !== normalized.slogan ||
+            existing.message_pied !== normalized.message_pied))
+      ) {
+        setBoutiqueReceiptHeader(b.id, normalized);
+      }
+      return { ...b, ...normalized };
+    }
+
+    const local = getBoutiqueReceiptHeader(b.id);
+    if (local) {
+      return {
+        ...b,
+        email: hasEmail ? (b.email ?? null) : local.email,
+        slogan: hasSlogan ? (b.slogan ?? null) : local.slogan,
+        message_pied: hasFooter ? (b.message_pied ?? null) : local.message_pied,
+      };
+    }
+    return b;
+  });
+}
+
 export function getCompanyDepotStartSeq(year: number): number | null {
   try {
     const raw = localStorage.getItem(companyDepotStartSeqStorageKey(year));
