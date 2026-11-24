@@ -85,12 +85,12 @@ export default function ReleveClient() {
         0,
       );
       const montant = Number(depot.total);
-      const avance = Number(depot.avance_amount) ?? 0;
+      const avance = Number(depot.avance_amount) || 0;
       const mode = depot.mode_reglement;
       const extraAvances = await db.getAvancesForDepot(depot.id);
       const extraTotal = extraAvances.reduce((s, a) => s + Number(a.montant), 0);
-      const paye = mode === 'PAYER_DEPOT' ? montant : mode === 'AVANCE' ? avance + extraTotal : mode === 'SOLDE' ? montant : extraTotal;
-      const reste = montant - paye;
+      const paye = mode === 'PAYER_DEPOT' || mode === 'SOLDE' ? montant : avance + extraTotal;
+      const reste = Math.max(0, montant - paye);
 
       const traitementLibelle = getTraitementLabelById(depot.type_traitement_id, typesTraitement, depot.traitement);
 

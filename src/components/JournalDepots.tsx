@@ -145,9 +145,12 @@ export default function JournalDepots() {
   }, [allowedPeriods, period]);
 
   const avancesByDepot = useMemo(() => {
-    const map = new Map<string, number>();
+    const map = new Map<string, { total: number; modes: string[] }>();
     for (const av of avances) {
-      map.set(av.depot_id, (map.get(av.depot_id) ?? 0) + Number(av.montant));
+      const entry = map.get(av.depot_id) ?? { total: 0, modes: [] };
+      entry.total += Number(av.montant);
+      if (av.mode_reglement) entry.modes.push(av.mode_reglement);
+      map.set(av.depot_id, entry);
     }
     return map;
   }, [avances]);
@@ -178,7 +181,8 @@ export default function JournalDepots() {
       .map((d) => {
         const total = Number(d.total ?? 0);
         const initialAvance = d.avance_amount ? Number(d.avance_amount) : 0;
-        const extraAvances = avancesByDepot.get(d.id) ?? 0;
+        const avInfo = avancesByDepot.get(d.id);
+        const extraAvances = avInfo?.total ?? 0;
         const paid = Math.min(total, initialAvance + extraAvances);
         const reste = Math.max(0, total - (initialAvance + extraAvances));
         const pieces = (d.articles ?? []).reduce(
@@ -188,8 +192,22 @@ export default function JournalDepots() {
         const clientNom = d.client?.nom ?? d.clients?.nom ?? (lang === 'fr' ? 'Client inconnu' : 'Unknown client');
         const clientTel = d.client?.telephone ?? d.clients?.telephone ?? null;
         const traitementLabel = getTraitementLabelById(d.type_traitement_id, types, d.traitement);
-        const modeLabel = d.mode_reglement
-          ? getModeReglementLabel(d.mode_reglement, modes)
+        const rawModes: string[] = [];
+        if (d.mode_reglement && (initialAvance > 0 || extraAvances === 0)) {
+          rawModes.push(d.mode_reglement);
+        }
+        if (avInfo?.modes.length) {
+          rawModes.push(...avInfo.modes);
+        }
+        const uniqueModeLabels = Array.from(
+          new Set(
+            rawModes
+              .map((m) => getModeReglementLabel(m, modes))
+              .filter((lbl) => lbl && lbl !== '—'),
+          ),
+        );
+        const modeLabel = uniqueModeLabels.length > 0
+          ? uniqueModeLabels.join(' + ')
           : (lang === 'fr' ? 'Non réglé' : 'Unpaid');
 
         return {
@@ -223,6 +241,7 @@ export default function JournalDepots() {
           item.clientNom,
           item.clientTel ?? '',
           item.traitementLabel,
+          item.modeLabel,
         ]
           .join(' ')
           .toLowerCase();

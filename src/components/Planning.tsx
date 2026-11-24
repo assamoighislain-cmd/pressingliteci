@@ -56,7 +56,10 @@ export default function Planning() {
   function buildWhatsAppLink(depot: DepotWithClient): string | null {
     const phone = depot.clients?.telephone;
     if (!phone) return null;
-    const originalAvance = depot.mode_reglement === 'AVANCE' ? (Number(depot.avance_amount) ?? 0) : 0;
+    const originalAvance =
+      depot.mode_reglement === 'PAYER_DEPOT' || depot.mode_reglement === 'SOLDE'
+        ? Number(depot.total)
+        : Number(depot.avance_amount) || 0;
     const reste = Math.max(0, Number(depot.total) - originalAvance);
     const depotBoutique =
       (depot.boutique_id ? boutiques.find((b) => b.id === depot.boutique_id) : null) ??
@@ -479,10 +482,13 @@ export default function Planning() {
                                       <span className="text-slate-900">{formatPrice(Number(detailData.total))}</span>
                                     </div>
                                     {(() => {
-                                      const originalAvance = detailData.mode_reglement === 'AVANCE' ? (Number(detailData.avance_amount) ?? 0) : 0;
+                                      const originalAvance =
+                                        detailData.mode_reglement === 'PAYER_DEPOT' || detailData.mode_reglement === 'SOLDE'
+                                          ? Number(detailData.total)
+                                          : Number(detailData.avance_amount) || 0;
                                       const extraAvances = detailAvances.reduce((s, a) => s + Number(a.montant), 0);
                                       const totalPaye = originalAvance + extraAvances;
-                                      const reste = Number(detailData.total) - totalPaye;
+                                      const reste = Math.max(0, Number(detailData.total) - totalPaye);
                                       return (
                                         <>
                                           {totalPaye > 0 && (
@@ -497,11 +503,23 @@ export default function Planning() {
                                               <span className="text-red-600">{formatPrice(reste)}</span>
                                             </div>
                                           )}
-                                          {detailAvances.length > 0 && (
+                                          {(originalAvance > 0 || detailAvances.length > 0) && (
                                             <div className="pt-1 space-y-0.5">
+                                              {originalAvance > 0 && (
+                                                <div className="flex justify-between text-[0.7em] text-slate-400">
+                                                  <span>
+                                                    {formatDateShort(detailData.date_depot)}
+                                                    {detailData.mode_reglement ? ` · ${getModeReglementLabel(detailData.mode_reglement, modesReglement)}` : ''}
+                                                  </span>
+                                                  <span>{formatPrice(originalAvance)}</span>
+                                                </div>
+                                              )}
                                               {detailAvances.map((av) => (
                                                 <div key={av.id} className="flex justify-between text-[0.7em] text-slate-400">
-                                                  <span>{t('planning.avance', { date: formatDateShort(av.date_paiement) })}</span>
+                                                  <span>
+                                                    {formatDateShort(av.date_paiement)}
+                                                    {av.mode_reglement ? ` · ${getModeReglementLabel(av.mode_reglement, modesReglement)}` : ''}
+                                                  </span>
                                                   <span>{formatPrice(Number(av.montant))}</span>
                                                 </div>
                                               ))}

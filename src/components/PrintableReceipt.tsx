@@ -47,6 +47,30 @@ export interface ReceiptData {
   }[];
 }
 
+function computeReceiptTotalPaye(data: ReceiptData): number {
+  if (data.modeReglement === 'PAYER_DEPOT' || data.modeReglement === 'SOLDE') {
+    return data.total;
+  }
+  if (data.reglements && data.reglements.length > 0) {
+    return data.reglements.reduce((sum, r) => sum + Number(r.montant || 0), 0);
+  }
+  return data.avanceAmount ?? 0;
+}
+
+function formatReceiptPaymentModes(data: ReceiptData, modesReglement: ModeReglementRow[]): string {
+  if (data.reglements && data.reglements.length > 0) {
+    const uniqueLabels = Array.from(
+      new Set(
+        data.reglements
+          .map((r) => (r.modeReglement ? getModeReglementLabel(r.modeReglement, modesReglement) : ''))
+          .filter((lbl) => lbl && lbl !== '—'),
+      ),
+    );
+    if (uniqueLabels.length > 0) return uniqueLabels.join(' + ');
+  }
+  return getModeReglementLabel(data.modeReglement, modesReglement);
+}
+
 function TicketReceipt({
   data,
   entreprise,
@@ -59,10 +83,7 @@ function TicketReceipt({
   const { t, lang } = useI18n();
   const footerMessage = entreprise?.message_pied?.trim() || null;
 
-  const totalPaye =
-    data.modeReglement === 'PAYER_DEPOT' || data.modeReglement === 'SOLDE'
-      ? data.total
-      : data.avanceAmount ?? 0;
+  const totalPaye = computeReceiptTotalPaye(data);
   const reste = Math.max(0, data.total - totalPaye);
   const totalPieces = data.articles.reduce((sum, a) => sum + a.nb_pieces * a.quantite, 0);
 
@@ -194,7 +215,7 @@ function TicketReceipt({
 
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '16px', fontWeight: 700, marginBottom: '2mm' }}>
           <span>{t('retrait.payment')}</span>
-          <span style={{ fontWeight: 900 }}>{getModeReglementLabel(data.modeReglement, modesReglement)}</span>
+          <span style={{ fontWeight: 900 }}>{formatReceiptPaymentModes(data, modesReglement)}</span>
         </div>
 
         {data.reglements && data.reglements.length > 0 && (
@@ -274,10 +295,7 @@ function A5Receipt({
   const { t, lang } = useI18n();
   const footerMessage = entreprise?.message_pied?.trim() || null;
 
-  const totalPaye =
-    data.modeReglement === 'PAYER_DEPOT' || data.modeReglement === 'SOLDE'
-      ? data.total
-      : data.avanceAmount ?? 0;
+  const totalPaye = computeReceiptTotalPaye(data);
   const reste = Math.max(0, data.total - totalPaye);
 
   return (
@@ -380,7 +398,7 @@ function A5Receipt({
         </div>
         <div className="flex justify-between">
           <span className="text-slate-700 font-semibold">{t('retrait.payment')}:</span>
-          <span className="font-semibold">{getModeReglementLabel(data.modeReglement, modesReglement)}</span>
+          <span className="font-semibold">{formatReceiptPaymentModes(data, modesReglement)}</span>
         </div>
         {data.reglements && data.reglements.length > 0 && (
           <div className="mt-0.5 space-y-0">

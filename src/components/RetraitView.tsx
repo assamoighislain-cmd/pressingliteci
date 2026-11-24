@@ -174,14 +174,14 @@ export default function RetraitView() {
         setAvances((prev) => [...prev, createdAvance]);
       }
 
-      const updateError = await db.updateDepot(selected.id, { mode_reglement: newMode });
-
-      if (updateError) {
-        setError(updateError);
-        return;
+      if (!selected.mode_reglement) {
+        const updateError = await db.updateDepot(selected.id, { mode_reglement: newMode });
+        if (updateError) {
+          setError(updateError);
+          return;
+        }
+        setSelected({ ...selected, mode_reglement: newMode });
       }
-
-      setSelected({ ...selected, mode_reglement: newMode });
     } catch (err) {
       setError(err instanceof Error ? err.message : t('retrait.errorReglement'));
     } finally {
@@ -302,7 +302,7 @@ export default function RetraitView() {
       }
 
       const totalAvanceAmount = originalAvance + totalAvances;
-      const finalModeReglement: ModeReglement | null = avanceMode || selected.mode_reglement || null;
+      const finalModeReglement: ModeReglement | null = selected.mode_reglement || avanceMode || null;
 
       const reglementsList: { montant: number; modeReglement: string | null; datePaiement: string }[] = [];
       if (originalAvance > 0) {
@@ -753,6 +753,36 @@ export default function RetraitView() {
                   <span className="font-medium text-emerald-600">{formatPrice(totalPaye)}</span>
                 </div>
               )}
+              {(originalAvance > 0 || avances.length > 0) && (
+                <div className="mt-1 mb-1 rounded-lg bg-slate-50 border border-slate-100 px-3 py-2 space-y-1">
+                  {originalAvance > 0 && (
+                    <div className="flex justify-between items-center text-xs text-slate-600">
+                      <span className="flex items-center gap-1.5">
+                        {formatDateShort(selected.date_depot)}
+                        {selected.mode_reglement && (
+                          <span className="px-1.5 py-0.5 rounded bg-slate-200 text-slate-700 text-[0.65rem] font-medium">
+                            {getModeReglementLabel(selected.mode_reglement, modesReglement)}
+                          </span>
+                        )}
+                      </span>
+                      <span className="font-medium text-emerald-600">{formatPrice(originalAvance)}</span>
+                    </div>
+                  )}
+                  {avances.map((av) => (
+                    <div key={av.id} className="flex justify-between items-center text-xs text-slate-600">
+                      <span className="flex items-center gap-1.5">
+                        {formatDateShort(av.date_paiement)}
+                        {av.mode_reglement && (
+                          <span className="px-1.5 py-0.5 rounded bg-slate-200 text-slate-700 text-[0.65rem] font-medium">
+                            {getModeReglementLabel(av.mode_reglement, modesReglement)}
+                          </span>
+                        )}
+                      </span>
+                      <span className="font-medium text-emerald-600">{formatPrice(Number(av.montant))}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
               {reste > 0 && (
                 <div className="flex justify-between py-2 pt-3 border-t border-slate-100">
                   <span className="text-sm font-semibold text-slate-700">{t('retrait.remaining')}</span>
@@ -883,8 +913,21 @@ export default function RetraitView() {
                   <Wallet className="w-4 h-4 text-amber-600" />
                   <p className="text-sm font-semibold text-amber-700">{t('retrait.payment')}</p>
                 </div>
-                {avances.length > 0 && (
+                {(originalAvance > 0 || avances.length > 0) && (
                   <div className="space-y-1">
+                    {originalAvance > 0 && (
+                      <div className="flex justify-between items-center text-xs text-slate-600 py-1 border-b border-amber-100 last:border-b-0">
+                        <span className="flex items-center gap-1.5">
+                          {formatDateShort(selected.date_depot)}
+                          {selected.mode_reglement && (
+                            <span className="px-1.5 py-0.5 rounded bg-slate-200 text-slate-600 text-[0.65rem] font-medium">
+                              {getModeReglementLabel(selected.mode_reglement, modesReglement)}
+                            </span>
+                          )}
+                        </span>
+                        <span className="font-medium text-emerald-600">{formatPrice(originalAvance)}</span>
+                      </div>
+                    )}
                     {avances.map((av) => (
                       <div key={av.id} className="flex justify-between items-center text-xs text-slate-600 py-1 border-b border-amber-100 last:border-b-0">
                         <span className="flex items-center gap-1.5">

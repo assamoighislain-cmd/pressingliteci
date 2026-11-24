@@ -67,6 +67,20 @@ function uid(): string {
   return Math.random().toString(36).slice(2);
 }
 
+interface PaymentLineDraft {
+  id: string;
+  modeReglement: ModeReglement;
+  montant: string;
+}
+
+function makeDefaultPaymentLine(montant = '', modeReglement: ModeReglement = ''): PaymentLineDraft {
+  return {
+    id: uid(),
+    modeReglement,
+    montant,
+  };
+}
+
 function makeDefaultArticle(): ArticleDraft {
   return {
     id: uid(),
@@ -77,8 +91,8 @@ function makeDefaultArticle(): ArticleDraft {
     quantite: '1',
     nb_pieces: '1',
     couleur: '',
-    signe_particulier: 'AUCUN',
-    griffe: 'AUCUN',
+    signe_particulier: '',
+    griffe: '',
   };
 }
 
@@ -135,9 +149,8 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
     }
   }
 
-  // Paiement state
-  const [modeReglement, setModeReglement] = useState<ModeReglement>('');
-  const [avanceAmount, setAvanceAmount] = useState('');
+  // Paiement state (supports multiple payment methods per deposit)
+  const [paymentLines, setPaymentLines] = useState<PaymentLineDraft[]>([makeDefaultPaymentLine()]);
   const [notes, setNotes] = useState('');
 
   // Coupon state
@@ -156,6 +169,7 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
     coefficient: number;
     modeReglement: ModeReglement | null;
     avanceAmount: number;
+    reglements: { montant: number; modeReglement: string | null; datePaiement: string }[];
     notes: string | null;
     articles: {
       designation: string;
@@ -208,7 +222,11 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
       setAllVariants(variantsData);
       setModesReglement(modesData);
       setEntreprise(entreprise);
-      setFieldHistory({ couleur: couleurs, signe_particulier: signes, griffe: griffes });
+      setFieldHistory({
+        couleur: couleurs.filter((v) => v.toUpperCase() !== 'AUCUN'),
+        signe_particulier: signes.filter((v) => v.toUpperCase() !== 'AUCUN'),
+        griffe: griffes.filter((v) => v.toUpperCase() !== 'AUCUN'),
+      });
     })();
   }, []);
 
@@ -245,8 +263,8 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
       quantite: '1',
       nb_pieces: String(catalogItem.nb_pieces),
       couleur: '',
-      signe_particulier: 'AUCUN',
-      griffe: 'AUCUN',
+      signe_particulier: '',
+      griffe: '',
     };
     setArticles((prev) => {
       const hasEmpty = prev.length === 1 && !prev[0].designation.trim() && !prev[0].article_id;
@@ -358,11 +376,75 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
     : 0;
   const totalApresRemise = afterClientRemise - couponDiscount;
 
-  // Mode de règlement discount (applied when client selects a payment method with taux_remise > 0)
-  const selectedModeReglement = modesReglement.find((m) => m.designation === modeReglement);
-  const modeReglementTauxRemise = selectedModeReglement?.taux_remise ?? 0;
-  const modeReglementRemise = modeReglementTauxRemise > 0 ? Math.round(totalApresRemise * modeReglementTauxRemise / 100) : 0;
+  // Mode de règlement discount (supports single and multiple payment lines)
+  const paymentDiscountItems = paymentLines
+    .map((line) => ({
+      line,
+      amount: parseFloat(line.montant) || 0,
+      mode: modesReglement.find((m) => m.designation === line.modeReglement),
+    }))
+    .filter((item) => item.mode && item.mode.taux_remise > 0);
+
+  let modeReglementRemise = 0;
+  let modeReglementTauxRemise = 0;
+  let modeReglementRemiseLabel = '';
+
+  if (paymentLines.length === 1) {
+    const only = paymentDiscountItems[0];
+    if (only?.mode) {
+      modeReglementTauxRemise = only.mode.taux_remise;
+      modeReglementRemise = Math.round(totalApresRemise * modeReglementTauxRemise / 100);
+      modeReglementRemiseLabel = only.mode.designation;
+    }
+  } else if (paymentDiscountItems.length > 0) {
+    let remainingBase = totalApresRemise;
+    for (const item of paymentDiscountItems) {
+      if (!item.mode || item.amount <= 0 || remainingBase <= 0) continue;
+      const base = Math.min(item.amount, remainingBase);
+      modeReglementRemise += Math.round(base * item.mode.taux_remise / 100);
+      remainingBase -= base;
+    }
+    modeReglementRemise = Math.min(modeReglementRemise, totalApresRemise);
+    if (modeReglementRemise > 0) {
+      modeReglementTauxRemise = Math.round((modeReglementRemise / Math.max(1, totalApresRemise)) * 100);
+      modeReglementRemiseLabel = Array.from(
+        new Set(paymentDiscountItems.filter((i) => i.amount > 0 && i.mode).map((i) => i.mode!.designation)),
+      ).join(' + ');
+    }
+  }
+
   const totalFinal = totalApresRemise - modeReglementRemise;
+  const totalPayeInput = paymentLines.reduce((sum, l) => sum + (parseFloat(l.montant) || 0), 0);
+  const resteAPayer = Math.max(0, totalFinal - totalPayeInput);
+  const tropPercu = Math.max(0, totalPayeInput - totalFinal);
+
+  function updatePaymentLine(id: string, field: 'modeReglement' | 'montant', value: string) {
+    setPaymentLines((prev) => prev.map((l) => (l.id === id ? { ...l, [field]: value } : l)));
+  }
+
+  function addPaymentLine() {
+    const remaining = Math.max(0, totalFinal - totalPayeInput);
+    const usedModes = new Set(paymentLines.map((l) => l.modeReglement).filter(Boolean));
+    const nextMode = modesReglement.find((m) => !usedModes.has(m.designation))?.designation ?? '';
+    setPaymentLines((prev) => [
+      ...prev,
+      makeDefaultPaymentLine(remaining > 0 ? String(remaining) : '', nextMode),
+    ]);
+  }
+
+  function removePaymentLine(id: string) {
+    setPaymentLines((prev) => (prev.length > 1 ? prev.filter((l) => l.id !== id) : prev));
+  }
+
+  function fillRemainingForLine(id: string) {
+    const otherPaid = paymentLines
+      .filter((l) => l.id !== id)
+      .reduce((sum, l) => sum + (parseFloat(l.montant) || 0), 0);
+    const remaining = Math.max(0, totalFinal - otherPaid);
+    setPaymentLines((prev) =>
+      prev.map((l) => (l.id === id ? { ...l, montant: remaining > 0 ? String(remaining) : '' } : l)),
+    );
+  }
 
   // Compute date retrait prévue (auto, can be overridden)
   const autoDateRetraitPrevue = computeDateRetraitPrevueById(
@@ -474,8 +556,8 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
         quantite: '1',
         nb_pieces: String(created.nb_pieces),
         couleur: '',
-        signe_particulier: 'AUCUN',
-        griffe: 'AUCUN',
+        signe_particulier: '',
+        griffe: '',
       };
       if (forRowId) {
         setArticles((prev) => prev.map((a) => a.id === forRowId ? { ...newDraft, id: a.id } : a));
@@ -498,6 +580,23 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
 
   async function handleSubmit() {
     if (!selectedClient) return;
+
+    const paidLines = paymentLines
+      .map((l) => ({
+        modeReglement: l.modeReglement,
+        montant: parseFloat(l.montant) || 0,
+      }))
+      .filter((l) => l.montant > 0);
+
+    if (paidLines.length > 1 && paidLines.some((l) => !l.modeReglement)) {
+      setError(
+        lang === 'fr'
+          ? 'Veuillez sélectionner un mode de règlement pour chaque ligne de paiement.'
+          : 'Please select a payment method for each payment line.',
+      );
+      return;
+    }
+
     setSubmitting(true);
     setError(null);
 
@@ -508,8 +607,13 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
       }
       const numero = numeroResult.numero;
 
-      const avance = parseFloat(avanceAmount) || 0;
-      const modeReglementValue = modeReglement || null;
+      const primaryLine = paidLines[0] ?? {
+        modeReglement: paymentLines[0]?.modeReglement ?? '',
+        montant: 0,
+      };
+      const primaryAvance = primaryLine.montant;
+      const primaryModeReglement = primaryLine.modeReglement || null;
+      const totalPaid = paidLines.reduce((sum, l) => sum + l.montant, 0);
 
       const coef = getCoefficientById(typeTraitementId, typesTraitement);
       const selectedType = typesTraitement.find((t) => t.id === typeTraitementId);
@@ -519,8 +623,8 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
         numero,
         client_id: selectedClient.id,
         statut: 'EN_COURS',
-        mode_reglement: modeReglementValue,
-        avance_amount: avance,
+        mode_reglement: primaryModeReglement,
+        avance_amount: primaryAvance,
         total: totalFinal,
         traitement: traitementLibelle,
         taux_remise: tauxRemise,
@@ -557,9 +661,20 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
       const articlesError = await db.insertDepotArticles(articlesToInsert);
       if (articlesError) throw new Error(articlesError);
 
-      // Note: the initial avance is stored in depots.avance_amount (set above).
-      // Do NOT also insert it into depot_avances — that would double-count it
-      // in the retrait view (totalPaye = avance_amount + SUM(depot_avances)).
+      // The first payment line is stored in depots.avance_amount + depots.mode_reglement.
+      // Any additional payment lines are stored in depot_avances so there is zero double-counting
+      // (totalPaye = depots.avance_amount + SUM(depot_avances.montant)).
+      for (const extraLine of paidLines.slice(1)) {
+        const avRes = await db.insertAvance(
+          createdDepot.id,
+          extraLine.montant,
+          extraLine.modeReglement || undefined,
+          dateDepotEffective.toISOString(),
+        );
+        if (avRes.error) {
+          throw new Error(avRes.error);
+        }
+      }
 
       // Award fidelity points
       const ptsRate = entreprise?.fidelite_points_per_unit ?? 1;
@@ -580,6 +695,12 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
         await db.incrementBonUsage(appliedCoupon.id);
       }
 
+      const reglements = paidLines.map((l) => ({
+        montant: l.montant,
+        modeReglement: l.modeReglement || null,
+        datePaiement: dateDepotEffective.toISOString(),
+      }));
+
       setSuccess({
         numero,
         total: totalFinal,
@@ -592,8 +713,9 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
         dateDepot: dateDepotEffective.toISOString(),
         traitement: getTraitementLabelById(typeTraitementId, typesTraitement),
         coefficient: coef,
-        modeReglement: modeReglementValue,
-        avanceAmount: avance,
+        modeReglement: primaryModeReglement,
+        avanceAmount: totalPaid,
+        reglements,
         notes: notes.trim() || null,
         articles: articles.map((a) => {
           const prixTrait = parseFloat(a.prix_unitaire);
@@ -625,8 +747,7 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
     setDateRetraitOverride('');
     setDateDepotOverride('');
     setTypeTraitementId('');
-    setModeReglement('');
-    setAvanceAmount('');
+    setPaymentLines([makeDefaultPaymentLine()]);
     setNotes('');
     setCouponCode('');
     setAppliedCoupon(null);
@@ -677,9 +798,7 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
       modeReglementRemise: success.modeReglementRemise,
       modeReglementTauxRemise: success.modeReglementTauxRemise,
       notes: success.notes,
-      reglements: success.avanceAmount && success.avanceAmount > 0
-        ? [{ montant: success.avanceAmount, modeReglement: success.modeReglement, datePaiement: success.dateDepot }]
-        : [],
+      reglements: success.reglements,
       articles: success.articles,
     };
 
@@ -883,6 +1002,29 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
                   </span>
                 </div>
               </>
+            )}
+            {success.reglements.length > 0 && (
+              <div className="py-2 border-t border-slate-100 space-y-1">
+                <span className="text-xs font-medium text-slate-400 uppercase tracking-wide">
+                  {lang === 'fr' ? 'Règlements encaissés' : 'Payments received'}
+                </span>
+                {success.reglements.map((r, idx) => (
+                  <div key={idx} className="flex justify-between text-sm">
+                    <span className="text-slate-600">
+                      {r.modeReglement ? getModeReglementLabel(r.modeReglement, modesReglement) : '—'}
+                    </span>
+                    <span className="font-semibold text-emerald-600">{formatPrice(r.montant)}</span>
+                  </div>
+                ))}
+                {Math.max(0, success.total - success.avanceAmount) > 0 && (
+                  <div className="flex justify-between text-sm pt-1 border-t border-slate-100">
+                    <span className="text-red-500 font-medium">{t('depot.remainingToPay')}</span>
+                    <span className="font-semibold text-red-600">
+                      {formatPrice(Math.max(0, success.total - success.avanceAmount))}
+                    </span>
+                  </div>
+                )}
+              </div>
             )}
           </div>
 
@@ -1915,7 +2057,9 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
               <div className="flex justify-between text-sm">
                 <span className="text-amber-600 flex items-center gap-1.5">
                   <Percent className="w-3.5 h-3.5" />
-                  {lang === 'fr' ? `Remise ${modeReglementTauxRemise}% (${modeReglement})` : `Discount ${modeReglementTauxRemise}% (${modeReglement})`}
+                  {lang === 'fr'
+                    ? `Remise ${modeReglementTauxRemise}% (${modeReglementRemiseLabel || 'mode de règlement'})`
+                    : `Discount ${modeReglementTauxRemise}% (${modeReglementRemiseLabel || 'payment method'})`}
                 </span>
                 <span className="font-medium text-amber-600">−{formatPrice(modeReglementRemise)}</span>
               </div>
@@ -1928,48 +2072,144 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
             )}
           </div>
 
-          {/* Règlement — just before validation */}
-          <div className="border-t border-slate-200 pt-5 space-y-4">
-            <div>
-              <label className="block text-sm font-semibold text-slate-700 mb-1.5">
-                {t('depot.paymentMode')}
+          {/* Règlement(s) — multi-mode support just before validation */}
+          <div className="border-t border-slate-200 pt-5 space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="block text-sm font-semibold text-slate-700">
+                {paymentLines.length > 1
+                  ? (lang === 'fr' ? 'Modes de règlement' : 'Payment methods')
+                  : t('depot.paymentMode')}
               </label>
-              <select
-                value={modeReglement}
-                onChange={(e) => setModeReglement(e.target.value)}
-                className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent bg-white"
+              <button
+                type="button"
+                onClick={addPaymentLine}
+                className="inline-flex items-center gap-1.5 text-xs font-semibold text-sky-600 hover:text-sky-700 px-2.5 py-1.5 rounded-lg hover:bg-sky-50 transition-colors"
               >
-                <option value="">{t('depot.selectPaymentMode')}</option>
-                {modesReglement.map((mode) => (
-                  <option key={mode.id} value={mode.designation}>
-                    {mode.designation}{mode.taux_remise > 0 ? ` (−${mode.taux_remise}%)` : ''}
-                  </option>
-                ))}
-              </select>
-              {modeReglementTauxRemise > 0 && (
-                <p className="text-xs text-amber-600 mt-1.5 flex items-center gap-1">
-                  <Percent className="w-3 h-3" />
-                  {lang === 'fr' ? `Une remise de ${modeReglementTauxRemise}% sera appliquée avec ce mode de règlement.` : `A ${modeReglementTauxRemise}% discount will be applied with this payment method.`}
-                </p>
-              )}
+                <PlusCircle className="w-3.5 h-3.5" />
+                {lang === 'fr' ? 'Ajouter un mode' : 'Add method'}
+              </button>
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1.5">
-                {t('depot.payment')}
-              </label>
-              <input
-                type="number"
-                min="0"
-                value={avanceAmount}
-                onChange={(e) => setAvanceAmount(e.target.value)}
-                placeholder="0"
-                className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent"
-              />
-              <p className="text-xs text-slate-400 mt-1.5">
-                {t('depot.remainingToPay')}:{' '}
-                {formatPrice(totalFinal - (parseFloat(avanceAmount) || 0))}
-              </p>
+            <div className="space-y-2.5">
+              {paymentLines.map((line, index) => {
+                const lineMode = modesReglement.find((m) => m.designation === line.modeReglement);
+                return (
+                  <div
+                    key={line.id}
+                    className="rounded-xl bg-slate-50 border border-slate-200 p-3 space-y-2"
+                  >
+                    {paymentLines.length > 1 && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
+                          {lang === 'fr' ? `Règlement ${index + 1}` : `Payment ${index + 1}`}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => removePaymentLine(line.id)}
+                          className="text-slate-400 hover:text-red-500 p-1 rounded-md hover:bg-red-50 transition-colors"
+                          title={lang === 'fr' ? 'Supprimer ce règlement' : 'Remove payment'}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <div>
+                        <label className="block text-xs font-medium text-slate-500 mb-1">
+                          {t('depot.paymentMode')}
+                        </label>
+                        <select
+                          value={line.modeReglement}
+                          onChange={(e) => updatePaymentLine(line.id, 'modeReglement', e.target.value)}
+                          className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent bg-white"
+                        >
+                          <option value="">{t('depot.selectPaymentMode')}</option>
+                          {modesReglement.map((mode) => (
+                            <option key={mode.id} value={mode.designation}>
+                              {mode.designation}{mode.taux_remise > 0 ? ` (−${mode.taux_remise}%)` : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-medium text-slate-500 mb-1">
+                          {t('depot.payment')}
+                        </label>
+                        <div className="flex gap-1.5">
+                          <input
+                            type="number"
+                            min="0"
+                            value={line.montant}
+                            onChange={(e) => updatePaymentLine(line.id, 'montant', e.target.value)}
+                            placeholder="0"
+                            className="flex-1 min-w-0 px-3 py-2.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent bg-white"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => fillRemainingForLine(line.id)}
+                            className="px-2.5 py-2 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-sky-600 hover:bg-sky-50 hover:border-sky-200 transition-colors whitespace-nowrap"
+                            title={lang === 'fr' ? 'Remplir le reste à payer' : 'Fill remaining balance'}
+                          >
+                            {lang === 'fr' ? 'Solde' : 'Full'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {lineMode && lineMode.taux_remise > 0 && (
+                      <p className="text-xs text-amber-600 flex items-center gap-1">
+                        <Percent className="w-3 h-3" />
+                        {lang === 'fr'
+                          ? `Remise de ${lineMode.taux_remise}% applicable sur ce mode de règlement.`
+                          : `${lineMode.taux_remise}% discount applies to this payment method.`}
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {resteAPayer > 0 && totalPayeInput > 0 && (
+              <button
+                type="button"
+                onClick={addPaymentLine}
+                className="w-full py-2 px-3 rounded-lg border border-dashed border-sky-300 bg-sky-50/50 text-sky-700 text-xs font-semibold hover:bg-sky-50 transition-colors flex items-center justify-center gap-1.5"
+              >
+                <PlusCircle className="w-3.5 h-3.5" />
+                {lang === 'fr'
+                  ? `Compléter le reste (${formatPrice(resteAPayer)}) avec un autre mode`
+                  : `Pay remaining (${formatPrice(resteAPayer)}) with another method`}
+              </button>
+            )}
+
+            {/* Payment totals summary */}
+            <div className="rounded-xl bg-slate-50 border border-slate-200 px-3.5 py-2.5 space-y-1">
+              <div className="flex justify-between text-xs">
+                <span className="text-slate-500">
+                  {lang === 'fr' ? 'Total encaissé' : 'Total paid'}
+                </span>
+                <span className={`font-semibold ${totalPayeInput > 0 ? 'text-emerald-600' : 'text-slate-600'}`}>
+                  {formatPrice(totalPayeInput)}
+                </span>
+              </div>
+              <div className="flex justify-between text-xs">
+                <span className="text-slate-500">{t('depot.remainingToPay')}</span>
+                <span className={`font-semibold ${resteAPayer > 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+                  {resteAPayer > 0
+                    ? formatPrice(resteAPayer)
+                    : (lang === 'fr' ? 'Soldé (0)' : 'Settled (0)')}
+                </span>
+              </div>
+              {tropPercu > 0 && (
+                <div className="flex justify-between text-xs pt-1 border-t border-slate-200">
+                  <span className="text-amber-700 font-medium">
+                    {lang === 'fr' ? 'Trop-perçu / Monnaie à rendre' : 'Overpayment / Change'}
+                  </span>
+                  <span className="font-bold text-amber-700">{formatPrice(tropPercu)}</span>
+                </div>
+              )}
             </div>
           </div>
 

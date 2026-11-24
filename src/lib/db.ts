@@ -1715,10 +1715,12 @@ export const db = {
     })) as DepotAvance[];
   },
 
-  async insertAvance(depotId: string, montant: number, modeReglement?: string): Promise<{ data: DepotAvance | null; error: string | null }> {
+  async insertAvance(depotId: string, montant: number, modeReglement?: string, datePaiement?: string): Promise<{ data: DepotAvance | null; error: string | null }> {
+    const row: Record<string, unknown> = { depot_id: depotId, montant, mode_reglement: modeReglement ?? null };
+    if (datePaiement) row.date_paiement = datePaiement;
     const result = await insert<DepotAvance>({
       table: 'depot_avances',
-      rows: { depot_id: depotId, montant, mode_reglement: modeReglement ?? null },
+      rows: row,
       select: '*',
     });
     if (result.data) {

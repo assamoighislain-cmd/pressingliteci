@@ -711,8 +711,8 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
       nb_pieces: Number(cat.nb_pieces) || 1,
       prix_total: prixTraite,
       couleur: '',
-      signe_particulier: 'AUCUN',
-      griffe: 'AUCUN',
+      signe_particulier: '',
+      griffe: '',
     };
     setOrderArticles((prev) => [...prev, newArticle]);
     setSearchTerm('');
@@ -795,8 +795,8 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
           nb_pieces: 1,
           prix_total: 0,
           couleur: '',
-          signe_particulier: 'AUCUN',
-          griffe: 'AUCUN',
+          signe_particulier: '',
+          griffe: '',
         },
       ];
     });
@@ -1115,8 +1115,8 @@ export default function ClientPortal({ entrepriseId }: { entrepriseId: number })
         nb_pieces: Math.max(1, Number(a.nb_pieces) || 1),
         prix_total: Number(a.prix_total) || 0,
         couleur: a.couleur ?? '',
-        signe_particulier: a.signe_particulier ?? 'AUCUN',
-        griffe: a.griffe ?? 'AUCUN',
+        signe_particulier: a.signe_particulier && a.signe_particulier !== 'AUCUN' ? a.signe_particulier : '',
+        griffe: a.griffe && a.griffe !== 'AUCUN' ? a.griffe : '',
       };
     }));
     const parsedPickup = parseDayAndSlot(depot.pickup_day);
