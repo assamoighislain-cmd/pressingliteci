@@ -147,6 +147,12 @@ export default function SuperAdminPage() {
   const [transferTargetEntId, setTransferTargetEntId] = useState('');
   const [transferRole, setTransferRole] = useState('commercial');
   const [deleteEmptySourceEnt, setDeleteEmptySourceEnt] = useState(false);
+  const [confirmAction, setConfirmAction] = useState<{
+    title: string;
+    message: string;
+    confirmLabel: string;
+    onConfirm: () => Promise<void>;
+  } | null>(null);
   const [showLicenceModal, setShowLicenceModal] = useState<number | null>(null);
   const [licenceType, setLicenceType] = useState<'demo' | 'annuelle'>('demo');
   const [licenceStart, setLicenceStart] = useState('');
@@ -817,7 +823,19 @@ export default function SuperAdminPage() {
       let deletedDuplicateNote = '';
       if (deleteEmptySourceEnt && fromEntreprise.statut === 'pending' && fromEntreprise.members.length <= 1) {
         const { error: delEntErr } = await supabase.rpc('delete_entreprise', { entreprise_id: fromEntreprise.id });
-        if (!delEntErr) {
+        let deletedOk = !delEntErr;
+        if (!deletedOk) {
+          await supabase.from('join_requests').delete().eq('tenant_id', fromEntreprise.user_id);
+          await supabase.from('entreprise_members').delete().eq('tenant_id', fromEntreprise.user_id);
+          await supabase.from('licences').delete().eq('entreprise_id', fromEntreprise.id);
+          const { data: deletedRows, error: directErr } = await supabase
+            .from('entreprise')
+            .delete()
+            .eq('id', fromEntreprise.id)
+            .select('id');
+          deletedOk = !directErr && Boolean(deletedRows && deletedRows.length > 0);
+        }
+        if (deletedOk) {
           deletedDuplicateNote =
             lang === 'fr'
               ? ` (doublon en attente « ${fromEntreprise.nom} » supprimé)`
@@ -842,28 +860,74 @@ export default function SuperAdminPage() {
     }
   }
 
-  async function handleDeleteEntreprise(entrepriseId: number, nom: string) {
+  async function executeDeleteEntreprise(entrepriseId: number, nom: string) {
     if (!isOnline) return;
-    if (!window.confirm(lang === 'fr' ? `Supprimer définitivement l'entreprise « ${nom} » et TOUTES ses données (clients, dépôts, articles, membres) ? Cette action est irréversible.` : `Permanently delete company "${nom}" and ALL its data (clients, deposits, items, members)? This action is irreversible.`)) return;
     setSubmitting(true);
     setError(null);
     setSuccess(null);
 
     try {
-      const { error } = await supabase.rpc('delete_entreprise', { entreprise_id: entrepriseId });
+      const targetEnt = entreprises.find((ent) => ent.id === entrepriseId);
+      const { error: rpcError } = await supabase.rpc('delete_entreprise', { entreprise_id: entrepriseId });
 
-      if (error) {
-        setError(error.message);
-      } else {
-        setSuccess(lang === 'fr' ? `Entreprise « ${nom} » supprimée avec toutes ses données` : `Company "${nom}" deleted with all its data`);
-        setExpandedId(null);
-        await loadEntreprises();
+      if (rpcError) {
+        // Fallback: delete via Super Admin RLS policies + ON DELETE CASCADE
+        const tenantUid = targetEnt?.user_id;
+        if (tenantUid) {
+          await supabase.from('join_requests').delete().eq('tenant_id', tenantUid);
+          await supabase.from('entreprise_members').delete().eq('tenant_id', tenantUid);
+        }
+        await supabase.from('licences').delete().eq('entreprise_id', entrepriseId);
+        const { data: deletedRows, error: directErr } = await supabase
+          .from('entreprise')
+          .delete()
+          .eq('id', entrepriseId)
+          .select('id');
+
+        if (directErr || !deletedRows || deletedRows.length === 0) {
+          setError(
+            directErr?.message ||
+              rpcError.message ||
+              (lang === 'fr'
+                ? `Impossible de supprimer l'entreprise « ${nom} » (droits insuffisants ou données liées).`
+                : `Unable to delete company "${nom}" (insufficient permissions or linked records).`),
+          );
+          return;
+        }
       }
+
+      notifyRealtimeMutation('entreprise', true);
+      notifyRealtimeMutation('entreprise_members', true);
+      notifyRealtimeMutation('licences', true);
+      setSuccess(
+        lang === 'fr'
+          ? `Entreprise « ${nom} » supprimée avec toutes ses données`
+          : `Company "${nom}" deleted with all its data`,
+      );
+      setExpandedId(null);
+      await loadEntreprises(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : (lang === 'fr' ? 'Erreur lors de la suppression' : 'Error during deletion'));
+      setError(
+        err instanceof Error
+          ? err.message
+          : (lang === 'fr' ? 'Erreur lors de la suppression' : 'Error during deletion'),
+      );
     } finally {
       setSubmitting(false);
     }
+  }
+
+  function handleDeleteEntreprise(entrepriseId: number, nom: string) {
+    if (!isOnline) return;
+    setConfirmAction({
+      title: lang === 'fr' ? "Supprimer l'entreprise ?" : 'Delete company?',
+      message:
+        lang === 'fr'
+          ? `Supprimer définitivement l'entreprise « ${nom} » et TOUTES ses données (clients, dépôts, articles, boutiques, licences, membres) ? Cette action est irréversible.`
+          : `Permanently delete company "${nom}" and ALL its data (clients, deposits, items, shops, licenses, members)? This action is irreversible.`,
+      confirmLabel: lang === 'fr' ? 'Supprimer définitivement' : 'Delete permanently',
+      onConfirm: () => executeDeleteEntreprise(entrepriseId, nom),
+    });
   }
 
   function getEntreprisePhone(e: EntrepriseRow): string {
@@ -1069,25 +1133,38 @@ export default function SuperAdminPage() {
     }
   }
 
-  async function handleRemoveMember(memberId: string, tenantId: string) {
+  function handleRemoveMember(memberId: string, _tenantId: string) {
     if (!isOnline) return;
-    if (!window.confirm(lang === 'fr' ? 'Retirer ce membre de l\'entreprise ?' : 'Remove this member from the company?')) return;
-    setError(null);
-    try {
-      const { error } = await supabase
-        .from('entreprise_members')
-        .delete()
-        .eq('id', memberId);
+    setConfirmAction({
+      title: lang === 'fr' ? 'Retirer ce membre ?' : 'Remove this member?',
+      message:
+        lang === 'fr'
+          ? "Retirer ce membre de l'entreprise ? Il perdra l'accès à cet espace."
+          : 'Remove this member from the company? They will lose access to this workspace.',
+      confirmLabel: lang === 'fr' ? 'Retirer le membre' : 'Remove member',
+      onConfirm: async () => {
+        setSubmitting(true);
+        setError(null);
+        try {
+          const { error } = await supabase
+            .from('entreprise_members')
+            .delete()
+            .eq('id', memberId);
 
-      if (error) {
-        setError(error.message);
-      } else {
-        setSuccess(lang === 'fr' ? 'Membre retiré' : 'Member removed');
-        await loadEntreprises();
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : (lang === 'fr' ? 'Erreur lors du retrait' : 'Error during removal'));
-    }
+          if (error) {
+            setError(error.message);
+          } else {
+            notifyRealtimeMutation('entreprise_members', true);
+            setSuccess(lang === 'fr' ? 'Membre retiré' : 'Member removed');
+            await loadEntreprises(true);
+          }
+        } catch (err) {
+          setError(err instanceof Error ? err.message : (lang === 'fr' ? 'Erreur lors du retrait' : 'Error during removal'));
+        } finally {
+          setSubmitting(false);
+        }
+      },
+    });
   }
 
   async function handleChangeRole(memberId: string, newRole: string) {
@@ -1223,22 +1300,34 @@ export default function SuperAdminPage() {
     }
   }
 
-  async function handleRevokeLicence(licenceId: string) {
+  function handleRevokeLicence(licenceId: string) {
     if (!isOnline) return;
-    if (!window.confirm(lang === 'fr' ? "Révoquer cette licence ? L'entreprise perdra l'accès." : 'Revoke this license? The company will lose access.')) return;
-    setError(null);
-    try {
-      const { error } = await supabase.rpc('revoke_licence', { p_licence_id: licenceId });
-      if (error) {
-        setError(error.message);
-      } else {
-        notifyRealtimeMutation('licences', true);
-        setSuccess(lang === 'fr' ? 'Licence révoquée' : 'License revoked');
-        await loadEntreprises(true);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : (lang === 'fr' ? 'Erreur lors de la révocation' : 'Error during revocation'));
-    }
+    setConfirmAction({
+      title: lang === 'fr' ? 'Révoquer la licence ?' : 'Revoke license?',
+      message:
+        lang === 'fr'
+          ? "Révoquer cette licence ? L'entreprise perdra l'accès."
+          : 'Revoke this license? The company will lose access.',
+      confirmLabel: lang === 'fr' ? 'Révoquer' : 'Revoke',
+      onConfirm: async () => {
+        setSubmitting(true);
+        setError(null);
+        try {
+          const { error } = await supabase.rpc('revoke_licence', { p_licence_id: licenceId });
+          if (error) {
+            setError(error.message);
+          } else {
+            notifyRealtimeMutation('licences', true);
+            setSuccess(lang === 'fr' ? 'Licence révoquée' : 'License revoked');
+            await loadEntreprises(true);
+          }
+        } catch (err) {
+          setError(err instanceof Error ? err.message : (lang === 'fr' ? 'Erreur lors de la révocation' : 'Error during revocation'));
+        } finally {
+          setSubmitting(false);
+        }
+      },
+    });
   }
 
   function openEditLicenceModal(lic: Licence) {
@@ -1288,22 +1377,34 @@ export default function SuperAdminPage() {
     }
   }
 
-  async function handleDeleteLicence(licenceId: string) {
+  function handleDeleteLicence(licenceId: string) {
     if (!isOnline) return;
-    if (!window.confirm(lang === 'fr' ? 'Supprimer définitivement cette licence ?' : 'Permanently delete this license?')) return;
-    setError(null);
-    try {
-      const { error } = await supabase.from('licences').delete().eq('id', licenceId);
-      if (error) {
-        setError(error.message);
-      } else {
-        notifyRealtimeMutation('licences', true);
-        setSuccess(lang === 'fr' ? 'Licence supprimée' : 'License deleted');
-        await loadEntreprises(true);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : (lang === 'fr' ? 'Erreur lors de la suppression' : 'Error during deletion'));
-    }
+    setConfirmAction({
+      title: lang === 'fr' ? 'Supprimer la licence ?' : 'Delete license?',
+      message:
+        lang === 'fr'
+          ? 'Supprimer définitivement cette licence ?'
+          : 'Permanently delete this license?',
+      confirmLabel: lang === 'fr' ? 'Supprimer' : 'Delete',
+      onConfirm: async () => {
+        setSubmitting(true);
+        setError(null);
+        try {
+          const { error } = await supabase.from('licences').delete().eq('id', licenceId);
+          if (error) {
+            setError(error.message);
+          } else {
+            notifyRealtimeMutation('licences', true);
+            setSuccess(lang === 'fr' ? 'Licence supprimée' : 'License deleted');
+            await loadEntreprises(true);
+          }
+        } catch (err) {
+          setError(err instanceof Error ? err.message : (lang === 'fr' ? 'Erreur lors de la suppression' : 'Error during deletion'));
+        } finally {
+          setSubmitting(false);
+        }
+      },
+    });
   }
 
   async function handleApproveJoinRequest(requestId: string) {
@@ -1959,6 +2060,58 @@ export default function SuperAdminPage() {
                 {submitting
                   ? (lang === 'fr' ? 'Transfert…' : 'Transferring…')
                   : (lang === 'fr' ? 'Rattacher maintenant' : 'Transfer now')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* In-app destructive action confirmation modal (works reliably in iframes & PWAs) */}
+      {confirmAction && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+          <div
+            className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm"
+            onClick={() => { if (!submitting) setConfirmAction(null); }}
+          />
+          <div className="relative bg-white rounded-2xl shadow-xl w-full max-w-md p-6 space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-full bg-red-100 text-red-600 flex items-center justify-center flex-shrink-0">
+                  <Trash2 className="w-4 h-4" />
+                </div>
+                <h3 className="text-base font-semibold text-slate-900">{confirmAction.title}</h3>
+              </div>
+              <button
+                type="button"
+                disabled={submitting}
+                onClick={() => setConfirmAction(null)}
+                className="text-slate-400 hover:text-slate-600 disabled:opacity-50"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-sm text-slate-600 leading-relaxed">{confirmAction.message}</p>
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                disabled={submitting}
+                onClick={() => setConfirmAction(null)}
+                className="flex-1 px-4 py-2.5 rounded-lg border border-slate-200 text-slate-700 text-sm font-medium hover:bg-slate-50 transition-colors disabled:opacity-50"
+              >
+                {t('common.cancel')}
+              </button>
+              <button
+                type="button"
+                disabled={submitting}
+                onClick={async () => {
+                  const fn = confirmAction.onConfirm;
+                  await fn();
+                  setConfirmAction(null);
+                }}
+                className="flex-1 px-4 py-2.5 rounded-lg bg-red-600 text-white text-sm font-medium hover:bg-red-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                {submitting ? (lang === 'fr' ? 'Suppression…' : 'Deleting…') : confirmAction.confirmLabel}
               </button>
             </div>
           </div>
