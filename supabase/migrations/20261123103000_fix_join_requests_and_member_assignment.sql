@@ -221,6 +221,13 @@ BEGIN
     full_name = COALESCE(public.entreprise_members.full_name, EXCLUDED.full_name),
     contact = COALESCE(public.entreprise_members.contact, EXCLUDED.contact);
 
+  -- Auto-confirm email so admin-created internal accounts (e.g. com1@ecoclair.com) can sign in immediately
+  UPDATE auth.users
+  SET email_confirmed_at = COALESCE(email_confirmed_at, now()),
+      updated_at = now()
+  WHERE id = member_uid
+    AND email_confirmed_at IS NULL;
+
   RETURN member_uid;
 END;
 $$;
@@ -282,6 +289,13 @@ BEGIN
     boutique_id = EXCLUDED.boutique_id,
     full_name = COALESCE(public.entreprise_members.full_name, EXCLUDED.full_name),
     contact = COALESCE(public.entreprise_members.contact, EXCLUDED.contact);
+
+  -- Auto-confirm email so admin-created internal accounts (e.g. com1@ecoclair.com) can sign in immediately
+  UPDATE auth.users
+  SET email_confirmed_at = COALESCE(email_confirmed_at, now()),
+      updated_at = now()
+  WHERE id = member_uid
+    AND email_confirmed_at IS NULL;
 
   RETURN member_uid;
 END;
@@ -432,5 +446,83 @@ END;
 $$;
 
 GRANT EXECUTE ON FUNCTION public.create_entreprise_admin(text, text) TO authenticated;
+
+-- 7. Confirm a team member's email so internal/company emails (e.g. com1@ecoclair.com) can log in immediately
+CREATE OR REPLACE FUNCTION public.confirm_member_email(target_user_id uuid)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'extensions'
+AS $$
+DECLARE
+  v_authorized boolean := false;
+BEGIN
+  IF public.is_super_admin() THEN
+    v_authorized := true;
+  ELSIF EXISTS (
+    SELECT 1
+    FROM public.entreprise_members em
+    WHERE em.user_id = target_user_id
+      AND public.is_tenant_admin(em.tenant_id)
+  ) THEN
+    v_authorized := true;
+  END IF;
+
+  IF NOT v_authorized THEN
+    RAISE EXCEPTION 'Accès refusé : seul un administrateur de l''entreprise ou le Super Admin peut confirmer ce compte.';
+  END IF;
+
+  UPDATE auth.users
+  SET email_confirmed_at = COALESCE(email_confirmed_at, now()),
+      updated_at = now()
+  WHERE id = target_user_id;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.confirm_member_email(uuid) TO authenticated;
+
+-- 8. Allow Company Admin or Super Admin to directly reset a team member's password (and confirm email)
+CREATE OR REPLACE FUNCTION public.admin_reset_member_password(target_user_id uuid, new_password text)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'extensions'
+AS $$
+DECLARE
+  v_authorized boolean := false;
+BEGIN
+  IF new_password IS NULL OR length(trim(new_password)) < 6 THEN
+    RAISE EXCEPTION 'Le mot de passe doit contenir au moins 6 caractères.';
+  END IF;
+
+  IF public.is_super_admin() THEN
+    v_authorized := true;
+  ELSIF EXISTS (
+    SELECT 1
+    FROM public.entreprise_members em
+    WHERE em.user_id = target_user_id
+      AND public.is_tenant_admin(em.tenant_id)
+  ) THEN
+    v_authorized := true;
+  END IF;
+
+  IF NOT v_authorized THEN
+    RAISE EXCEPTION 'Accès refusé : seul un administrateur de l''entreprise ou le Super Admin peut modifier ce mot de passe.';
+  END IF;
+
+  UPDATE auth.users
+  SET encrypted_password = extensions.crypt(trim(new_password), extensions.gen_salt('bf')),
+      email_confirmed_at = COALESCE(email_confirmed_at, now()),
+      updated_at = now()
+  WHERE id = target_user_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Compte utilisateur introuvable.';
+  END IF;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.admin_reset_member_password(uuid, text) TO authenticated;
+
 
 

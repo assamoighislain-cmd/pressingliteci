@@ -45,8 +45,33 @@ export interface CreateOrAttachMemberResult {
   memberUserId?: string | null;
   createdNewAccount: boolean;
   alreadyExisted: boolean;
+  needsEmailConfirmation: boolean;
+  passwordUpdated?: boolean;
   email: string;
   password?: string;
+}
+
+export async function adminResetMemberPassword(
+  targetUserId: string,
+  newPassword: string,
+): Promise<{ error: string | null; missingRpc?: boolean }> {
+  const cleanPw = newPassword.trim();
+  if (cleanPw.length < 6) {
+    return { error: 'Le mot de passe doit contenir au moins 6 caractères.' };
+  }
+  const { error } = await supabase.rpc('admin_reset_member_password', {
+    target_user_id: targetUserId,
+    new_password: cleanPw,
+  });
+  if (error) {
+    const msg = (error.message || '').toLowerCase();
+    const missingRpc =
+      error.code === 'PGRST202' ||
+      msg.includes('could not find the function') ||
+      msg.includes('does not exist');
+    return { error: error.message, missingRpc };
+  }
+  return { error: null };
 }
 
 /**
@@ -63,11 +88,18 @@ export async function createOrAttachCompanyMember(
   const cleanPassword = params.password?.trim() || '';
 
   if (!cleanEmail) {
-    return { error: "Veuillez saisir l'adresse email du membre.", createdNewAccount: false, alreadyExisted: false, email: cleanEmail };
+    return {
+      error: "Veuillez saisir l'adresse email du membre.",
+      createdNewAccount: false,
+      alreadyExisted: false,
+      needsEmailConfirmation: false,
+      email: cleanEmail,
+    };
   }
 
   let createdNewAccount = false;
   let alreadyExisted = false;
+  let needsEmailConfirmation = false;
 
   // Step 1: If creating a brand-new member account, register them via an isolated
   // ephemeral client WITHOUT entreprise_nom (so the DB trigger NEVER creates a duplicate company!)
@@ -77,6 +109,7 @@ export async function createOrAttachCompanyMember(
         error: 'Le mot de passe temporaire doit contenir au moins 6 caractères.',
         createdNewAccount: false,
         alreadyExisted: false,
+        needsEmailConfirmation: false,
         email: cleanEmail,
       };
     }
@@ -115,6 +148,7 @@ export async function createOrAttachCompanyMember(
           error: signUpErr.message,
           createdNewAccount: false,
           alreadyExisted: false,
+          needsEmailConfirmation: false,
           email: cleanEmail,
         };
       }
@@ -125,6 +159,10 @@ export async function createOrAttachCompanyMember(
         alreadyExisted = true;
       } else {
         createdNewAccount = true;
+        // If Supabase Auth has "Confirm email" enabled, signUpData.session is null!
+        if (!signUpData.session) {
+          needsEmailConfirmation = true;
+        }
       }
     }
   }
@@ -138,6 +176,7 @@ export async function createOrAttachCompanyMember(
         error: 'Entreprise cible introuvable.',
         createdNewAccount,
         alreadyExisted,
+        needsEmailConfirmation,
         email: cleanEmail,
       };
     }
@@ -171,6 +210,7 @@ export async function createOrAttachCompanyMember(
         error: rpcErr.message,
         createdNewAccount,
         alreadyExisted,
+        needsEmailConfirmation,
         email: cleanEmail,
       };
     }
@@ -232,6 +272,7 @@ export async function createOrAttachCompanyMember(
         error: rpcErr.message,
         createdNewAccount,
         alreadyExisted,
+        needsEmailConfirmation,
         email: cleanEmail,
       };
     }
@@ -256,6 +297,25 @@ export async function createOrAttachCompanyMember(
     }
   }
 
+  // Step 3: Best-effort auto-confirm email (and apply new password if account already existed in 'create' mode)
+  let passwordUpdated = false;
+  if (memberUid) {
+    if (params.mode === 'create' && alreadyExisted && cleanPassword.length >= 6) {
+      const resetRes = await adminResetMemberPassword(memberUid, cleanPassword);
+      if (!resetRes.error) {
+        passwordUpdated = true;
+        needsEmailConfirmation = false;
+      }
+    } else if (needsEmailConfirmation) {
+      const { error: confirmErr } = await supabase.rpc('confirm_member_email', {
+        target_user_id: memberUid,
+      });
+      if (!confirmErr) {
+        needsEmailConfirmation = false;
+      }
+    }
+  }
+
   notifyRealtimeMutation('entreprise_members', true);
 
   return {
@@ -263,7 +323,9 @@ export async function createOrAttachCompanyMember(
     memberUserId: memberUid,
     createdNewAccount,
     alreadyExisted,
+    needsEmailConfirmation,
+    passwordUpdated,
     email: cleanEmail,
-    password: createdNewAccount ? cleanPassword : undefined,
+    password: createdNewAccount || passwordUpdated ? cleanPassword : undefined,
   };
 }

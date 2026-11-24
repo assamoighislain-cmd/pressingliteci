@@ -93,7 +93,22 @@ export default function AuthForm() {
             );
           }
         } else {
-          setError(result.error);
+          const lowerErr = result.error.toLowerCase();
+          if (lowerErr.includes('email not confirmed')) {
+            setError(
+              lang === 'fr'
+                ? `L'adresse « ${normalizedEmail} » n'est pas encore confirmée sur Supabase. Vérifiez la boîte de réception (ou les spams), ou confirmez ce compte dans Supabase → Authentication → Users (ou désactivez « Confirm email »).`
+                : `The email "${normalizedEmail}" is not confirmed yet on Supabase. Check your inbox (or spam), or confirm this user in Supabase → Authentication → Users.`,
+            );
+          } else if (lowerErr.includes('invalid login credentials')) {
+            setError(
+              lang === 'fr'
+                ? `Identifiants invalides pour « ${normalizedEmail} » : vérifiez le mot de passe (sans espace), ou assurez-vous que l'adresse email est bien confirmée dans Supabase. Si ce compte existait déjà auparavant, utilisez son ancien mot de passe ou « Mot de passe oublié ? ».`
+                : `Invalid login credentials for "${normalizedEmail}": check the password (no extra spaces), or verify that the email is confirmed in Supabase. If the account already existed, use its previous password or "Forgot password?".`,
+            );
+          } else {
+            setError(result.error);
+          }
         }
       } else if ('joinRequested' in result && result.joinRequested) {
         setSignupSuccess(lang === 'fr'

@@ -3,9 +3,9 @@ import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth';
 import { useI18n } from '@/lib/i18n';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
-import { createOrAttachCompanyMember, generateTemporaryPassword } from '@/lib/memberCreator';
+import { createOrAttachCompanyMember, generateTemporaryPassword, adminResetMemberPassword } from '@/lib/memberCreator';
 import { buildWhatsAppUrl } from '@/types';
-import { UserPlus, Trash2, Shield, Crown, UserCog, Mail, Loader2, X, Check, Pencil, Phone, User, UserCheck, Clock, Store, Truck, RefreshCw, Lock, Eye, EyeOff, Copy, Sparkles, MessageCircle } from 'lucide-react';
+import { UserPlus, Trash2, Shield, Crown, UserCog, Mail, Loader2, X, Check, Pencil, Phone, User, UserCheck, Clock, Store, Truck, RefreshCw, Lock, Eye, EyeOff, Copy, Sparkles, MessageCircle, KeyRound, AlertTriangle } from 'lucide-react';
 
 interface Member {
   id: string;
@@ -69,8 +69,13 @@ export default function TeamManagement() {
     fullName?: string;
     contact?: string;
     role: string;
+    needsEmailConfirmation?: boolean;
   } | null>(null);
   const [copiedCreds, setCopiedCreds] = useState(false);
+  const [resetPwMember, setResetPwMember] = useState<Member | null>(null);
+  const [resetPwValue, setResetPwValue] = useState('');
+  const [resetPwMissingRpc, setResetPwMissingRpc] = useState(false);
+  const [copiedSql, setCopiedSql] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -232,25 +237,26 @@ export default function TeamManagement() {
       if (res.error) {
         setError(res.error);
       } else {
-        if (res.createdNewAccount) {
+        if (res.createdNewAccount || res.passwordUpdated) {
           setCreatedCredentials({
             email: res.email,
             password: res.password,
             fullName: inviteFullName.trim() || undefined,
             contact: inviteContact.trim() || undefined,
             role: inviteRole,
+            needsEmailConfirmation: res.needsEmailConfirmation,
           });
           setSuccess(
             lang === 'fr'
-              ? `Compte membre créé et ajouté à votre entreprise : ${res.email}`
-              : `Member account created and added to your company: ${res.email}`,
+              ? `Compte membre prêt et ajouté à votre entreprise : ${res.email}`
+              : `Member account ready and added to your company: ${res.email}`,
           );
         } else if (res.alreadyExisted) {
           setCreatedCredentials(null);
           setSuccess(
             lang === 'fr'
-              ? `Ce compte existait déjà (${res.email}) : il a été directement rattaché à votre entreprise avec son mot de passe existant.`
-              : `This account already existed (${res.email}): it has been attached directly to your company with its existing password.`,
+              ? `Ce compte existait déjà (${res.email}) : il a été directement rattaché à votre entreprise avec son mot de passe existant (cliquez sur l'icône Clé pour définir un nouveau mot de passe).`
+              : `This account already existed (${res.email}): it has been attached directly to your company with its existing password (click the Key icon to set a new password).`,
           );
         } else {
           setCreatedCredentials(null);
@@ -320,6 +326,49 @@ export default function TeamManagement() {
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : (lang === 'fr' ? 'Erreur lors du retrait' : 'Error during removal'));
+    }
+  }
+
+  function openResetPasswordModal(m: Member) {
+    setResetPwMember(m);
+    setResetPwValue(generateTemporaryPassword(10));
+    setResetPwMissingRpc(false);
+    setCopiedSql(false);
+    setError(null);
+  }
+
+  async function handleResetMemberPassword() {
+    if (!resetPwMember || resetPwValue.trim().length < 6) return;
+    setSubmitting(true);
+    setError(null);
+    setSuccess(null);
+    setResetPwMissingRpc(false);
+    try {
+      const res = await adminResetMemberPassword(resetPwMember.user_id, resetPwValue);
+      if (res.error) {
+        if (res.missingRpc) {
+          setResetPwMissingRpc(true);
+        } else {
+          setError(res.error);
+        }
+      } else {
+        setCreatedCredentials({
+          email: resetPwMember.email,
+          password: resetPwValue.trim(),
+          fullName: resetPwMember.full_name ?? undefined,
+          contact: resetPwMember.contact ?? undefined,
+          role: resetPwMember.role,
+          needsEmailConfirmation: false,
+        });
+        setSuccess(
+          lang === 'fr'
+            ? `Mot de passe réinitialisé et compte confirmé pour ${resetPwMember.email}.`
+            : `Password reset and account confirmed for ${resetPwMember.email}.`,
+        );
+        setResetPwMember(null);
+      }
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -501,6 +550,16 @@ export default function TeamManagement() {
             )}
             <div><span className="text-slate-400">{lang === 'fr' ? 'Rôle :' : 'Role:'}</span> <strong>{ROLE_LABELS[createdCredentials.role] ?? createdCredentials.role}</strong></div>
           </div>
+          {createdCredentials.needsEmailConfirmation && (
+            <div className="rounded-lg bg-amber-50 border border-amber-300 p-3 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+              <p className="text-xs text-amber-900">
+                {lang === 'fr'
+                  ? `Attention : Supabase exige une confirmation d'email pour « ${createdCredentials.email} ». Si cette adresse n'a pas de boîte mail, désactivez « Confirm email » dans Supabase (Authentication → Providers → Email) ou confirmez le compte dans Authentication → Users.`
+                  : `Warning: Supabase requires email confirmation for "${createdCredentials.email}". Disable "Confirm email" in Supabase (Authentication → Providers → Email) or confirm the user in Authentication → Users.`}
+              </p>
+            </div>
+          )}
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
@@ -733,6 +792,99 @@ export default function TeamManagement() {
         </div>
       )}
 
+      {/* Reset member password & confirm account modal */}
+      {resetPwMember && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+          <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setResetPwMember(null)} />
+          <div className="relative bg-white rounded-2xl shadow-xl w-full max-w-md p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <KeyRound className="w-4 h-4 text-amber-600" />
+                <h3 className="text-base font-semibold text-slate-900">
+                  {lang === 'fr' ? 'Mot de passe & activation' : 'Password & activation'}
+                </h3>
+              </div>
+              <button onClick={() => setResetPwMember(null)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-xs text-slate-500">
+              {lang === 'fr'
+                ? `Définissez un nouveau mot de passe pour « ${resetPwMember.email} » et confirmez son compte pour une connexion immédiate.`
+                : `Set a new password for "${resetPwMember.email}" and confirm their account for immediate sign-in.`}
+            </p>
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-sm font-medium text-slate-700">
+                  {lang === 'fr' ? 'Nouveau mot de passe' : 'New password'}
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setResetPwValue(generateTemporaryPassword(10))}
+                  className="inline-flex items-center gap-1 text-xs text-sky-600 hover:text-sky-700 font-medium"
+                >
+                  <Sparkles className="w-3 h-3" /> {lang === 'fr' ? 'Générer' : 'Generate'}
+                </button>
+              </div>
+              <input
+                type="text"
+                value={resetPwValue}
+                onChange={(e) => setResetPwValue(e.target.value)}
+                minLength={6}
+                className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-sky-500"
+              />
+            </div>
+
+            {resetPwMissingRpc && (() => {
+              const safeEmail = resetPwMember.email.replace(/'/g, "''");
+              const safePw = resetPwValue.trim().replace(/'/g, "''");
+              const sqlSnippet = `UPDATE auth.users\nSET encrypted_password = extensions.crypt('${safePw}', extensions.gen_salt('bf')),\n    email_confirmed_at = COALESCE(email_confirmed_at, now()),\n    updated_at = now()\nWHERE lower(email) = lower('${safeEmail}');`;
+              return (
+                <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 space-y-2">
+                  <p className="text-xs font-medium text-amber-900">
+                    {lang === 'fr'
+                      ? 'La migration SQL n’est pas encore exécutée sur Supabase. Exécutez cette commande dans Supabase → SQL Editor pour activer immédiatement ce compte :'
+                      : 'The SQL migration is not yet applied on Supabase. Run this in Supabase → SQL Editor to unlock this account immediately:'}
+                  </p>
+                  <pre className="text-[11px] font-mono bg-white border border-amber-200 rounded-lg p-2.5 overflow-x-auto text-slate-800 whitespace-pre-wrap">{sqlSnippet}</pre>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(sqlSnippet);
+                      setCopiedSql(true);
+                      setTimeout(() => setCopiedSql(false), 2000);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 text-white text-xs font-medium hover:bg-amber-700"
+                  >
+                    {copiedSql ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    {copiedSql ? (lang === 'fr' ? 'SQL copié !' : 'SQL copied!') : (lang === 'fr' ? 'Copier le SQL' : 'Copy SQL')}
+                  </button>
+                </div>
+              );
+            })()}
+
+            <div className="flex gap-3 pt-1">
+              <button
+                type="button"
+                onClick={() => setResetPwMember(null)}
+                className="px-4 py-2.5 rounded-lg border border-slate-200 text-slate-600 text-sm font-medium hover:bg-slate-50"
+              >
+                {t('common.cancel')}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleResetMemberPassword()}
+                disabled={submitting || resetPwValue.trim().length < 6}
+                className="flex-1 px-4 py-2.5 rounded-lg bg-sky-500 text-white text-sm font-medium hover:bg-sky-600 disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <KeyRound className="w-4 h-4" />}
+                {lang === 'fr' ? 'Activer & appliquer' : 'Activate & apply'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Edit modal */}
       {editMember && (
         <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
@@ -885,6 +1037,14 @@ export default function TeamManagement() {
                   <div className="flex items-center gap-2 flex-shrink-0">
                     {!isSelf && (
                       <>
+                        <button
+                          type="button"
+                          onClick={() => openResetPasswordModal(m)}
+                          className="p-2 rounded-lg text-slate-400 hover:text-amber-600 hover:bg-amber-50 transition-colors"
+                          title={lang === 'fr' ? 'Mot de passe & activation' : 'Password & activation'}
+                        >
+                          <KeyRound className="w-4 h-4" />
+                        </button>
                         <button
                           onClick={() => openEditModal(m)}
                           className="p-2 rounded-lg text-slate-400 hover:text-sky-600 hover:bg-sky-50 transition-colors"
