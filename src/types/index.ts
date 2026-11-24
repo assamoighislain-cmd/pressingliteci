@@ -209,7 +209,8 @@ export interface ResolvedReceiptHeader {
  * Resolves the receipt/invoice header for a boutique:
  * - Business name is always the boutique's own name (falling back to company name only if no boutique).
  * - Address & city belong to the boutique itself (never leaking another branch's address when the boutique defines its own).
- * - Phone, email, slogan and footer message use the boutique's values with clean fallback to company defaults.
+ * - Phone & email use the boutique's values with clean fallback to company defaults.
+ * - Slogan & footer message (message_pied) are shared across all boutiques and always come from the company (entreprise).
  */
 export function resolveReceiptHeader(
   entreprise: Entreprise | null | undefined,
@@ -228,8 +229,8 @@ export function resolveReceiptHeader(
     ville: boutiqueHasOwnLocation ? bVille : (entreprise?.ville?.trim() || null),
     telephone: boutique?.telephone?.trim() || entreprise?.telephone?.trim() || null,
     email: boutique?.email?.trim() || entreprise?.email?.trim() || null,
-    slogan: boutique?.slogan?.trim() || entreprise?.slogan?.trim() || null,
-    message_pied: boutique?.message_pied?.trim() || entreprise?.message_pied?.trim() || null,
+    slogan: entreprise?.slogan?.trim() || null,
+    message_pied: entreprise?.message_pied?.trim() || null,
   };
 }
 

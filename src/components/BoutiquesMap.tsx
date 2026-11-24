@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState, useCallback, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback, type ReactNode } from 'react';
 import {
   APIProvider,
+  APILoadingStatus,
   Map as GoogleMap,
   AdvancedMarker,
   Pin,
   InfoWindow,
+  useApiLoadingStatus,
   useMap,
   useMapsLibrary,
   useAdvancedMarkerRef,
@@ -31,11 +33,33 @@ import {
   Maximize2,
   Navigation,
   Phone,
+  Search,
   Star,
   Store,
   Trash2,
   WifiOff,
+  X,
 } from 'lucide-react';
+
+function resolveMapsRegion(lang: 'fr' | 'en'): string {
+  if (typeof navigator !== 'undefined' && navigator.language) {
+    const parts = navigator.language.split('-');
+    if (parts.length >= 2 && /^[A-Za-z]{2}$/.test(parts[1])) {
+      return parts[1].toUpperCase();
+    }
+  }
+  return lang === 'fr' ? 'CI' : 'US';
+}
+
+function MapsAuthWatcher() {
+  const status = useApiLoadingStatus();
+  useEffect(() => {
+    if (status === APILoadingStatus.AUTH_FAILURE) {
+      window.dispatchEvent(new CustomEvent('gmp-quota-exceeded'));
+    }
+  }, [status]);
+  return null;
+}
 
 export function GoogleMapsProvider({
   lang,
@@ -45,11 +69,13 @@ export function GoogleMapsProvider({
   children: ReactNode;
 }) {
   const apiKey = getGoogleMapsApiKey();
+  const region = useMemo(() => resolveMapsRegion(lang), [lang]);
   if (!apiKey) {
     return <>{children}</>;
   }
   return (
-    <APIProvider apiKey={apiKey} language={lang}>
+    <APIProvider apiKey={apiKey} language={lang} region={region}>
+      <MapsAuthWatcher />
       {children}
     </APIProvider>
   );
@@ -545,16 +571,186 @@ function PickerMapController({
   return null;
 }
 
+function isQuotaError(err: unknown): boolean {
+  const msg = String(err ?? '');
+  return (
+    msg.includes('RESOURCE_EXHAUSTED') ||
+    msg.includes('OVER_QUERY_LIMIT') ||
+    msg.includes('QuotaExceededError') ||
+    msg.includes('429')
+  );
+}
+
+interface ResolvedPlaceDetails {
+  lat: string;
+  lng: string;
+  address?: string;
+  city?: string;
+}
+
+function BoutiquePlaceSearch({
+  lang,
+  onSelectPlace,
+}: {
+  lang: 'fr' | 'en';
+  onSelectPlace: (details: ResolvedPlaceDetails) => void;
+}) {
+  const placesLib = useMapsLibrary('places');
+  const sessionTokenRef = useRef<google.maps.places.AutocompleteSessionToken | null>(null);
+  const [query, setQuery] = useState('');
+  const [suggestions, setSuggestions] = useState<google.maps.places.AutocompleteSuggestion[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [resolving, setResolving] = useState(false);
+
+  const resetSession = useCallback(() => {
+    sessionTokenRef.current = null;
+    setSuggestions([]);
+  }, []);
+
+  useEffect(() => {
+    const trimmed = query.trim();
+    if (!placesLib || trimmed.length < 3) {
+      setSuggestions([]);
+      setSearching(false);
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      try {
+        setSearching(true);
+        const { AutocompleteSessionToken, AutocompleteSuggestion } = placesLib;
+        if (!sessionTokenRef.current) {
+          sessionTokenRef.current = new AutocompleteSessionToken();
+        }
+        const res = await AutocompleteSuggestion.fetchAutocompleteSuggestions({
+          input: trimmed,
+          sessionToken: sessionTokenRef.current,
+        });
+        if (!cancelled) {
+          setSuggestions(res?.suggestions ?? []);
+        }
+      } catch (err) {
+        if (isQuotaError(err)) {
+          window.dispatchEvent(new CustomEvent('gmp-quota-exceeded'));
+        }
+        if (!cancelled) {
+          setSuggestions([]);
+        }
+      } finally {
+        if (!cancelled) setSearching(false);
+      }
+    }, 280);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [placesLib, query]);
+
+  async function handlePickSuggestion(suggestion: google.maps.places.AutocompleteSuggestion) {
+    if (!placesLib || !suggestion.placePrediction) return;
+    setResolving(true);
+    try {
+      const place = suggestion.placePrediction.toPlace();
+      await place.fetchFields({
+        fields: ['location', 'formattedAddress', 'addressComponents'],
+      });
+
+      const loc = place.location;
+      if (loc) {
+        const lat = (Math.round(loc.lat() * 1_000_000) / 1_000_000).toString();
+        const lng = (Math.round(loc.lng() * 1_000_000) / 1_000_000).toString();
+        const components = place.addressComponents ?? [];
+        const cityComp = components.find(
+          (c) => c.types.includes('locality') || c.types.includes('administrative_area_level_2'),
+        );
+        onSelectPlace({
+          lat,
+          lng,
+          address: place.formattedAddress ?? undefined,
+          city: cityComp?.longText ?? undefined,
+        });
+      }
+      setQuery(suggestion.placePrediction.text?.text ?? '');
+      resetSession();
+    } catch (err) {
+      if (isQuotaError(err)) {
+        window.dispatchEvent(new CustomEvent('gmp-quota-exceeded'));
+      }
+    } finally {
+      setResolving(false);
+    }
+  }
+
+  return (
+    <div className="relative">
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder={
+            lang === 'fr'
+              ? 'Rechercher une adresse ou un quartier sur Google Maps…'
+              : 'Search an address or neighborhood on Google Maps…'
+          }
+          className="w-full pl-8 pr-8 py-2 rounded-lg border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent bg-white"
+        />
+        {(searching || resolving) ? (
+          <Loader2 className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-sky-500 animate-spin" />
+        ) : query ? (
+          <button
+            type="button"
+            onClick={() => {
+              setQuery('');
+              resetSession();
+            }}
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+            aria-label={lang === 'fr' ? 'Effacer la recherche' : 'Clear search'}
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        ) : null}
+      </div>
+
+      {suggestions.length > 0 && (
+        <ul className="absolute z-20 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg max-h-48 overflow-y-auto divide-y divide-slate-100">
+          {suggestions.map((suggestion, idx) => {
+            const label = suggestion.placePrediction?.text?.text;
+            if (!label) return null;
+            return (
+              <li key={suggestion.placePrediction?.placeId ?? idx}>
+                <button
+                  type="button"
+                  onClick={() => void handlePickSuggestion(suggestion)}
+                  className="w-full text-left px-3 py-2 text-xs text-slate-700 hover:bg-sky-50 hover:text-sky-800 flex items-start gap-2 transition-colors"
+                >
+                  <MapPin className="w-3.5 h-3.5 text-sky-500 flex-shrink-0 mt-0.5" />
+                  <span className="line-clamp-2">{label}</span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export function BoutiqueLocationPicker({
   latitude,
   longitude,
   onChange,
+  onPlaceResolved,
   lang,
   boutiqueName,
 }: {
   latitude: string;
   longitude: string;
   onChange: (lat: string, lng: string) => void;
+  onPlaceResolved?: (details: ResolvedPlaceDetails) => void;
   lang: 'fr' | 'en';
   boutiqueName?: string;
 }) {
@@ -675,7 +871,17 @@ export function BoutiqueLocationPicker({
 
       {/* Interactive Picker Map */}
       {isOnline && apiKey ? (
-        <div className="relative w-full h-[220px] rounded-xl overflow-hidden border border-slate-200 bg-slate-100">
+        <div className="space-y-2">
+          <BoutiquePlaceSearch
+            lang={lang}
+            onSelectPlace={(details) => {
+              setGpsError(null);
+              onChange(details.lat, details.lng);
+              onPlaceResolved?.(details);
+              setPanNonce((n) => n + 1);
+            }}
+          />
+          <div className="relative w-full h-[220px] rounded-xl overflow-hidden border border-slate-200 bg-slate-100">
           <GoogleMap
             id="boutique-location-picker-map"
             defaultCenter={validPosition ?? DEFAULT_MAP_CENTER}
@@ -711,6 +917,7 @@ export function BoutiqueLocationPicker({
                   ? 'Cliquez sur la carte pour positionner la boutique'
                   : 'Click on the map to place the boutique'}
             </span>
+          </div>
           </div>
         </div>
       ) : (

@@ -60,8 +60,6 @@ export default function BoutiquesPage() {
     ville: '',
     telephone: '',
     email: '',
-    slogan: '',
-    message_pied: '',
     depot_start_number: '',
     latitude: '',
     longitude: '',
@@ -115,8 +113,6 @@ export default function BoutiquesPage() {
       latitude: coords ? coords.latitude : null,
       longitude: coords ? coords.longitude : null,
       email: b.email ?? localHeader?.email ?? null,
-      slogan: b.slogan ?? localHeader?.slogan ?? null,
-      message_pied: b.message_pied ?? localHeader?.message_pied ?? null,
     };
   });
 
@@ -128,8 +124,6 @@ export default function BoutiquesPage() {
       ville: '',
       telephone: '',
       email: '',
-      slogan: '',
-      message_pied: '',
       depot_start_number: '',
       latitude: '',
       longitude: '',
@@ -149,8 +143,6 @@ export default function BoutiquesPage() {
       ville: b.ville ?? '',
       telephone: b.telephone ?? '',
       email: b.email ?? localHeader?.email ?? '',
-      slogan: b.slogan ?? localHeader?.slogan ?? '',
-      message_pied: b.message_pied ?? localHeader?.message_pied ?? '',
       depot_start_number: existingStart !== null ? String(existingStart) : '',
       latitude: existingCoords ? String(existingCoords.latitude) : '',
       longitude: existingCoords ? String(existingCoords.longitude) : '',
@@ -214,8 +206,6 @@ export default function BoutiquesPage() {
           ville: form.ville.trim() || null,
           telephone: form.telephone.trim() || null,
           email: form.email.trim() || null,
-          slogan: form.slogan.trim() || null,
-          message_pied: form.message_pied.trim() || null,
           depot_start_number: parsedStart,
           depot_start_year: parsedStart !== null ? currentYear : null,
           latitude: parsedLat,
@@ -236,8 +226,6 @@ export default function BoutiquesPage() {
           ville: form.ville.trim() || null,
           telephone: form.telephone.trim() || null,
           email: form.email.trim() || null,
-          slogan: form.slogan.trim() || null,
-          message_pied: form.message_pied.trim() || null,
           depot_start_number: parsedStart,
           depot_start_year: parsedStart !== null ? currentYear : null,
           latitude: parsedLat,
@@ -596,8 +584,8 @@ export default function BoutiquesPage() {
                   </div>
                   <p className="text-xs text-slate-500">
                     {lang === 'fr'
-                      ? "Le nom de cette boutique s'affiche comme nom de l'entreprise sur ses reçus, avec sa propre adresse, ville et téléphone."
-                      : "This boutique's name appears as the business name on its receipts, with its own address, city, and phone."}
+                      ? "Le nom de cette boutique s'affiche comme nom de l'entreprise sur ses reçus avec sa propre adresse, ville, téléphone et email. Le slogan et le pied de reçu restent communs à toute l'entreprise (Paramètres Entreprise)."
+                      : "This boutique's name appears as the business name on its receipts with its own address, city, phone, and email. The slogan and receipt footer remain shared from Company settings."}
                   </p>
 
                   <div>
@@ -616,32 +604,6 @@ export default function BoutiquesPage() {
                     </div>
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-medium text-slate-700 mb-1">
-                      {lang === 'fr' ? 'Slogan en en-tête (optionnel)' : 'Receipt header slogan (optional)'}
-                    </label>
-                    <input
-                      type="text"
-                      value={form.slogan}
-                      onChange={(e) => setForm({ ...form, slogan: e.target.value })}
-                      placeholder={entreprise?.slogan || (lang === 'fr' ? 'Ex: Qualité et rapidité' : 'e.g. Fast & spotless')}
-                      className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-slate-700 mb-1">
-                      {lang === 'fr' ? 'Message pied de reçu (optionnel)' : 'Receipt footer message (optional)'}
-                    </label>
-                    <textarea
-                      rows={2}
-                      value={form.message_pied}
-                      onChange={(e) => setForm({ ...form, message_pied: e.target.value })}
-                      placeholder={entreprise?.message_pied || (lang === 'fr' ? 'Ex: Merci de votre confiance — Retrait sous 30 jours' : 'e.g. Thank you for your trust')}
-                      className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent resize-none"
-                    />
-                  </div>
-
                   {/* Live receipt header preview */}
                   {(() => {
                     const preview = resolveReceiptHeader(entreprise, {
@@ -652,8 +614,6 @@ export default function BoutiquesPage() {
                       ville: form.ville || null,
                       telephone: form.telephone || null,
                       email: form.email || null,
-                      slogan: form.slogan || null,
-                      message_pied: form.message_pied || null,
                       is_default: editingBoutique?.is_default ?? false,
                       slug: null,
                       created_at: '',
@@ -681,6 +641,11 @@ export default function BoutiquesPage() {
                         {preview.slogan && (
                           <p className="text-[11px] italic text-slate-500">{preview.slogan}</p>
                         )}
+                        {preview.message_pied && (
+                          <p className="text-[10px] text-slate-400 pt-1.5 mt-1.5 border-t border-slate-200/80">
+                            {preview.message_pied}
+                          </p>
+                        )}
                       </div>
                     );
                   })()}
@@ -693,6 +658,15 @@ export default function BoutiquesPage() {
                   boutiqueName={form.nom}
                   lang={lang}
                   onChange={(lat, lng) => setForm((prev) => ({ ...prev, latitude: lat, longitude: lng }))}
+                  onPlaceResolved={(details) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      latitude: details.lat,
+                      longitude: details.lng,
+                      adresse: prev.adresse.trim() ? prev.adresse : details.address ?? prev.adresse,
+                      ville: prev.ville.trim() ? prev.ville : details.city ?? prev.ville,
+                    }))
+                  }
                 />
 
                 <div className="pt-2 border-t border-slate-100">
