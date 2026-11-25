@@ -64,18 +64,29 @@ interface MonthlyComp {
 }
 
 const CHART_COLORS = [
-  '#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6',
-  '#ec4899', '#06b6d4', '#84cc16', '#f97316', '#6366f1',
+  '#0ea5e9', '#10b981', '#f97316', '#14b8a6', '#f59e0b',
+  '#ec4899', '#3b82f6', '#84cc16', '#06b6d4', '#f43f5e',
 ];
 
 function MiniBarChart({ data, maxVal }: { data: RevenueDay[]; maxVal: number }) {
   if (data.length === 0) return null;
-  const barWidth = Math.max(4, Math.min(20, Math.floor(320 / data.length) - 2));
+  const barWidth = Math.max(5, Math.min(20, Math.floor(320 / data.length) - 2));
   const height = 120;
   const totalWidth = data.length * (barWidth + 2);
 
   return (
-    <svg viewBox={`0 0 ${totalWidth} ${height + 20}`} className="w-full h-full" preserveAspectRatio="xMidYMid meet">
+    <svg viewBox={`0 0 ${totalWidth} ${height + 22}`} className="w-full h-full" preserveAspectRatio="xMidYMid meet">
+      <defs>
+        <linearGradient id="dashBarSky" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#38bdf8" />
+          <stop offset="100%" stopColor="#0284c7" />
+        </linearGradient>
+        <linearGradient id="dashBarToday" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#fb923c" />
+          <stop offset="100%" stopColor="#f97316" />
+        </linearGradient>
+      </defs>
+      <line x1={0} y1={height} x2={totalWidth} y2={height} stroke="#e0f2fe" strokeWidth="1" />
       {data.map((d, i) => {
         const barH = maxVal > 0 ? (d.revenue / maxVal) * height : 0;
         const x = i * (barWidth + 2);
@@ -86,16 +97,17 @@ function MiniBarChart({ data, maxVal }: { data: RevenueDay[]; maxVal: number }) 
               x={x}
               y={height - barH}
               width={barWidth}
-              height={Math.max(barH, 1)}
-              rx={2}
-              className={isToday ? 'fill-sky-500' : 'fill-sky-300'}
+              height={Math.max(barH, 2)}
+              rx={3}
+              fill={isToday ? 'url(#dashBarToday)' : 'url(#dashBarSky)'}
+              className="transition-opacity hover:opacity-85"
             />
             {(i === 0 || i === data.length - 1 || isToday) && (
               <text
                 x={x + barWidth / 2}
-                y={height + 14}
+                y={height + 15}
                 textAnchor="middle"
-                className="fill-slate-400"
+                className={isToday ? 'fill-orange-600 font-bold' : 'fill-slate-400 font-medium'}
                 style={{ fontSize: '8px' }}
               >
                 {d.date.slice(5).replace('-', '/')}
@@ -108,13 +120,13 @@ function MiniBarChart({ data, maxVal }: { data: RevenueDay[]; maxVal: number }) 
   );
 }
 
-function DonutChart({ segments, size = 120 }: { segments: { value: number; color: string; label: string }[]; size?: number }) {
+function DonutChart({ segments, size = 128 }: { segments: { value: number; color: string; label: string }[]; size?: number }) {
   const total = segments.reduce((s, seg) => s + seg.value, 0);
   if (total === 0) return null;
   const radius = (size - 8) / 2;
   const cx = size / 2;
   const cy = size / 2;
-  const innerRadius = radius * 0.55;
+  const innerRadius = radius * 0.56;
 
   let cumulativeAngle = -Math.PI / 2;
 
@@ -144,7 +156,16 @@ function DonutChart({ segments, size = 120 }: { segments: { value: number; color
           'Z',
         ].join(' ');
 
-        return <path key={i} d={d} fill={seg.color} className="transition-opacity hover:opacity-80" />;
+        return (
+          <path
+            key={i}
+            d={d}
+            fill={seg.color}
+            stroke="#ffffff"
+            strokeWidth={segments.length > 1 ? 2 : 0}
+            className="transition-opacity hover:opacity-85"
+          />
+        );
       })}
     </svg>
   );
@@ -153,14 +174,14 @@ function DonutChart({ segments, size = 120 }: { segments: { value: number; color
 function HorizontalBar({ label, value, maxValue, color, formattedValue }: {
   label: string; value: number; maxValue: number; color: string; formattedValue: string;
 }) {
-  const pct = maxValue > 0 ? Math.max(2, (value / maxValue) * 100) : 0;
+  const pct = maxValue > 0 ? Math.max(3, (value / maxValue) * 100) : 0;
   return (
-    <div className="space-y-1">
+    <div className="space-y-1.5">
       <div className="flex items-center justify-between text-sm">
-        <span className="text-slate-700 font-medium truncate mr-2">{label}</span>
-        <span className="text-slate-900 font-semibold whitespace-nowrap">{formattedValue}</span>
+        <span className="text-slate-700 font-semibold truncate mr-2">{label}</span>
+        <span className="text-slate-900 font-bold tabular-nums whitespace-nowrap">{formattedValue}</span>
       </div>
-      <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+      <div className="h-2.5 bg-sky-100/70 rounded-full overflow-hidden">
         <div
           className="h-full rounded-full transition-all duration-700"
           style={{ width: `${pct}%`, backgroundColor: color }}
@@ -172,11 +193,11 @@ function HorizontalBar({ label, value, maxValue, color, formattedValue }: {
 
 function PercentBadge({ current, previous, lang }: { current: number; previous: number; lang: string }) {
   if (previous === 0 && current === 0) return null;
-  if (previous === 0) return <span className="text-xs font-semibold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded">{lang === 'fr' ? 'Nouveau' : 'New'}</span>;
+  if (previous === 0) return <span className="text-xs font-bold text-emerald-700 bg-emerald-100/80 px-2 py-0.5 rounded-md">{lang === 'fr' ? 'Nouveau' : 'New'}</span>;
   const pct = Math.round(((current - previous) / previous) * 100);
   const isUp = pct >= 0;
   return (
-    <span className={`inline-flex items-center gap-0.5 text-xs font-semibold px-1.5 py-0.5 rounded ${isUp ? 'text-emerald-700 bg-emerald-50' : 'text-red-700 bg-red-50'}`}>
+    <span className={`inline-flex items-center gap-0.5 text-xs font-bold tabular-nums px-2 py-0.5 rounded-md ${isUp ? 'text-emerald-700 bg-emerald-100/80' : 'text-rose-700 bg-rose-100/80'}`}>
       {isUp ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
       {isUp ? '+' : ''}{pct}%
     </span>
@@ -371,48 +392,43 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
       label: lang === 'fr' ? 'En cours' : 'In progress',
       value: stats.enCours,
       icon: Clock,
-      bg: 'bg-amber-50',
-      text: 'text-amber-600',
-      ring: 'ring-amber-100',
+      iconGrad: 'from-amber-400 to-orange-500 shadow-orange-500/25',
+      surface: 'hover:border-orange-200',
     },
     {
       label: lang === 'fr' ? 'Retirés' : 'Picked up',
       value: stats.retires,
       icon: CheckCircle2,
-      bg: 'bg-emerald-50',
-      text: 'text-emerald-600',
-      ring: 'ring-emerald-100',
+      iconGrad: 'from-emerald-400 to-teal-500 shadow-emerald-500/25',
+      surface: 'hover:border-emerald-200',
     },
     {
       label: lang === 'fr' ? 'Dépôts du jour' : "Today's deposits",
       value: stats.totalJour,
       icon: Package,
-      bg: 'bg-sky-50',
-      text: 'text-sky-600',
-      ring: 'ring-sky-100',
+      iconGrad: 'from-sky-400 to-blue-600 shadow-sky-500/25',
+      surface: 'hover:border-sky-200',
     },
     {
       label: lang === 'fr' ? 'CA du jour' : "Today's revenue",
       value: formatPrice(stats.caJour),
       icon: TrendingUp,
-      bg: 'bg-teal-50',
-      text: 'text-teal-600',
-      ring: 'ring-teal-100',
+      iconGrad: 'from-cyan-400 to-teal-600 shadow-cyan-500/25',
+      surface: 'hover:border-cyan-200',
     },
     {
       label: lang === 'fr' ? 'Recette prévue du jour' : "Today's expected revenue",
       value: formatPrice(stats.recettePrevuJour),
       icon: CalendarClock,
-      bg: 'bg-violet-50',
-      text: 'text-violet-600',
-      ring: 'ring-violet-100',
+      iconGrad: 'from-rose-400 to-orange-500 shadow-rose-500/25',
+      surface: 'hover:border-rose-200',
     },
   ];
 
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <div className="w-8 h-8 border-2 border-sky-500 border-t-transparent rounded-full animate-spin" />
+        <div className="w-9 h-9 border-[3px] border-sky-500 border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
@@ -423,14 +439,16 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <button
           onClick={() => onNavigate('depot')}
-          className="group relative overflow-hidden rounded-2xl bg-gradient-to-br from-sky-500 to-cyan-600 p-6 text-left shadow-sm transition-all duration-300 hover:shadow-lg hover:-translate-y-0.5"
+          className="group relative overflow-hidden rounded-2xl bg-gradient-to-br from-sky-500 via-blue-500 to-cyan-500 p-6 text-left shadow-md shadow-sky-500/20 transition-all duration-200 hover:shadow-xl hover:shadow-sky-500/30 hover:-translate-y-0.5"
         >
-          <div className="flex items-center justify-between">
+          <div className="pointer-events-none absolute -top-10 -right-10 w-36 h-36 rounded-full bg-white/15 transition-transform duration-300 group-hover:scale-110" />
+          <div className="pointer-events-none absolute -bottom-12 left-1/3 w-28 h-28 rounded-full bg-cyan-300/20" />
+          <div className="relative flex items-center justify-between gap-4">
             <div>
-              <h3 className="text-lg font-bold text-white">{t('dash.newDepot')}</h3>
-              <p className="text-sm text-sky-50 mt-1">{lang === 'fr' ? 'Enregistrer une facture client' : 'Record a client invoice'}</p>
+              <h3 className="text-xl font-extrabold tracking-tight text-white">{t('dash.newDepot')}</h3>
+              <p className="text-sm text-sky-50/95 font-medium mt-1">{lang === 'fr' ? 'Enregistrer une facture client' : 'Record a client invoice'}</p>
             </div>
-            <div className="w-12 h-12 rounded-xl bg-white/20 flex items-center justify-center transition-transform duration-300 group-hover:scale-110">
+            <div className="w-13 h-13 rounded-2xl bg-white/20 backdrop-blur-xs border border-white/25 flex items-center justify-center flex-shrink-0 transition-transform duration-200 group-hover:scale-110">
               <ArrowDownToLine className="w-6 h-6 text-white" />
             </div>
           </div>
@@ -438,14 +456,16 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
 
         <button
           onClick={() => onNavigate('retrait')}
-          className="group relative overflow-hidden rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 p-6 text-left shadow-sm transition-all duration-300 hover:shadow-lg hover:-translate-y-0.5"
+          className="group relative overflow-hidden rounded-2xl bg-gradient-to-br from-emerald-500 via-teal-500 to-cyan-500 p-6 text-left shadow-md shadow-emerald-500/20 transition-all duration-200 hover:shadow-xl hover:shadow-emerald-500/30 hover:-translate-y-0.5"
         >
-          <div className="flex items-center justify-between">
+          <div className="pointer-events-none absolute -top-10 -right-10 w-36 h-36 rounded-full bg-white/15 transition-transform duration-300 group-hover:scale-110" />
+          <div className="pointer-events-none absolute -bottom-12 left-1/3 w-28 h-28 rounded-full bg-amber-200/20" />
+          <div className="relative flex items-center justify-between gap-4">
             <div>
-              <h3 className="text-lg font-bold text-white">{t('dash.retrait')}</h3>
-              <p className="text-sm text-emerald-50 mt-1">{lang === 'fr' ? 'Vérifier et retirer un dépôt' : 'Check and pick up a deposit'}</p>
+              <h3 className="text-xl font-extrabold tracking-tight text-white">{t('dash.retrait')}</h3>
+              <p className="text-sm text-emerald-50/95 font-medium mt-1">{lang === 'fr' ? 'Vérifier et retirer un dépôt' : 'Check and pick up a deposit'}</p>
             </div>
-            <div className="w-12 h-12 rounded-xl bg-white/20 flex items-center justify-center transition-transform duration-300 group-hover:scale-110">
+            <div className="w-13 h-13 rounded-2xl bg-white/20 backdrop-blur-xs border border-white/25 flex items-center justify-center flex-shrink-0 transition-transform duration-200 group-hover:scale-110">
               <ArrowUpFromLine className="w-6 h-6 text-white" />
             </div>
           </div>
@@ -457,14 +477,17 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
         {cards.map((card) => {
           const Icon = card.icon;
           return (
-            <div key={card.label} className={`rounded-xl bg-white p-5 border border-slate-100 shadow-sm ring-1 ${card.ring}`}>
-              <div className="flex items-center justify-between mb-3">
-                <div className={`w-10 h-10 rounded-lg ${card.bg} flex items-center justify-center`}>
-                  <Icon className={`w-5 h-5 ${card.text}`} />
+            <div
+              key={card.label}
+              className={`rounded-2xl bg-white p-5 border border-sky-100/80 shadow-sm transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 ${card.surface}`}
+            >
+              <div className="flex items-center justify-between mb-3.5">
+                <div className={`w-11 h-11 rounded-xl bg-gradient-to-br ${card.iconGrad} shadow-sm flex items-center justify-center`}>
+                  <Icon className="w-5 h-5 text-white" />
                 </div>
               </div>
-              <p className="text-2xl font-bold text-slate-900">{card.value}</p>
-              <p className="text-sm text-slate-500 mt-1">{card.label}</p>
+              <p className="text-2xl font-extrabold tracking-tight text-slate-900 tabular-nums">{card.value}</p>
+              <p className="text-xs font-semibold text-slate-500 mt-1">{card.label}</p>
             </div>
           );
         })}
@@ -472,18 +495,18 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
 
       {/* Unpaid alert */}
       {unpaid.count > 0 && (
-        <div className="rounded-xl bg-amber-50 border border-amber-200 p-4 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-lg bg-amber-100 flex items-center justify-center flex-shrink-0">
-            <AlertTriangle className="w-5 h-5 text-amber-600" />
+        <div className="rounded-2xl bg-gradient-to-r from-amber-50 via-orange-50/80 to-amber-50 border border-amber-200/90 p-4 flex items-center gap-3.5 shadow-xs">
+          <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center flex-shrink-0 shadow-sm shadow-orange-500/20">
+            <AlertTriangle className="w-5 h-5 text-white" />
           </div>
           <div>
-            <p className="text-sm font-semibold text-amber-800">
+            <p className="text-sm font-bold text-amber-900">
               {lang === 'fr'
                 ? `${unpaid.count} dépôt${unpaid.count > 1 ? 's' : ''} avec solde impayé`
                 : `${unpaid.count} deposit${unpaid.count > 1 ? 's' : ''} with unpaid balance`}
             </p>
-            <p className="text-sm text-amber-700 mt-0.5">
-              {lang === 'fr' ? 'Reste à encaisser :' : 'Remaining to collect:'} <span className="font-bold">{formatPrice(unpaid.total)}</span>
+            <p className="text-sm text-amber-800 mt-0.5">
+              {lang === 'fr' ? 'Reste à encaisser :' : 'Remaining to collect:'} <span className="font-extrabold tabular-nums">{formatPrice(unpaid.total)}</span>
             </p>
           </div>
         </div>
@@ -544,35 +567,35 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
       {/* Monthly comparison */}
       {monthlyComp && (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div className="rounded-xl bg-white p-5 border border-slate-100 shadow-sm">
-            <div className="flex items-center justify-between mb-1">
-              <p className="text-sm text-slate-500">{lang === 'fr' ? 'CA ce mois' : 'Revenue this month'}</p>
+          <div className="rounded-2xl bg-white p-5 border border-sky-100/80 shadow-sm">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs font-bold uppercase tracking-wide text-sky-600">{lang === 'fr' ? 'CA ce mois' : 'Revenue this month'}</p>
               <PercentBadge current={monthlyComp.currentMonth} previous={monthlyComp.previousMonth} lang={lang} />
             </div>
-            <p className="text-xl font-bold text-slate-900">{formatPrice(monthlyComp.currentMonth)}</p>
-            <p className="text-xs text-slate-400 mt-1">
+            <p className="text-2xl font-extrabold tracking-tight text-slate-900 tabular-nums">{formatPrice(monthlyComp.currentMonth)}</p>
+            <p className="text-xs text-slate-400 mt-1.5 tabular-nums">
               {lang === 'fr' ? 'Mois précédent :' : 'Previous month:'} {formatPrice(monthlyComp.previousMonth)}
             </p>
           </div>
-          <div className="rounded-xl bg-white p-5 border border-slate-100 shadow-sm">
-            <div className="flex items-center justify-between mb-1">
-              <p className="text-sm text-slate-500">{lang === 'fr' ? 'Dépenses ce mois' : 'Expenses this month'}</p>
+          <div className="rounded-2xl bg-white p-5 border border-sky-100/80 shadow-sm">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs font-bold uppercase tracking-wide text-orange-600">{lang === 'fr' ? 'Dépenses ce mois' : 'Expenses this month'}</p>
               <PercentBadge current={monthlyComp.currentExpenses} previous={monthlyComp.previousExpenses} lang={lang} />
             </div>
-            <p className="text-xl font-bold text-slate-900">{formatPrice(monthlyComp.currentExpenses)}</p>
-            <p className="text-xs text-slate-400 mt-1">
+            <p className="text-2xl font-extrabold tracking-tight text-slate-900 tabular-nums">{formatPrice(monthlyComp.currentExpenses)}</p>
+            <p className="text-xs text-slate-400 mt-1.5 tabular-nums">
               {lang === 'fr' ? 'Mois précédent :' : 'Previous month:'} {formatPrice(monthlyComp.previousExpenses)}
             </p>
           </div>
-          <div className="rounded-xl bg-white p-5 border border-slate-100 shadow-sm">
-            <div className="flex items-center justify-between mb-1">
-              <p className="text-sm text-slate-500">{lang === 'fr' ? 'Bénéfice net' : 'Net profit'}</p>
+          <div className="rounded-2xl bg-white p-5 border border-sky-100/80 shadow-sm">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs font-bold uppercase tracking-wide text-emerald-600">{lang === 'fr' ? 'Bénéfice net' : 'Net profit'}</p>
               <PercentBadge current={netCurrent} previous={netPrevious} lang={lang} />
             </div>
-            <p className={`text-xl font-bold ${netCurrent >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+            <p className={`text-2xl font-extrabold tracking-tight tabular-nums ${netCurrent >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
               {formatPrice(netCurrent)}
             </p>
-            <p className="text-xs text-slate-400 mt-1">
+            <p className="text-xs text-slate-400 mt-1.5 tabular-nums">
               {lang === 'fr' ? 'Mois précédent :' : 'Previous month:'} {formatPrice(netPrevious)}
             </p>
           </div>
@@ -582,20 +605,22 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
       {/* Revenue chart + Payment breakdown */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Revenue chart */}
-        <div className="lg:col-span-2 bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
-          <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <BarChart3 className="w-4 h-4 text-sky-500" />
-              <h2 className="text-base font-semibold text-slate-900">
+        <div className="lg:col-span-2 bg-white rounded-2xl border border-sky-100/80 shadow-sm overflow-hidden">
+          <div className="px-5 py-4 border-b border-sky-100/70 flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <span className="w-8 h-8 rounded-xl bg-sky-100/80 text-sky-600 flex items-center justify-center">
+                <BarChart3 className="w-4 h-4" />
+              </span>
+              <h2 className="text-base font-bold text-slate-900">
                 {lang === 'fr' ? 'Chiffre d\'affaires — 30 jours' : 'Revenue — 30 days'}
               </h2>
             </div>
             <div className="text-right">
-              <p className="text-lg font-bold text-slate-900">{formatPrice(totalRevenue30d)}</p>
-              <p className="text-xs text-slate-400">{totalDeposits30d} {lang === 'fr' ? 'dépôts' : 'deposits'}</p>
+              <p className="text-lg font-extrabold text-slate-900 tabular-nums">{formatPrice(totalRevenue30d)}</p>
+              <p className="text-xs font-medium text-slate-400 tabular-nums">{totalDeposits30d} {lang === 'fr' ? 'dépôts' : 'deposits'}</p>
             </div>
           </div>
-          <div className="px-5 py-4 h-44">
+          <div className="px-5 py-4 h-48">
             {revenueData.length > 0 ? (
               <MiniBarChart data={revenueData} maxVal={maxRevenue} />
             ) : (
@@ -607,14 +632,16 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
         </div>
 
         {/* Payment breakdown donut */}
-        <div className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
-          <div className="px-5 py-4 border-b border-slate-100 flex items-center gap-2">
-            <PieChart className="w-4 h-4 text-teal-500" />
-            <h2 className="text-base font-semibold text-slate-900">
+        <div className="bg-white rounded-2xl border border-sky-100/80 shadow-sm overflow-hidden">
+          <div className="px-5 py-4 border-b border-sky-100/70 flex items-center gap-2.5">
+            <span className="w-8 h-8 rounded-xl bg-teal-100/80 text-teal-600 flex items-center justify-center">
+              <PieChart className="w-4 h-4" />
+            </span>
+            <h2 className="text-base font-bold text-slate-900">
               {lang === 'fr' ? 'Modes de paiement' : 'Payment methods'}
             </h2>
           </div>
-          <div className="px-5 py-4 flex flex-col items-center gap-3">
+          <div className="px-5 py-4 flex flex-col items-center gap-3.5">
             {paymentModes.length > 0 ? (
               <>
                 <DonutChart segments={donutSegments} />
@@ -622,8 +649,8 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
                   {paymentModes.slice(0, 5).map((pm, i) => (
                     <div key={pm.mode} className="flex items-center gap-2 text-xs">
                       <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: CHART_COLORS[i % CHART_COLORS.length] }} />
-                      <span className="text-slate-600 truncate flex-1">{pm.mode}</span>
-                      <span className="text-slate-900 font-semibold">{formatPrice(pm.total)}</span>
+                      <span className="text-slate-600 font-medium truncate flex-1">{pm.mode}</span>
+                      <span className="text-slate-900 font-bold tabular-nums">{formatPrice(pm.total)}</span>
                     </div>
                   ))}
                 </div>
@@ -638,14 +665,16 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
       {/* Top clients + Top articles */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Top clients */}
-        <div className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
-          <div className="px-5 py-4 border-b border-slate-100 flex items-center gap-2">
-            <Users className="w-4 h-4 text-sky-500" />
-            <h2 className="text-base font-semibold text-slate-900">
+        <div className="bg-white rounded-2xl border border-sky-100/80 shadow-sm overflow-hidden">
+          <div className="px-5 py-4 border-b border-sky-100/70 flex items-center gap-2.5">
+            <span className="w-8 h-8 rounded-xl bg-orange-100/80 text-orange-600 flex items-center justify-center">
+              <Users className="w-4 h-4" />
+            </span>
+            <h2 className="text-base font-bold text-slate-900">
               {lang === 'fr' ? 'Meilleurs clients' : 'Top clients'}
             </h2>
           </div>
-          <div className="px-5 py-4 space-y-3">
+          <div className="px-5 py-4 space-y-3.5">
             {topClients.length > 0 ? topClients.map((c, i) => (
               <HorizontalBar
                 key={c.nom}
@@ -662,21 +691,23 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
         </div>
 
         {/* Top articles */}
-        <div className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
-          <div className="px-5 py-4 border-b border-slate-100 flex items-center gap-2">
-            <Wallet className="w-4 h-4 text-emerald-500" />
-            <h2 className="text-base font-semibold text-slate-900">
+        <div className="bg-white rounded-2xl border border-sky-100/80 shadow-sm overflow-hidden">
+          <div className="px-5 py-4 border-b border-sky-100/70 flex items-center gap-2.5">
+            <span className="w-8 h-8 rounded-xl bg-emerald-100/80 text-emerald-600 flex items-center justify-center">
+              <Wallet className="w-4 h-4" />
+            </span>
+            <h2 className="text-base font-bold text-slate-900">
               {lang === 'fr' ? 'Articles les plus demandés' : 'Most requested items'}
             </h2>
           </div>
-          <div className="px-5 py-4 space-y-3">
+          <div className="px-5 py-4 space-y-3.5">
             {articleStats.length > 0 ? articleStats.slice(0, 6).map((a, i) => (
               <HorizontalBar
                 key={a.designation}
                 label={`${a.designation} (${a.count} pc${a.count > 1 ? 's' : ''})`}
                 value={a.revenue}
                 maxValue={maxArticleRevenue}
-                color={CHART_COLORS[(i + 3) % CHART_COLORS.length]}
+                color={CHART_COLORS[(i + 2) % CHART_COLORS.length]}
                 formattedValue={formatPrice(a.revenue)}
               />
             )) : (
@@ -688,13 +719,13 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
 
       {/* Upcoming birthdays (next 7 days) */}
       {upcomingBirthdays.length > 0 && (
-        <div className="rounded-xl bg-white border border-slate-100 shadow-sm p-5">
-          <div className="flex items-center gap-2 mb-3">
-            <div className="w-9 h-9 rounded-lg bg-sky-50 flex items-center justify-center">
-              <CalendarClock className="w-5 h-5 text-sky-600" />
+        <div className="rounded-2xl bg-white border border-sky-100/80 shadow-sm p-5">
+          <div className="flex items-center gap-2.5 mb-3">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-sky-400 to-cyan-500 flex items-center justify-center shadow-sm shadow-sky-500/20">
+              <CalendarClock className="w-4 h-4 text-white" />
             </div>
             <div>
-              <h3 className="text-sm font-semibold text-slate-900">
+              <h3 className="text-sm font-bold text-slate-900">
                 {lang === 'fr' ? 'Anniversaires à venir (7 jours)' : 'Upcoming birthdays (7 days)'}
               </h3>
               <p className="text-xs text-slate-400">
@@ -714,12 +745,12 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
                   )}`
                 : null;
               return (
-                <div key={c.id} className="flex items-center justify-between bg-slate-50/70 rounded-lg px-3 py-2.5">
+                <div key={c.id} className="flex items-center justify-between bg-sky-50/50 rounded-xl px-3.5 py-2.5 border border-sky-100/60">
                   <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-sm font-medium text-slate-800 truncate">{c.nom}</span>
+                    <span className="text-sm font-semibold text-slate-800 truncate">{c.nom}</span>
                     <span className="text-xs text-slate-400 flex-shrink-0">{bdLabel}</span>
-                    <span className={`text-xs font-medium px-1.5 py-0.5 rounded flex-shrink-0 ${
-                      c.daysUntil <= 2 ? 'bg-pink-100 text-pink-600' : 'bg-sky-100 text-sky-600'
+                    <span className={`text-xs font-bold px-2 py-0.5 rounded-md flex-shrink-0 ${
+                      c.daysUntil <= 2 ? 'bg-pink-100 text-pink-600' : 'bg-sky-100 text-sky-700'
                     }`}>
                       {lang === 'fr' ? `dans ${c.daysUntil} j` : `in ${c.daysUntil} d`}
                     </span>
@@ -729,7 +760,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
                       href={waUrl}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sky-500 text-white text-xs font-medium hover:bg-sky-600 transition-colors flex-shrink-0"
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-sky-500 to-teal-500 text-white text-xs font-bold hover:from-sky-600 hover:to-teal-600 transition-all shadow-xs flex-shrink-0"
                     >
                       <MessageCircle className="w-3.5 h-3.5" />
                       {lang === 'fr' ? 'Contacter' : 'Contact'}
@@ -744,13 +775,13 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
 
       {/* Inactive clients */}
       {inactiveClients.length > 0 && (
-        <div className="rounded-xl bg-white border border-slate-100 shadow-sm p-5">
-            <div className="flex items-center gap-2 mb-3">
-              <div className="w-9 h-9 rounded-lg bg-amber-50 flex items-center justify-center">
-                <Users className="w-5 h-5 text-amber-600" />
+        <div className="rounded-2xl bg-white border border-sky-100/80 shadow-sm p-5">
+            <div className="flex items-center gap-2.5 mb-3">
+              <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center shadow-sm shadow-orange-500/20">
+                <Users className="w-4 h-4 text-white" />
               </div>
               <div className="flex-1">
-                <h3 className="text-sm font-semibold text-slate-900">
+                <h3 className="text-sm font-bold text-slate-900">
                   {lang === 'fr' ? 'Clients inactifs (60+ jours)' : 'Inactive clients (60+ days)'}
                 </h3>
                 <p className="text-xs text-slate-400">
@@ -759,7 +790,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
               </div>
               <button
                 onClick={() => { setPrintTarget('inactive'); setTimeout(() => printReport(), 50); }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-100 text-slate-600 text-xs font-medium hover:bg-slate-200 transition-colors flex-shrink-0"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-sky-50 text-sky-700 border border-sky-200/70 text-xs font-semibold hover:bg-sky-100 transition-colors flex-shrink-0"
               >
                 <Printer className="w-3.5 h-3.5" />
                 {lang === 'fr' ? 'Imprimer' : 'Print'}
@@ -768,21 +799,21 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
           <div className="space-y-2 max-h-72 overflow-y-auto">
             {inactiveClients.slice(0, 15).map((c) => {
               return (
-                <div key={c.id} className="flex items-center justify-between bg-slate-50/70 rounded-lg px-3 py-2.5">
+                <div key={c.id} className="flex items-center justify-between bg-sky-50/40 border border-sky-100/50 rounded-xl px-3.5 py-2.5">
                   <div className="flex items-center gap-2 min-w-0 flex-1">
-                    <span className="text-sm font-medium text-slate-800 truncate">{c.nom}</span>
+                    <span className="text-sm font-semibold text-slate-800 truncate">{c.nom}</span>
                     <span className="text-xs text-slate-400 flex-shrink-0">
                       {c.dernier_depot
                         ? formatDateShort(c.dernier_depot)
                         : (lang === 'fr' ? 'Aucune visite' : 'No visits')}
                     </span>
                     {c.nb_depots > 0 && (
-                      <span className="text-xs text-slate-400 flex-shrink-0">
+                      <span className="text-xs text-slate-400 flex-shrink-0 tabular-nums">
                         · {c.nb_depots} {lang === 'fr' ? 'dépôts' : 'deposits'}
                       </span>
                     )}
                     {c.total_depot > 0 && (
-                      <span className="text-xs font-medium text-slate-600 flex-shrink-0">
+                      <span className="text-xs font-bold text-slate-700 flex-shrink-0 tabular-nums">
                         · {formatPrice(c.total_depot)}
                       </span>
                     )}
@@ -790,7 +821,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
                   {c.telephone && (
                     <button
                       onClick={() => handleRelance(c.id, c.telephone, 'whatsapp')}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500 text-white text-xs font-medium hover:bg-emerald-600 transition-colors flex-shrink-0"
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 text-white text-xs font-bold hover:from-emerald-600 hover:to-teal-600 transition-all shadow-xs flex-shrink-0"
                     >
                       <MessageCircle className="w-3.5 h-3.5" />
                       {lang === 'fr' ? 'Relancer' : 'Reach out'}
@@ -810,26 +841,28 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
 
       {/* Relance journal */}
       {relances.length > 0 && (
-        <div className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
-          <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <History className="w-4 h-4 text-slate-500" />
-              <h2 className="text-base font-semibold text-slate-900">
+        <div className="bg-white rounded-2xl border border-sky-100/80 shadow-sm overflow-hidden">
+          <div className="px-5 py-4 border-b border-sky-100/70 flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <span className="w-8 h-8 rounded-xl bg-cyan-100/80 text-cyan-700 flex items-center justify-center">
+                <History className="w-4 h-4" />
+              </span>
+              <h2 className="text-base font-bold text-slate-900">
                 {lang === 'fr' ? 'Journal des relances' : 'Outreach journal'}
               </h2>
-              <span className="text-xs text-slate-400">({relances.length})</span>
+              <span className="text-xs font-semibold text-slate-400 tabular-nums">({relances.length})</span>
             </div>
             <div className="flex items-center gap-2">
               <button
                 onClick={() => { setPrintTarget('relances'); setTimeout(() => printReport(), 50); }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-100 text-slate-600 text-xs font-medium hover:bg-slate-200 transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-sky-50 text-sky-700 border border-sky-200/70 text-xs font-semibold hover:bg-sky-100 transition-colors"
               >
                 <Printer className="w-3.5 h-3.5" />
                 {lang === 'fr' ? 'Imprimer' : 'Print'}
               </button>
               <button
                 onClick={() => setShowJournal((v) => !v)}
-                className="text-xs font-medium text-sky-600 hover:text-sky-700"
+                className="text-xs font-bold text-sky-600 hover:text-sky-700"
               >
                 {showJournal ? (lang === 'fr' ? 'Réduire' : 'Collapse') : (lang === 'fr' ? 'Voir tout' : 'Expand')}
               </button>
@@ -870,39 +903,42 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
       )}
 
       {/* Recent deposits */}
-      <div className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
-        <div className="px-5 py-4 border-b border-slate-100">
-          <h2 className="text-base font-semibold text-slate-900">{t('dash.recentDepots')}</h2>
+      <div className="bg-white rounded-2xl border border-sky-100/80 shadow-sm overflow-hidden">
+        <div className="px-5 py-4 border-b border-sky-100/70 flex items-center gap-2.5">
+          <span className="w-8 h-8 rounded-xl bg-sky-100/80 text-sky-600 flex items-center justify-center">
+            <Package className="w-4 h-4" />
+          </span>
+          <h2 className="text-base font-bold text-slate-900">{t('dash.recentDepots')}</h2>
         </div>
         {recent.length === 0 ? (
           <div className="p-8 text-center">
             <p className="text-slate-400 text-sm">{t('dash.noDepots')}</p>
             <button
               onClick={() => onNavigate('depot')}
-              className="mt-3 text-sm font-medium text-sky-600 hover:text-sky-700"
+              className="mt-3 px-4 py-2 rounded-xl bg-sky-500 text-white text-sm font-semibold hover:bg-sky-600 transition-colors"
             >
               {lang === 'fr' ? 'Créer le premier dépôt' : 'Create the first deposit'}
             </button>
           </div>
         ) : (
-          <div className="divide-y divide-slate-50">
+          <div className="divide-y divide-sky-50">
             {recent.map((depot) => (
-              <div key={depot.id} className="px-5 py-4 flex items-center justify-between hover:bg-slate-50 transition-colors">
+              <div key={depot.id} className="px-5 py-4 flex items-center justify-between hover:bg-sky-50/40 transition-colors">
                 <div className="flex items-center gap-3 min-w-0">
                   <div
                     className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${
-                      depot.statut === 'EN_COURS' ? 'bg-amber-400' : 'bg-emerald-400'
+                      depot.statut === 'EN_COURS' ? 'bg-orange-400' : 'bg-emerald-500'
                     }`}
                   />
                   <div className="min-w-0">
-                    <p className="text-sm font-medium text-slate-900 truncate">
+                    <p className="text-sm font-bold text-slate-900 truncate">
                       {depot.numero} — {depot.clients?.nom ?? (lang === 'fr' ? 'Client inconnu' : 'Unknown client')}
                     </p>
-                    <p className="text-xs text-slate-400 mt-0.5">
+                    <p className="text-xs text-slate-500 mt-0.5">
                       {formatDate(depot.date_depot)} · {getModeReglementLabel(depot.mode_reglement, modesReglement)}
                     </p>
                     {depot.date_retrait_prevue && (
-                      <p className="text-xs text-sky-500 mt-0.5 flex items-center gap-1">
+                      <p className="text-xs text-sky-600 font-medium mt-0.5 flex items-center gap-1">
                         <Calendar className="w-3 h-3" />
                         {lang === 'fr' ? 'Retrait prévu' : 'Expected pickup'}: {formatDateShort(depot.date_retrait_prevue)}
                       </p>
@@ -910,10 +946,14 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
                   </div>
                 </div>
                 <div className="text-right flex-shrink-0 ml-4">
-                  <p className="text-sm font-semibold text-slate-900">{formatPrice(Number(depot.total))}</p>
-                  <p className={`text-xs mt-0.5 ${depot.statut === 'EN_COURS' ? 'text-amber-500' : 'text-emerald-500'}`}>
+                  <p className="text-sm font-extrabold text-slate-900 tabular-nums">{formatPrice(Number(depot.total))}</p>
+                  <span className={`inline-block text-[11px] font-bold px-2 py-0.5 rounded-md mt-1 ${
+                    depot.statut === 'EN_COURS'
+                      ? 'bg-orange-100/80 text-orange-700'
+                      : 'bg-emerald-100/80 text-emerald-700'
+                  }`}>
                     {depot.statut === 'EN_COURS' ? (lang === 'fr' ? 'En cours' : 'In progress') : (lang === 'fr' ? 'Retiré' : 'Picked up')}
-                  </p>
+                  </span>
                 </div>
               </div>
             ))}

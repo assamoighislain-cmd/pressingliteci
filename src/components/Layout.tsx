@@ -68,31 +68,49 @@ interface LayoutProps {
   children: React.ReactNode;
 }
 
-const NAV_ITEMS: { id: View; labelKey: string; icon: React.ComponentType<{ className?: string }> }[] = [
-  { id: 'dashboard', labelKey: 'nav.dashboard', icon: LayoutDashboard },
-  { id: 'depot', labelKey: 'nav.depot', icon: ArrowDownToLine },
-  { id: 'retrait', labelKey: 'nav.retrait', icon: ArrowUpFromLine },
-  { id: 'commande', labelKey: 'nav.commande', icon: ShoppingBag },
-  { id: 'collecte', labelKey: 'nav.collecte', icon: Truck },
-  { id: 'livraison', labelKey: 'nav.livraison', icon: Truck },
-  { id: 'planning', labelKey: 'nav.planning', icon: CalendarDays },
-  { id: 'historique', labelKey: 'nav.historique', icon: History },
-  { id: 'journal_depots', labelKey: 'nav.journalDepots', icon: ClipboardList },
-  { id: 'journal', labelKey: 'nav.journal', icon: Wallet },
-  { id: 'comptabilite', labelKey: 'nav.comptabilite', icon: Calculator },
-  { id: 'depenses', labelKey: 'nav.depenses', icon: ReceiptIcon },
-  { id: 'clients', labelKey: 'nav.clients', icon: Users },
-  { id: 'catalogue', labelKey: 'nav.catalogue', icon: BookOpen },
-  { id: 'modes_reglement', labelKey: 'nav.modesReglement', icon: CreditCard },
-  { id: 'bons_reduction', labelKey: 'nav.bons', icon: Ticket },
-  { id: 'releve', labelKey: 'nav.releve', icon: Receipt },
-  { id: 'inventaire', labelKey: 'nav.inventaire', icon: PackageSearch },
-  { id: 'consommables', labelKey: 'nav.consommables', icon: PackageOpen },
-  { id: 'boutiques', labelKey: 'nav.boutiques', icon: Store },
-  { id: 'entreprise', labelKey: 'nav.entreprise', icon: Building2 },
-  { id: 'utilisateurs', labelKey: 'nav.team', icon: UserCog },
-  { id: 'superadmin', labelKey: 'nav.superadmin', icon: ShieldCheck },
-  { id: 'presentation', labelKey: 'nav.presentation', icon: PresentationIcon },
+type NavGroup = 'ops' | 'finance' | 'clients' | 'admin';
+
+interface NavItemConfig {
+  id: View;
+  labelKey: string;
+  icon: React.ComponentType<{ className?: string }>;
+  group: NavGroup;
+  tintBg: string;
+  tintText: string;
+}
+
+const NAV_GROUPS: { id: NavGroup; fr: string; en: string }[] = [
+  { id: 'ops', fr: 'Opérations', en: 'Operations' },
+  { id: 'finance', fr: 'Suivi & Finances', en: 'Tracking & Finance' },
+  { id: 'clients', fr: 'Clients & Stock', en: 'Clients & Catalog' },
+  { id: 'admin', fr: 'Administration', en: 'Administration' },
+];
+
+const NAV_ITEMS: NavItemConfig[] = [
+  { id: 'dashboard', labelKey: 'nav.dashboard', icon: LayoutDashboard, group: 'ops', tintBg: 'bg-sky-100/80', tintText: 'text-sky-600' },
+  { id: 'depot', labelKey: 'nav.depot', icon: ArrowDownToLine, group: 'ops', tintBg: 'bg-orange-100/80', tintText: 'text-orange-600' },
+  { id: 'retrait', labelKey: 'nav.retrait', icon: ArrowUpFromLine, group: 'ops', tintBg: 'bg-emerald-100/80', tintText: 'text-emerald-600' },
+  { id: 'commande', labelKey: 'nav.commande', icon: ShoppingBag, group: 'ops', tintBg: 'bg-cyan-100/80', tintText: 'text-cyan-600' },
+  { id: 'collecte', labelKey: 'nav.collecte', icon: Truck, group: 'ops', tintBg: 'bg-amber-100/80', tintText: 'text-amber-600' },
+  { id: 'livraison', labelKey: 'nav.livraison', icon: Truck, group: 'ops', tintBg: 'bg-teal-100/80', tintText: 'text-teal-600' },
+  { id: 'planning', labelKey: 'nav.planning', icon: CalendarDays, group: 'ops', tintBg: 'bg-blue-100/80', tintText: 'text-blue-600' },
+  { id: 'historique', labelKey: 'nav.historique', icon: History, group: 'finance', tintBg: 'bg-sky-100/80', tintText: 'text-sky-600' },
+  { id: 'journal_depots', labelKey: 'nav.journalDepots', icon: ClipboardList, group: 'finance', tintBg: 'bg-teal-100/80', tintText: 'text-teal-600' },
+  { id: 'journal', labelKey: 'nav.journal', icon: Wallet, group: 'finance', tintBg: 'bg-emerald-100/80', tintText: 'text-emerald-600' },
+  { id: 'comptabilite', labelKey: 'nav.comptabilite', icon: Calculator, group: 'finance', tintBg: 'bg-cyan-100/80', tintText: 'text-cyan-700' },
+  { id: 'depenses', labelKey: 'nav.depenses', icon: ReceiptIcon, group: 'finance', tintBg: 'bg-rose-100/80', tintText: 'text-rose-600' },
+  { id: 'releve', labelKey: 'nav.releve', icon: Receipt, group: 'finance', tintBg: 'bg-amber-100/80', tintText: 'text-amber-600' },
+  { id: 'clients', labelKey: 'nav.clients', icon: Users, group: 'clients', tintBg: 'bg-orange-100/80', tintText: 'text-orange-600' },
+  { id: 'catalogue', labelKey: 'nav.catalogue', icon: BookOpen, group: 'clients', tintBg: 'bg-sky-100/80', tintText: 'text-sky-600' },
+  { id: 'modes_reglement', labelKey: 'nav.modesReglement', icon: CreditCard, group: 'clients', tintBg: 'bg-emerald-100/80', tintText: 'text-emerald-600' },
+  { id: 'bons_reduction', labelKey: 'nav.bons', icon: Ticket, group: 'clients', tintBg: 'bg-pink-100/80', tintText: 'text-pink-600' },
+  { id: 'inventaire', labelKey: 'nav.inventaire', icon: PackageSearch, group: 'clients', tintBg: 'bg-teal-100/80', tintText: 'text-teal-600' },
+  { id: 'consommables', labelKey: 'nav.consommables', icon: PackageOpen, group: 'clients', tintBg: 'bg-amber-100/80', tintText: 'text-amber-600' },
+  { id: 'boutiques', labelKey: 'nav.boutiques', icon: Store, group: 'admin', tintBg: 'bg-blue-100/80', tintText: 'text-blue-600' },
+  { id: 'entreprise', labelKey: 'nav.entreprise', icon: Building2, group: 'admin', tintBg: 'bg-sky-100/80', tintText: 'text-sky-700' },
+  { id: 'utilisateurs', labelKey: 'nav.team', icon: UserCog, group: 'admin', tintBg: 'bg-teal-100/80', tintText: 'text-teal-700' },
+  { id: 'superadmin', labelKey: 'nav.superadmin', icon: ShieldCheck, group: 'admin', tintBg: 'bg-amber-100/80', tintText: 'text-amber-700' },
+  { id: 'presentation', labelKey: 'nav.presentation', icon: PresentationIcon, group: 'admin', tintBg: 'bg-cyan-100/80', tintText: 'text-cyan-700' },
 ];
 
 export default function Layout({ currentView, onNavigate, children }: LayoutProps) {
@@ -336,39 +354,56 @@ export default function Layout({ currentView, onNavigate, children }: LayoutProp
     setMobileOpen(false);
   }
 
+  const visibleNavItems = NAV_ITEMS.filter((item) => {
+    if (item.id === 'boutiques' && role !== 'admin') return false;
+    if (item.id === 'utilisateurs' && role !== 'admin') return false;
+    if (item.id === 'bons_reduction' && role !== 'admin') return false;
+    if (item.id === 'entreprise' && role && role !== 'admin' && role !== 'gerant') return false;
+    if (item.id === 'consommables' && role && role !== 'admin' && role !== 'gerant' && role !== 'commercial') return false;
+    if (item.id === 'superadmin' && !isSuperAdmin) return false;
+    if (item.id === 'commande' && role === 'collecteur') return false;
+    if (item.id === 'collecte' && role && role !== 'collecteur' && role !== 'admin' && role !== 'gerant' && role !== 'commercial') return false;
+    if (item.id === 'livraison' && role && role !== 'collecteur' && role !== 'admin' && role !== 'gerant' && role !== 'commercial') return false;
+    if (item.id === 'dashboard' && role && role !== 'admin' && !entreprise?.dashboard_visible_roles?.includes(role)) return false;
+    if (role === 'collecteur' && !['commande', 'collecte', 'livraison', 'dashboard'].includes(item.id) && item.id !== 'superadmin') return false;
+    return true;
+  });
+
+  const activeNavItem = NAV_ITEMS.find((i) => i.id === currentView);
+  const canQuickDepot = visibleNavItems.some((i) => i.id === 'depot') && currentView !== 'depot';
+
   const sidebarContent = (
     <>
-      {/* Brand */}
-      <div className="flex items-center gap-3 px-5 py-5 border-b border-slate-100">
-        <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-sky-500 to-cyan-600 flex items-center justify-center shadow-sm flex-shrink-0">
-          <Package className="w-5 h-5 text-white" />
-        </div>
-        <div className="min-w-0">
-          <h1 className="text-base font-bold text-slate-900 leading-tight truncate">
-            {entreprise?.nom ?? 'PressingLite'}
-          </h1>
-          <p className="text-xs text-slate-500 mt-0.5 truncate">
-            {memberName ?? entreprise?.slogan ?? (lang === 'fr' ? 'Gestion de pressing' : 'Dry cleaning management')}
-          </p>
-          {isSuperAdmin ? (
-            <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded text-[0.65rem] font-semibold bg-violet-50 text-violet-700 border border-violet-100">
-              <ShieldCheck className="w-3 h-3" />
-              {lang === 'fr' ? 'Super Admin' : 'Super Admin'}
-            </span>
-          ) : role && (
-            <span className={`inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded text-[0.65rem] font-semibold border ${
-              role === 'admin' ? 'bg-sky-50 text-sky-700 border-sky-100' :
-              role === 'gerant' ? 'bg-emerald-50 text-emerald-700 border-emerald-100' :
-              role === 'collecteur' ? 'bg-amber-50 text-amber-700 border-amber-100' :
-              'bg-slate-50 text-slate-600 border-slate-100'
-            }`}>
-              {role === 'admin' ? <ShieldCheck className="w-3 h-3" /> : role === 'gerant' ? <UserCog className="w-3 h-3" /> : role === 'collecteur' ? <Truck className="w-3 h-3" /> : <Users className="w-3 h-3" />}
-              {role === 'admin' ? (lang === 'fr' ? 'Administrateur' : 'Administrator') :
-               role === 'gerant' ? (lang === 'fr' ? 'Gérant' : 'Manager') :
-               role === 'collecteur' ? (lang === 'fr' ? 'Collecteur' : 'Collector') :
-               (lang === 'fr' ? 'Commercial' : 'Sales')}
-            </span>
-          )}
+      {/* Vibrant Brand Header */}
+      <div className="relative overflow-hidden px-5 py-5 bg-gradient-to-br from-sky-500 via-cyan-500 to-teal-500 text-white flex-shrink-0">
+        <div className="pointer-events-none absolute -top-8 -right-8 w-28 h-28 rounded-full bg-white/15" />
+        <div className="pointer-events-none absolute -bottom-10 -left-6 w-24 h-24 rounded-full bg-amber-300/20" />
+        <div className="relative flex items-center gap-3">
+          <div className="w-11 h-11 rounded-2xl bg-white/20 backdrop-blur-sm border border-white/30 flex items-center justify-center shadow-sm flex-shrink-0">
+            <Package className="w-5 h-5 text-white" />
+          </div>
+          <div className="min-w-0 pr-6 md:pr-0">
+            <h1 className="text-base font-extrabold tracking-tight text-white leading-tight truncate">
+              {entreprise?.nom ?? 'PressingLite'}
+            </h1>
+            <p className="text-xs text-sky-50/90 mt-0.5 truncate font-medium">
+              {memberName ?? entreprise?.slogan ?? (lang === 'fr' ? 'Gestion de pressing' : 'Dry cleaning management')}
+            </p>
+            {isSuperAdmin ? (
+              <span className="inline-flex items-center gap-1 mt-1.5 px-2 py-0.5 rounded-md text-[0.65rem] font-bold bg-white/20 text-white border border-white/25">
+                <ShieldCheck className="w-3 h-3" />
+                {lang === 'fr' ? 'Super Admin' : 'Super Admin'}
+              </span>
+            ) : role && (
+              <span className="inline-flex items-center gap-1 mt-1.5 px-2 py-0.5 rounded-md text-[0.65rem] font-bold bg-white/20 text-white border border-white/25">
+                {role === 'admin' ? <ShieldCheck className="w-3 h-3" /> : role === 'gerant' ? <UserCog className="w-3 h-3" /> : role === 'collecteur' ? <Truck className="w-3 h-3" /> : <Users className="w-3 h-3" />}
+                {role === 'admin' ? (lang === 'fr' ? 'Administrateur' : 'Administrator') :
+                 role === 'gerant' ? (lang === 'fr' ? 'Gérant' : 'Manager') :
+                 role === 'collecteur' ? (lang === 'fr' ? 'Collecteur' : 'Collector') :
+                 (lang === 'fr' ? 'Commercial' : 'Sales')}
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
@@ -378,21 +413,21 @@ export default function Layout({ currentView, onNavigate, children }: LayoutProp
           <div className="relative">
             <button
               onClick={() => setBoutiqueOpen(!boutiqueOpen)}
-              className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-sky-50 border border-sky-100 text-sm text-sky-700 hover:bg-sky-100 transition-colors"
+              className="w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl bg-gradient-to-r from-sky-50 to-cyan-50 border border-sky-200/80 text-sm text-sky-800 hover:from-sky-100 hover:to-cyan-100 transition-colors"
             >
               <div className="flex items-center gap-2 min-w-0">
-                <Store className="w-4 h-4 flex-shrink-0" />
-                <span className="truncate font-medium">{currentBoutique?.nom ?? '—'}</span>
+                <Store className="w-4 h-4 text-sky-600 flex-shrink-0" />
+                <span className="truncate font-semibold">{currentBoutique?.nom ?? '—'}</span>
               </div>
-              <ChevronDown className={`w-4 h-4 flex-shrink-0 transition-transform ${boutiqueOpen ? 'rotate-180' : ''}`} />
+              <ChevronDown className={`w-4 h-4 text-sky-600 flex-shrink-0 transition-transform ${boutiqueOpen ? 'rotate-180' : ''}`} />
             </button>
             {boutiqueOpen && (
-              <div className="absolute bottom-full left-0 right-0 mb-1 bg-white rounded-lg shadow-lg border border-slate-200 py-1 z-50 max-h-48 overflow-y-auto">
+              <div className="absolute top-full left-0 right-0 mt-1.5 bg-white rounded-xl shadow-xl border border-sky-100 py-1.5 z-50 max-h-48 overflow-y-auto">
                 {boutiques.map((b) => (
                   <button
                     key={b.id}
                     onClick={() => { setBoutique(b); setBoutiqueOpen(false); }}
-                    className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-sm hover:bg-slate-50 transition-colors ${currentBoutique?.id === b.id ? 'text-sky-700 font-medium' : 'text-slate-700'}`}
+                    className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-sm hover:bg-sky-50 transition-colors ${currentBoutique?.id === b.id ? 'text-sky-700 font-semibold bg-sky-50/70' : 'text-slate-700'}`}
                   >
                     <span className="truncate">{b.nom}</span>
                     {currentBoutique?.id === b.id && <Check className="w-4 h-4 flex-shrink-0 text-sky-600" />}
@@ -404,37 +439,41 @@ export default function Layout({ currentView, onNavigate, children }: LayoutProp
         </div>
       )}
 
-      {/* Nav items */}
-      <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-        {NAV_ITEMS.filter((item) => {
-          if (item.id === 'boutiques' && role !== 'admin') return false;
-          if (item.id === 'utilisateurs' && role !== 'admin') return false;
-          if (item.id === 'bons_reduction' && role !== 'admin') return false;
-          if (item.id === 'entreprise' && role && role !== 'admin' && role !== 'gerant') return false;
-          if (item.id === 'consommables' && role && role !== 'admin' && role !== 'gerant' && role !== 'commercial') return false;
-          if (item.id === 'superadmin' && !isSuperAdmin) return false;
-          if (item.id === 'commande' && role === 'collecteur') return false;
-          if (item.id === 'collecte' && role && role !== 'collecteur' && role !== 'admin' && role !== 'gerant' && role !== 'commercial') return false;
-          if (item.id === 'livraison' && role && role !== 'collecteur' && role !== 'admin' && role !== 'gerant' && role !== 'commercial') return false;
-          if (item.id === 'dashboard' && role && role !== 'admin' && !entreprise?.dashboard_visible_roles?.includes(role)) return false;
-          if (role === 'collecteur' && !['commande', 'collecte', 'livraison', 'dashboard'].includes(item.id) && item.id !== 'superadmin') return false;
-          return true;
-        }).map((item) => {
-          const Icon = item.icon;
-          const isActive = currentView === item.id;
+      {/* Grouped colorful Nav items */}
+      <nav className="flex-1 px-3 py-3 space-y-4 overflow-y-auto">
+        {NAV_GROUPS.map((group) => {
+          const items = visibleNavItems.filter((item) => item.group === group.id);
+          if (items.length === 0) return null;
           return (
-            <button
-              key={item.id}
-              onClick={() => handleNavigate(item.id)}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${
-                isActive
-                  ? 'bg-sky-50 text-sky-700 ring-1 ring-sky-100'
-                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-              }`}
-            >
-              <Icon className={`w-4 h-4 flex-shrink-0 ${isActive ? 'text-sky-600' : 'text-slate-400'}`} />
-              {t(item.labelKey)}
-            </button>
+            <div key={group.id} className="space-y-1">
+              <p className="px-2.5 pb-0.5 text-[0.65rem] font-bold uppercase tracking-wider text-slate-400">
+                {lang === 'fr' ? group.fr : group.en}
+              </p>
+              {items.map((item) => {
+                const Icon = item.icon;
+                const isActive = currentView === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => handleNavigate(item.id)}
+                    className={`group w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-sm font-semibold transition-all duration-150 ${
+                      isActive
+                        ? 'bg-gradient-to-r from-sky-500 to-teal-500 text-white shadow-md shadow-sky-500/25'
+                        : 'text-slate-700 hover:bg-sky-50/80 hover:text-slate-950'
+                    }`}
+                  >
+                    <span className={`w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 transition-colors ${
+                      isActive
+                        ? 'bg-white/20 text-white'
+                        : `${item.tintBg} ${item.tintText} group-hover:scale-105 transition-transform`
+                    }`}>
+                      <Icon className="w-4 h-4" />
+                    </span>
+                    <span className="truncate">{t(item.labelKey)}</span>
+                  </button>
+                );
+              })}
+            </div>
           );
         })}
       </nav>
@@ -447,11 +486,11 @@ export default function Layout({ currentView, onNavigate, children }: LayoutProp
         );
         const isDemo = licenceInfo.type_licence === 'demo' || licenceInfo.statut === 'demo';
         return (
-          <div className="px-3 pt-3">
-            <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium ${isDemo ? 'bg-sky-50 text-sky-700 border border-sky-100' : 'bg-emerald-50 text-emerald-700 border border-emerald-100'}`}>
-              <KeyRound className="w-3.5 h-3.5 flex-shrink-0" />
+          <div className="px-3 pt-2.5">
+            <div className={`flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium ${isDemo ? 'bg-gradient-to-r from-sky-50 to-cyan-50 text-sky-800 border border-sky-200/70' : 'bg-gradient-to-r from-emerald-50 to-teal-50 text-emerald-800 border border-emerald-200/70'}`}>
+              <KeyRound className={`w-4 h-4 flex-shrink-0 ${isDemo ? 'text-sky-600' : 'text-emerald-600'}`} />
               <div className="min-w-0">
-                <div className="truncate font-semibold">
+                <div className="truncate font-bold">
                   {isDemo
                     ? (lang === 'fr' ? `Licence Démo · ${daysLeft}j restants` : `Demo License · ${daysLeft}d left`)
                     : (lang === 'fr' ? 'Licence annuelle' : 'Annual license')}
@@ -468,10 +507,10 @@ export default function Layout({ currentView, onNavigate, children }: LayoutProp
 
       {/* Install button */}
       {canInstall && (
-        <div className="px-3 pt-3">
+        <div className="px-3 pt-2.5">
           <button
             onClick={handleInstallClick}
-            className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg bg-sky-500 text-white text-sm font-medium hover:bg-sky-600 transition-colors shadow-sm"
+            className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-gradient-to-r from-sky-500 to-teal-500 text-white text-sm font-semibold hover:from-sky-600 hover:to-teal-600 transition-all shadow-sm shadow-sky-500/20"
           >
             <Download className="w-4 h-4" />
             {t('nav.install')}
@@ -479,73 +518,73 @@ export default function Layout({ currentView, onNavigate, children }: LayoutProp
         </div>
       )}
       {installed && (
-        <div className="px-3 pt-3">
-          <div className="flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-emerald-50 border border-emerald-100 text-emerald-700 text-xs font-medium">
+        <div className="px-3 pt-2.5">
+          <div className="flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200/70 text-emerald-700 text-xs font-semibold">
             <CheckCircle2 className="w-3.5 h-3.5" />
             {lang === 'fr' ? 'App installée' : 'App installed'}
           </div>
         </div>
       )}
 
-      {/* Change password button */}
-      <div className="px-3 pt-2">
+      {/* Account actions */}
+      <div className="px-3 pt-2.5 pb-1 grid grid-cols-2 gap-1.5">
         <button
           onClick={() => setShowPasswordModal(true)}
-          className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-50 border border-slate-100 text-xs text-slate-600 hover:bg-slate-100 transition-colors"
+          className="flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-xl bg-slate-50 border border-slate-200/80 text-xs font-semibold text-slate-600 hover:bg-sky-50 hover:text-sky-700 hover:border-sky-200 transition-colors"
+          title={t('nav.changePassword')}
         >
           <Lock className="w-3.5 h-3.5 flex-shrink-0" />
-          {t('nav.changePassword')}
+          <span className="truncate">{lang === 'fr' ? 'Mot de passe' : 'Password'}</span>
         </button>
-      </div>
-
-      {/* Logout button */}
-      <div className="px-3 pt-2 pb-1">
         <button
           onClick={() => signOut()}
-          className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-red-50 border border-red-100 text-xs text-red-600 hover:bg-red-100 transition-colors"
+          className="flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-xl bg-rose-50 border border-rose-200/70 text-xs font-semibold text-rose-600 hover:bg-rose-100 transition-colors"
+          title={t('nav.logout')}
         >
           <LogOut className="w-3.5 h-3.5 flex-shrink-0" />
-          {t('nav.logout')}
+          <span className="truncate">{t('nav.logout')}</span>
         </button>
       </div>
 
       {/* Footer */}
-      <div className="px-5 py-4 border-t border-slate-100 space-y-1.5">
-        <p className="text-xs font-semibold text-slate-500 text-center">
-          PressingLite
-        </p>
-        <p className="text-[0.7rem] text-slate-400 text-center">
-          © {new Date().getFullYear()} AGASOFT. {lang === 'fr' ? 'Tous droits réservés.' : 'All rights reserved.'}
-        </p>
-        <div className="flex items-center justify-center gap-1 pt-1">
-          <Globe className="w-3 h-3 text-slate-400" />
-          {(['fr', 'en'] as Lang[]).map((l) => (
-            <button
-              key={l}
-              onClick={() => setLang(l)}
-              className={`px-2 py-0.5 rounded text-[0.7rem] font-medium transition-all ${
-                lang === l ? 'bg-sky-500 text-white' : 'text-slate-400 hover:text-slate-600'
-              }`}
-            >
-              {l === 'fr' ? 'FR' : 'EN'}
-            </button>
-          ))}
+      <div className="px-4 py-3.5 mt-1 border-t border-sky-100/80 bg-gradient-to-b from-white to-sky-50/40 space-y-1.5">
+        <div className="flex items-center justify-between">
+          <p className="text-xs font-extrabold tracking-tight text-sky-700">
+            PressingLite
+          </p>
+          <div className="flex items-center gap-1">
+            <Globe className="w-3 h-3 text-slate-400" />
+            {(['fr', 'en'] as Lang[]).map((l) => (
+              <button
+                key={l}
+                onClick={() => setLang(l)}
+                className={`px-2 py-0.5 rounded-md text-[0.68rem] font-bold transition-all ${
+                  lang === l ? 'bg-sky-500 text-white shadow-xs' : 'text-slate-400 hover:text-slate-700'
+                }`}
+              >
+                {l === 'fr' ? 'FR' : 'EN'}
+              </button>
+            ))}
+          </div>
         </div>
-        <a
-          href="tel:2250102202062"
-          className="flex items-center justify-center gap-1.5 text-[0.7rem] text-slate-400 hover:text-sky-600 transition-colors"
-        >
-          <Phone className="w-3 h-3" />
-          225 010 220 2062
-        </a>
+        <div className="flex items-center justify-between text-[0.68rem] text-slate-400">
+          <span>© {new Date().getFullYear()} AGASOFT</span>
+          <a
+            href="tel:2250102202062"
+            className="inline-flex items-center gap-1 text-slate-500 hover:text-sky-600 font-medium transition-colors"
+          >
+            <Phone className="w-3 h-3" />
+            225 010 220 2062
+          </a>
+        </div>
       </div>
     </>
   );
 
   return (
-    <div className="min-h-screen bg-slate-50 flex">
+    <div className="min-h-screen bg-gradient-to-br from-[#eef6ff] via-[#f8fbff] to-[#ecfdf5] flex">
       {/* Desktop sidebar */}
-      <aside className="hidden md:flex flex-col w-64 bg-white border-r border-slate-200 sticky top-0 h-screen flex-shrink-0">
+      <aside className="hidden md:flex flex-col w-64 bg-white/95 backdrop-blur-md border-r border-sky-100 shadow-sm sticky top-0 h-screen flex-shrink-0">
         {sidebarContent}
       </aside>
 
@@ -553,13 +592,13 @@ export default function Layout({ currentView, onNavigate, children }: LayoutProp
       {mobileOpen && (
         <div className="md:hidden fixed inset-0 z-50 flex">
           <div
-            className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
+            className="absolute inset-0 bg-slate-900/45 backdrop-blur-xs"
             onClick={() => setMobileOpen(false)}
           />
-          <aside className="relative flex flex-col w-64 bg-white border-r border-slate-200 h-full animate-[slideIn_0.2s_ease-out]">
+          <aside className="relative flex flex-col w-64 bg-white border-r border-sky-100 shadow-2xl h-full animate-[slideIn_0.2s_ease-out]">
             <button
               onClick={() => setMobileOpen(false)}
-              className="absolute top-4 right-3 w-8 h-8 flex items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors"
+              className="absolute top-3.5 right-3 z-10 w-8 h-8 flex items-center justify-center rounded-xl text-white/90 hover:bg-white/20 hover:text-white transition-colors"
             >
               <X className="w-5 h-5" />
             </button>
@@ -698,24 +737,49 @@ export default function Layout({ currentView, onNavigate, children }: LayoutProp
         )}
 
         {/* Desktop top bar */}
-        <header className="hidden md:flex items-center justify-between px-6 h-14 bg-white border-b border-slate-200 sticky top-0 z-30">
-          <div className="flex items-center gap-2">
-            <Store className="w-4 h-4 text-sky-600 flex-shrink-0" />
-            <span className="text-sm font-semibold text-slate-900 truncate">
-              {currentBoutique?.nom ?? (lang === 'fr' ? 'Toutes les boutiques' : 'All boutiques')}
-            </span>
+        <header className="hidden md:flex items-center justify-between px-6 h-16 bg-white/85 backdrop-blur-md border-b border-sky-100/90 sticky top-0 z-30">
+          <div className="flex items-center gap-3 min-w-0">
+            {activeNavItem && (() => {
+              const ActiveIcon = activeNavItem.icon;
+              return (
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <span className={`w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 ${activeNavItem.tintBg} ${activeNavItem.tintText}`}>
+                    <ActiveIcon className="w-4 h-4" />
+                  </span>
+                  <span className="text-base font-extrabold tracking-tight text-slate-900 truncate">
+                    {t(activeNavItem.labelKey)}
+                  </span>
+                </div>
+              );
+            })()}
+            <span className="h-4 w-px bg-sky-200/80 flex-shrink-0" />
+            <div className="flex items-center gap-1.5 min-w-0 text-sky-700">
+              <Store className="w-4 h-4 text-sky-500 flex-shrink-0" />
+              <span className="text-xs font-semibold truncate">
+                {currentBoutique?.nom ?? (lang === 'fr' ? 'Toutes les boutiques' : 'All boutiques')}
+              </span>
+            </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5">
+            {canQuickDepot && (
+              <button
+                onClick={() => handleNavigate('depot')}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white text-xs font-bold shadow-sm shadow-orange-500/25 transition-all"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                {t('dash.newDepot')}
+              </button>
+            )}
             <button
               onClick={() => setShowSyncModal(true)}
-              className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+              className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-colors ${
                 !isOnline
                   ? 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100'
                   : failedCount > 0
                     ? 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100'
                     : isSyncing || pendingCount > 0
                       ? 'bg-sky-50 text-sky-700 border-sky-200 hover:bg-sky-100'
-                      : 'bg-emerald-50/70 text-emerald-700 border-emerald-200/80 hover:bg-emerald-100/70'
+                      : 'bg-emerald-50/90 text-emerald-700 border-emerald-200/80 hover:bg-emerald-100/80'
               }`}
               title={lang === 'fr' ? 'Centre de synchronisation & mode hors-ligne' : 'Sync & Offline Center'}
             >
@@ -756,25 +820,22 @@ export default function Layout({ currentView, onNavigate, children }: LayoutProp
                 </>
               )}
             </button>
-            <span className="text-xs text-slate-400">
-              {entreprise?.nom ?? 'PressingLite'}
-            </span>
           </div>
         </header>
 
         {/* Mobile header */}
-        <header className="md:hidden bg-white border-b border-slate-200 sticky top-0 z-30">
+        <header className="md:hidden bg-white/90 backdrop-blur-md border-b border-sky-100/90 sticky top-0 z-30">
           <div className="flex items-center justify-between px-4 h-14">
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-sky-500 to-cyan-600 flex items-center justify-center shadow-sm flex-shrink-0">
+              <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-sky-500 via-cyan-500 to-teal-500 flex items-center justify-center shadow-sm shadow-sky-500/25 flex-shrink-0">
                 <Package className="w-4 h-4 text-white" />
               </div>
               <div className="min-w-0">
-                <span className="text-sm font-bold text-slate-900 truncate block">
+                <span className="text-sm font-extrabold tracking-tight text-slate-900 truncate block">
                   {entreprise?.nom ?? 'PressingLite'}
                 </span>
                 {currentBoutique && (
-                  <span className="text-xs text-sky-600 font-medium truncate flex items-center gap-1">
+                  <span className="text-xs text-sky-600 font-semibold truncate flex items-center gap-1">
                     <Store className="w-3 h-3 flex-shrink-0" />
                     {currentBoutique.nom}
                   </span>
@@ -784,14 +845,14 @@ export default function Layout({ currentView, onNavigate, children }: LayoutProp
             <div className="flex items-center gap-1.5 flex-shrink-0">
               <button
                 onClick={() => setShowSyncModal(true)}
-                className={`relative h-9 px-2.5 flex items-center justify-center gap-1 rounded-lg text-xs font-semibold border transition-colors ${
+                className={`relative h-9 px-2.5 flex items-center justify-center gap-1 rounded-xl text-xs font-semibold border transition-colors ${
                   !isOnline
                     ? 'bg-amber-50 text-amber-700 border-amber-200'
                     : failedCount > 0
                       ? 'bg-red-50 text-red-700 border-red-200'
                       : isSyncing || pendingCount > 0
                         ? 'bg-sky-50 text-sky-700 border-sky-200'
-                        : 'bg-slate-50 text-emerald-600 border-slate-200'
+                        : 'bg-emerald-50/80 text-emerald-600 border-emerald-200/70'
                 }`}
                 title={lang === 'fr' ? 'Synchronisation & Hors-ligne' : 'Sync & Offline'}
               >
@@ -809,7 +870,7 @@ export default function Layout({ currentView, onNavigate, children }: LayoutProp
               {canInstall && (
                 <button
                   onClick={handleInstallClick}
-                  className="w-9 h-9 flex items-center justify-center rounded-lg text-sky-600 hover:bg-sky-50 transition-colors"
+                  className="w-9 h-9 flex items-center justify-center rounded-xl text-sky-600 hover:bg-sky-50 transition-colors"
                   title={t('nav.install')}
                 >
                   <Download className="w-5 h-5" />
@@ -817,7 +878,7 @@ export default function Layout({ currentView, onNavigate, children }: LayoutProp
               )}
               <button
                 onClick={() => setMobileOpen(true)}
-                className="w-9 h-9 flex items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 transition-colors"
+                className="w-9 h-9 flex items-center justify-center rounded-xl bg-sky-50 text-sky-700 hover:bg-sky-100 transition-colors"
               >
                 <Menu className="w-5 h-5" />
               </button>
@@ -826,7 +887,7 @@ export default function Layout({ currentView, onNavigate, children }: LayoutProp
         </header>
 
         <main className="flex-1 w-full px-4 sm:px-6 py-6">
-          <div className="max-w-5xl mx-auto">{children}</div>
+          <div className="max-w-6xl mx-auto">{children}</div>
         </main>
       </div>
 

@@ -131,29 +131,34 @@ export default function AuthForm() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-sky-50 to-cyan-50 flex items-center justify-center px-4 py-8">
-      <div className="w-full max-w-md">
+    <div className="relative min-h-screen overflow-hidden bg-gradient-to-br from-sky-100 via-cyan-50 to-emerald-50 flex items-center justify-center px-4 py-8">
+      {/* Subtle sunlit ambient accents */}
+      <div className="pointer-events-none absolute -top-24 -left-24 w-96 h-96 rounded-full bg-sky-300/30 blur-3xl" />
+      <div className="pointer-events-none absolute -bottom-24 -right-24 w-96 h-96 rounded-full bg-teal-300/30 blur-3xl" />
+      <div className="pointer-events-none absolute top-1/3 right-12 w-64 h-64 rounded-full bg-amber-200/25 blur-3xl" />
+
+      <div className="relative w-full max-w-md">
         {/* Logo + Language selector */}
-        <div className="text-center mb-8">
+        <div className="text-center mb-7">
           <div className="flex items-center justify-center gap-3 mb-4">
-            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-sky-500 to-cyan-600 flex items-center justify-center shadow-lg">
+            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-sky-500 via-cyan-500 to-teal-500 flex items-center justify-center shadow-lg shadow-sky-500/30 ring-4 ring-white/80">
               <Package className="w-8 h-8 text-white" />
             </div>
           </div>
-          <h1 className="text-2xl font-bold text-slate-900">PressingLite</h1>
-          <p className="text-sm text-slate-500 mt-1">
+          <h1 className="text-3xl font-extrabold tracking-tight text-slate-900">PressingLite</h1>
+          <p className="text-sm font-medium text-sky-700/80 mt-1">
             {lang === 'fr' ? 'Gestion de pressing en ligne' : 'Online dry cleaning management'}
           </p>
-          <div className="flex items-center justify-center gap-1 mt-4">
-            <Globe className="w-4 h-4 text-slate-400" />
+          <div className="flex items-center justify-center gap-1.5 mt-4">
+            <Globe className="w-4 h-4 text-sky-500" />
             {(['fr', 'en'] as Lang[]).map((l) => (
               <button
                 key={l}
                 onClick={() => setLang(l)}
-                className={`px-3 py-1 rounded-lg text-xs font-medium transition-all ${
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
                   lang === l
-                    ? 'bg-sky-500 text-white'
-                    : 'bg-white border border-slate-200 text-slate-500 hover:text-slate-700'
+                    ? 'bg-gradient-to-r from-sky-500 to-teal-500 text-white shadow-sm shadow-sky-500/25'
+                    : 'bg-white/90 border border-sky-200/70 text-slate-600 hover:text-sky-700'
                 }`}
               >
                 {l === 'fr' ? 'Français' : 'English'}
@@ -162,21 +167,25 @@ export default function AuthForm() {
           </div>
         </div>
 
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-xl p-8">
+        <div className="bg-white/95 backdrop-blur-md rounded-3xl border border-white shadow-2xl shadow-sky-900/10 p-7 sm:p-8">
           {/* Tabs */}
-          <div className="flex gap-1 p-1 bg-slate-100 rounded-xl mb-6">
+          <div className="flex gap-1.5 p-1.5 bg-sky-50/90 border border-sky-100 rounded-2xl mb-6">
             <button
               onClick={() => { setMode('signin'); setError(null); }}
-              className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-all ${
-                mode === 'signin' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+              className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-all ${
+                mode === 'signin'
+                  ? 'bg-gradient-to-r from-sky-500 to-teal-500 text-white shadow-sm shadow-sky-500/25'
+                  : 'text-slate-600 hover:text-sky-700'
               }`}
             >
               {t('auth.signIn')}
             </button>
             <button
               onClick={() => { setMode('signup'); setError(null); }}
-              className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-all ${
-                mode === 'signup' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+              className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-all ${
+                mode === 'signup'
+                  ? 'bg-gradient-to-r from-sky-500 to-teal-500 text-white shadow-sm shadow-sky-500/25'
+                  : 'text-slate-600 hover:text-sky-700'
               }`}
             >
               {t('auth.signUp')}
@@ -431,7 +440,7 @@ export default function AuthForm() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full px-4 py-2.5 rounded-lg bg-sky-500 text-white font-medium text-sm hover:bg-sky-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              className="w-full px-4 py-3 rounded-xl bg-gradient-to-r from-sky-500 via-cyan-500 to-teal-500 text-white font-bold text-sm hover:from-sky-600 hover:via-cyan-600 hover:to-teal-600 shadow-md shadow-sky-500/25 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               {loading ? (
                 <>
@@ -512,7 +521,7 @@ export default function AuthForm() {
                   <button
                     type="submit"
                     disabled={forgotLoading}
-                    className="w-full px-4 py-2.5 rounded-lg bg-sky-500 text-white font-medium text-sm hover:bg-sky-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                    className="w-full px-4 py-2.5 rounded-xl bg-gradient-to-r from-sky-500 to-teal-500 text-white font-bold text-sm hover:from-sky-600 hover:to-teal-600 shadow-sm shadow-sky-500/25 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                   >
                     {forgotLoading ? (
                       <><Loader2 className="w-4 h-4 animate-spin" />
