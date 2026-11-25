@@ -96,6 +96,25 @@ function makeDefaultArticle(): ArticleDraft {
   };
 }
 
+function getDefaultTypeTraitementId(types: TypeTraitement[]): string {
+  if (types.length === 0) return '';
+  const exact = types.find(
+    (item) =>
+      item.libelle.trim().toLowerCase() === 'normal' ||
+      item.code.trim().toLowerCase() === 'normal',
+  );
+  if (exact) return exact.id;
+  const partial = types.find(
+    (item) =>
+      item.libelle.toLowerCase().includes('normal') ||
+      item.code.toLowerCase().includes('normal'),
+  );
+  if (partial) return partial.id;
+  const baseCoef = types.find((item) => Number(item.coefficient) === 1);
+  if (baseCoef) return baseCoef.id;
+  return types[0].id;
+}
+
 export default function DepotForm({ onDone }: { onDone: () => void }) {
   const { t, lang } = useI18n();
   const { role, currentBoutique, reloadBoutiques } = useAuth();
@@ -217,7 +236,7 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
         db.getDistinctFieldValues('griffe'),
       ]);
       setTypesTraitement(typesData);
-      if (typesData.length > 0) setTypeTraitementId(typesData[0].id);
+      if (typesData.length > 0) setTypeTraitementId(getDefaultTypeTraitementId(typesData));
       setCatalogArticles(articlesData);
       setAllVariants(variantsData);
       setModesReglement(modesData);
@@ -746,7 +765,7 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
     setArticles([makeDefaultArticle()]);
     setDateRetraitOverride('');
     setDateDepotOverride('');
-    setTypeTraitementId('');
+    setTypeTraitementId(getDefaultTypeTraitementId(typesTraitement));
     setPaymentLines([makeDefaultPaymentLine()]);
     setNotes('');
     setCouponCode('');
