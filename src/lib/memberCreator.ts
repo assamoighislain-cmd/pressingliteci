@@ -135,6 +135,77 @@ export async function adminResetMemberPassword(
   return { error: null };
 }
 
+export function buildDeleteMemberSql(email: string): string {
+  const safeEmail = email.trim().toLowerCase().replace(/'/g, "''");
+  return `DO $$
+DECLARE
+  v_uid uuid;
+  v_tid uuid;
+  v_dup_ent_id bigint;
+BEGIN
+  SELECT id INTO v_uid FROM auth.users WHERE lower(trim(email)) = lower('${safeEmail}') LIMIT 1;
+  IF v_uid IS NULL THEN RAISE NOTICE 'Compte introuvable ou déjà supprimé.'; RETURN; END IF;
+  IF EXISTS (SELECT 1 FROM public.super_admins WHERE user_id = v_uid) THEN RAISE EXCEPTION 'Impossible de supprimer un Super Admin.'; END IF;
+  SELECT tenant_id INTO v_tid FROM public.entreprise_members WHERE user_id = v_uid LIMIT 1;
+  IF v_tid = v_uid THEN RAISE EXCEPTION 'Impossible de supprimer le propriétaire principal de l''entreprise.'; END IF;
+  IF v_tid IS NOT NULL THEN
+    UPDATE public.clients SET user_id = v_tid WHERE user_id = v_uid AND tenant_id = v_tid;
+    UPDATE public.depots SET user_id = v_tid WHERE user_id = v_uid AND tenant_id = v_tid;
+    UPDATE public.depot_articles SET user_id = v_tid WHERE user_id = v_uid AND tenant_id = v_tid;
+    UPDATE public.depot_avances SET user_id = v_tid WHERE user_id = v_uid AND tenant_id = v_tid;
+    UPDATE public.articles SET user_id = v_tid WHERE user_id = v_uid AND tenant_id = v_tid;
+    UPDATE public.types_traitement SET user_id = v_tid WHERE user_id = v_uid AND tenant_id = v_tid;
+    UPDATE public.modes_reglement SET user_id = v_tid WHERE user_id = v_uid AND tenant_id = v_tid;
+    UPDATE public.depenses SET user_id = v_tid WHERE user_id = v_uid AND tenant_id = v_tid;
+    UPDATE public.depense_categories SET user_id = v_tid WHERE user_id = v_uid AND tenant_id = v_tid;
+    UPDATE public.depot_counter SET user_id = v_tid WHERE user_id = v_uid AND tenant_id = v_tid;
+    DELETE FROM public.code_counter WHERE user_id = v_uid AND EXISTS (SELECT 1 FROM public.code_counter t WHERE t.id = code_counter.id AND t.user_id = v_tid);
+    UPDATE public.code_counter SET user_id = v_tid WHERE user_id = v_uid AND tenant_id = v_tid;
+  END IF;
+  SELECT id INTO v_dup_ent_id FROM public.entreprise WHERE user_id = v_uid LIMIT 1;
+  IF v_dup_ent_id IS NOT NULL THEN
+    IF EXISTS (SELECT 1 FROM public.depots WHERE tenant_id = v_uid) OR EXISTS (SELECT 1 FROM public.clients WHERE tenant_id = v_uid) THEN
+      RAISE EXCEPTION 'Ce compte possède sa propre entreprise avec des données.';
+    END IF;
+    DELETE FROM public.join_requests WHERE tenant_id = v_uid;
+    DELETE FROM public.licences WHERE entreprise_id = v_dup_ent_id;
+    DELETE FROM public.boutiques WHERE tenant_id = v_uid;
+    DELETE FROM public.entreprise_members WHERE tenant_id = v_uid;
+    DELETE FROM public.entreprise WHERE id = v_dup_ent_id;
+  END IF;
+  DELETE FROM public.entreprise_members WHERE user_id = v_uid;
+  DELETE FROM public.join_requests WHERE user_id = v_uid OR lower(trim(user_email)) = lower('${safeEmail}');
+  DELETE FROM public.push_subscriptions WHERE user_id = v_uid;
+  DELETE FROM auth.users WHERE id = v_uid;
+END $$;`;
+}
+
+export async function adminDeleteMemberAccount(
+  targetUserId: string,
+  targetTenantId?: string | null,
+): Promise<{ error: string | null; missingRpc?: boolean; authAccountDeleted?: boolean }> {
+  const { data, error } = await supabase.rpc('admin_delete_member_account', {
+    target_user_id: targetUserId,
+    target_tenant_id: targetTenantId ?? null,
+  });
+
+  if (error) {
+    const msg = (error.message || '').toLowerCase();
+    const missingRpc =
+      error.code === 'PGRST202' ||
+      msg.includes('could not find the function') ||
+      msg.includes('does not exist');
+    return { error: error.message, missingRpc };
+  }
+
+  notifyRealtimeMutation('entreprise_members', true);
+  const res = data as { auth_account_deleted?: boolean } | null;
+  return {
+    error: null,
+    authAccountDeleted: Boolean(res?.auth_account_deleted),
+  };
+}
+
 /**
  * Creates a brand-new user account (without ever creating a duplicate company
  * and without logging out the current admin) OR attaches an already-existing

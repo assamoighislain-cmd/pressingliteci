@@ -116,6 +116,9 @@ export interface Depot {
   collected_at: string | null;
   ready_for_delivery?: boolean | null;
   boutique_id?: string | null;
+  commercial_id?: string | null;
+  commission_taux?: number | null;
+  commission_montant?: number | null;
   created_at: string;
 }
 
@@ -366,6 +369,35 @@ export interface Relance {
 export interface RelanceWithClient extends Relance {
   client_nom: string;
   client_telephone: string | null;
+}
+
+export interface Commercial {
+  id: string;
+  tenant_id: string;
+  boutique_id: string | null;
+  nom: string;
+  telephone: string | null;
+  email: string | null;
+  taux_commission: number;
+  actif: boolean;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CommissionVersement {
+  id: string;
+  tenant_id: string;
+  boutique_id: string | null;
+  commercial_id: string;
+  montant: number;
+  mode_reglement: string | null;
+  date_versement: string;
+  periode_debut: string | null;
+  periode_fin: string | null;
+  reference: string | null;
+  notes: string | null;
+  created_at: string;
 }
 
 export function getModeReglementLabel(mode: ModeReglement | null, modes: ModeReglementRow[] = []): string {

@@ -3,7 +3,7 @@ import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth';
 import { useI18n } from '@/lib/i18n';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
-import { createOrAttachCompanyMember, generateTemporaryPassword, adminResetMemberPassword, verifyMemberLogin, buildMemberPasswordResetSql } from '@/lib/memberCreator';
+import { createOrAttachCompanyMember, generateTemporaryPassword, adminResetMemberPassword, verifyMemberLogin, buildMemberPasswordResetSql, adminDeleteMemberAccount, buildDeleteMemberSql } from '@/lib/memberCreator';
 import { buildWhatsAppUrl } from '@/types';
 import { UserPlus, Trash2, Shield, Crown, UserCog, Mail, Loader2, X, Check, Pencil, Phone, User, UserCheck, Clock, Store, Truck, RefreshCw, Lock, Eye, EyeOff, Copy, Sparkles, MessageCircle, KeyRound, AlertTriangle } from 'lucide-react';
 
@@ -95,6 +95,11 @@ export default function TeamManagement() {
   const [editEmail, setEditEmail] = useState('');
   const [editRole, setEditRole] = useState('');
   const [editBoutiqueId, setEditBoutiqueId] = useState('');
+
+  // Permanent delete modal state
+  const [deleteMember, setDeleteMember] = useState<Member | null>(null);
+  const [deleteMissingRpc, setDeleteMissingRpc] = useState(false);
+  const [copiedDeleteSql, setCopiedDeleteSql] = useState(false);
 
   const isAdmin = role === 'admin';
 
@@ -326,27 +331,67 @@ export default function TeamManagement() {
     }
   }
 
-  async function handleRemoveMember(memberId: string, memberUserId: string) {
-    if (memberUserId === user?.id) {
+  function openDeleteMemberModal(member: Member) {
+    if (member.user_id === user?.id) {
       setError(lang === 'fr' ? "Vous ne pouvez pas vous retirer de l'équipe." : "You cannot remove yourself from the team.");
       return;
     }
-    if (!window.confirm(lang === 'fr' ? 'Retirer ce membre de l\'équipe ?' : 'Remove this member from the team?')) return;
-
+    setDeleteMember(member);
+    setDeleteMissingRpc(false);
+    setCopiedDeleteSql(false);
     setError(null);
-    try {
-      const { error } = await supabase
-        .from('entreprise_members')
-        .delete()
-        .eq('id', memberId);
+  }
 
-      if (error) {
-        setError(error.message);
+  async function handleConfirmDeleteMember(membershipOnly = false) {
+    if (!deleteMember) return;
+    setSubmitting(true);
+    setError(null);
+    setSuccess(null);
+    setDeleteMissingRpc(false);
+    try {
+      if (membershipOnly) {
+        const { error: delErr } = await supabase
+          .from('entreprise_members')
+          .delete()
+          .eq('id', deleteMember.id);
+        if (delErr) {
+          setError(delErr.message);
+        } else {
+          setMembers((prev) => prev.filter((m) => m.id !== deleteMember.id));
+          setSuccess(
+            lang === 'fr'
+              ? `« ${deleteMember.email} » a été retiré de l'entreprise.`
+              : `"${deleteMember.email}" has been removed from the company.`,
+          );
+          setDeleteMember(null);
+        }
+        return;
+      }
+
+      const res = await adminDeleteMemberAccount(deleteMember.user_id, tenantId);
+      if (res.error) {
+        if (res.missingRpc) {
+          setDeleteMissingRpc(true);
+        } else {
+          setError(res.error);
+        }
       } else {
-        setMembers((prev) => prev.filter((m) => m.id !== memberId));
+        setMembers((prev) => prev.filter((m) => m.id !== deleteMember.id));
+        setSuccess(
+          res.authAccountDeleted
+            ? lang === 'fr'
+              ? `Le compte « ${deleteMember.email} » et son mot de passe ont été supprimés définitivement.`
+              : `Account "${deleteMember.email}" and its password have been permanently deleted.`
+            : lang === 'fr'
+              ? `« ${deleteMember.email} » a été retiré de votre entreprise.`
+              : `"${deleteMember.email}" has been removed from your company.`,
+        );
+        setDeleteMember(null);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : (lang === 'fr' ? 'Erreur lors du retrait' : 'Error during removal'));
+      setError(err instanceof Error ? err.message : (lang === 'fr' ? 'Erreur lors de la suppression' : 'Error during deletion'));
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -1070,6 +1115,101 @@ export default function TeamManagement() {
         </div>
       )}
 
+      {/* Permanent delete member modal */}
+      {deleteMember && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+          <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => !submitting && setDeleteMember(null)} />
+          <div className="relative bg-white rounded-2xl shadow-xl w-full max-w-md p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-full bg-red-100 text-red-600 flex items-center justify-center">
+                  <Trash2 className="w-4 h-4" />
+                </div>
+                <h3 className="text-base font-semibold text-slate-900">
+                  {lang === 'fr' ? 'Supprimer ce compte ?' : 'Delete this account?'}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => !submitting && setDeleteMember(null)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="rounded-xl bg-red-50 border border-red-200 p-3.5 text-xs text-red-800 space-y-1.5">
+              <p className="font-semibold">
+                {deleteMember.full_name ? `${deleteMember.full_name} (${deleteMember.email})` : deleteMember.email}
+              </p>
+              <p>
+                {lang === 'fr'
+                  ? "Le compte, ses identifiants et son mot de passe seront définitivement supprimés. Les dépôts, clients et données de l'entreprise sont conservés."
+                  : 'The account, login credentials, and password will be permanently deleted. Company deposits, clients, and records are preserved.'}
+              </p>
+            </div>
+
+            {deleteMissingRpc && (() => {
+              const sqlSnippet = buildDeleteMemberSql(deleteMember.email);
+              return (
+                <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 space-y-2">
+                  <p className="text-xs font-medium text-amber-900">
+                    {lang === 'fr'
+                      ? "La fonction SQL de suppression complète n'est pas encore exécutée sur Supabase. Copiez et exécutez ce script dans Supabase → SQL Editor pour supprimer définitivement le compte et son mot de passe :"
+                      : 'The full deletion SQL function is not yet installed on Supabase. Run this script in Supabase → SQL Editor to permanently delete the account and password:'}
+                  </p>
+                  <pre className="text-[11px] font-mono bg-white border border-amber-200 rounded-lg p-2.5 max-h-40 overflow-auto text-slate-800 whitespace-pre-wrap">{sqlSnippet}</pre>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(sqlSnippet);
+                        setCopiedDeleteSql(true);
+                        setTimeout(() => setCopiedDeleteSql(false), 2000);
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 text-white text-xs font-medium hover:bg-amber-700"
+                    >
+                      {copiedDeleteSql ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      {copiedDeleteSql ? (lang === 'fr' ? 'SQL copié !' : 'SQL copied!') : (lang === 'fr' ? 'Copier le SQL' : 'Copy SQL')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleConfirmDeleteMember(true)}
+                      disabled={submitting}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-200 bg-white text-red-700 text-xs font-medium hover:bg-red-50 disabled:opacity-50"
+                    >
+                      {lang === 'fr' ? "Retirer uniquement de l'équipe" : 'Remove from team only'}
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
+
+            <div className="flex gap-3 pt-1">
+              <button
+                type="button"
+                onClick={() => setDeleteMember(null)}
+                disabled={submitting}
+                className="px-4 py-2.5 rounded-lg border border-slate-200 text-slate-600 text-sm font-medium hover:bg-slate-50 transition-colors disabled:opacity-50"
+              >
+                {t('common.cancel')}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleConfirmDeleteMember(false)}
+                disabled={submitting}
+                className="flex-1 px-4 py-2.5 rounded-lg bg-red-600 text-white text-sm font-medium hover:bg-red-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                {submitting
+                  ? (lang === 'fr' ? 'Suppression…' : 'Deleting…')
+                  : (lang === 'fr' ? 'Supprimer compte & mot de passe' : 'Delete account & password')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Members list */}
       {activeTab === 'members' && (
       <div className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
@@ -1151,9 +1291,9 @@ export default function TeamManagement() {
                           <option value="collecteur">{ROLE_LABELS.collecteur}</option>
                         </select>
                         <button
-                          onClick={() => handleRemoveMember(m.id, m.user_id)}
+                          onClick={() => openDeleteMemberModal(m)}
                           className="p-2 rounded-lg text-slate-300 hover:text-red-500 hover:bg-red-50 transition-colors"
-                          title={lang === 'fr' ? 'Retirer' : 'Remove'}
+                          title={lang === 'fr' ? 'Supprimer le compte' : 'Delete account'}
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>

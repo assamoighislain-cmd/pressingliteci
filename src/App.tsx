@@ -15,6 +15,7 @@ import JournalDepots from '@/components/JournalDepots';
 import JournalReglements from '@/components/JournalReglements';
 import Comptabilite from '@/components/Comptabilite';
 import Depenses from '@/components/Depenses';
+import CommerciauxPage from '@/components/CommerciauxPage';
 import Clients from '@/components/Clients';
 import TeamManagement from '@/components/TeamManagement';
 import SuperAdminPage from '@/components/SuperAdminPage';
@@ -300,6 +301,7 @@ function WorkspaceApp() {
             {view === 'journal' && <JournalReglements />}
             {view === 'comptabilite' && <Comptabilite />}
             {view === 'depenses' && <Depenses />}
+            {view === 'commerciaux' && <CommerciauxPage />}
             {view === 'clients' && <Clients />}
             {view === 'catalogue' && <Catalogue />}
             {view === 'modes_reglement' && <ModesReglement />}

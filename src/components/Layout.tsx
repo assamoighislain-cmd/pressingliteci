@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { db } from '@/lib/db';
 import { supabase } from '@/lib/supabase';
 import { useI18n, type Lang } from '@/lib/i18n';
-import { Package, ArrowDownToLine, ArrowUpFromLine, LayoutDashboard, BookOpen, Receipt, Building2, CalendarDays, Menu, X, Phone, Users, Download, History, Wallet, LogOut, UserCog, ShieldCheck, Calculator, Receipt as ReceiptIcon, Presentation as PresentationIcon, CreditCard, KeyRound, Lock, Loader2, Globe, Store, ChevronDown, Check, Truck, BellRing, ShoppingBag, WifiOff, Wifi, Share, Smartphone, Monitor, CheckCircle2, Ticket, PackageOpen, PackageSearch, Plus, RefreshCw, AlertTriangle, Trash2, Database, Clock, ClipboardList } from 'lucide-react';
+import { Package, ArrowDownToLine, ArrowUpFromLine, LayoutDashboard, BookOpen, Receipt, Building2, CalendarDays, Menu, X, Phone, Users, Download, History, Wallet, LogOut, UserCog, ShieldCheck, Calculator, Receipt as ReceiptIcon, Presentation as PresentationIcon, CreditCard, KeyRound, Lock, Loader2, Globe, Store, ChevronDown, Check, Truck, BellRing, ShoppingBag, WifiOff, Wifi, Share, Smartphone, Monitor, CheckCircle2, Ticket, PackageOpen, PackageSearch, Plus, RefreshCw, AlertTriangle, Trash2, Database, Clock, ClipboardList, Briefcase } from 'lucide-react';
 import { Entreprise } from '@/types';
 import { usePwaInstall } from '@/hooks/usePwaInstall';
 import { usePushNotifications, notifyCompanyDemoLicencePush, playApprovalSound } from '@/hooks/usePushNotifications';
@@ -60,7 +60,7 @@ function playOrderSound() {
   }
 }
 
-export type View = 'dashboard' | 'depot' | 'retrait' | 'planning' | 'historique' | 'journal_depots' | 'journal' | 'comptabilite' | 'depenses' | 'clients' | 'catalogue' | 'releve' | 'entreprise' | 'utilisateurs' | 'superadmin' | 'presentation' | 'modes_reglement' | 'boutiques' | 'commande' | 'collecte' | 'livraison' | 'bons_reduction' | 'consommables' | 'inventaire';
+export type View = 'dashboard' | 'depot' | 'retrait' | 'planning' | 'historique' | 'journal_depots' | 'journal' | 'comptabilite' | 'depenses' | 'commerciaux' | 'clients' | 'catalogue' | 'releve' | 'entreprise' | 'utilisateurs' | 'superadmin' | 'presentation' | 'modes_reglement' | 'boutiques' | 'commande' | 'collecte' | 'livraison' | 'bons_reduction' | 'consommables' | 'inventaire';
 
 interface LayoutProps {
   currentView: View;
@@ -99,6 +99,7 @@ const NAV_ITEMS: NavItemConfig[] = [
   { id: 'journal', labelKey: 'nav.journal', icon: Wallet, group: 'finance', tintBg: 'bg-emerald-100/80', tintText: 'text-emerald-600' },
   { id: 'comptabilite', labelKey: 'nav.comptabilite', icon: Calculator, group: 'finance', tintBg: 'bg-cyan-100/80', tintText: 'text-cyan-700' },
   { id: 'depenses', labelKey: 'nav.depenses', icon: ReceiptIcon, group: 'finance', tintBg: 'bg-rose-100/80', tintText: 'text-rose-600' },
+  { id: 'commerciaux', labelKey: 'nav.commerciaux', icon: Briefcase, group: 'finance', tintBg: 'bg-amber-100/80', tintText: 'text-amber-700' },
   { id: 'releve', labelKey: 'nav.releve', icon: Receipt, group: 'finance', tintBg: 'bg-amber-100/80', tintText: 'text-amber-600' },
   { id: 'clients', labelKey: 'nav.clients', icon: Users, group: 'clients', tintBg: 'bg-orange-100/80', tintText: 'text-orange-600' },
   { id: 'catalogue', labelKey: 'nav.catalogue', icon: BookOpen, group: 'clients', tintBg: 'bg-sky-100/80', tintText: 'text-sky-600' },
@@ -358,6 +359,7 @@ export default function Layout({ currentView, onNavigate, children }: LayoutProp
     if (item.id === 'boutiques' && role !== 'admin') return false;
     if (item.id === 'utilisateurs' && role !== 'admin') return false;
     if (item.id === 'bons_reduction' && role !== 'admin') return false;
+    if (item.id === 'commerciaux' && role && role !== 'admin' && role !== 'gerant') return false;
     if (item.id === 'entreprise' && role && role !== 'admin' && role !== 'gerant') return false;
     if (item.id === 'consommables' && role && role !== 'admin' && role !== 'gerant' && role !== 'commercial') return false;
     if (item.id === 'superadmin' && !isSuperAdmin) return false;

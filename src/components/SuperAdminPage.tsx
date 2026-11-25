@@ -7,7 +7,7 @@ import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import { usePushNotifications, playApprovalSound, notifyCompanyDemoLicencePush } from '@/hooks/usePushNotifications';
 import { notifyRealtimeMutation } from '@/lib/realtimeSync';
 import { buildWhatsAppUrl } from '@/types';
-import { createOrAttachCompanyMember, generateTemporaryPassword, adminResetMemberPassword, verifyMemberLogin, buildMemberPasswordResetSql } from '@/lib/memberCreator';
+import { createOrAttachCompanyMember, generateTemporaryPassword, adminResetMemberPassword, verifyMemberLogin, buildMemberPasswordResetSql, adminDeleteMemberAccount } from '@/lib/memberCreator';
 import { Building2, UserPlus, Crown, Loader2, X, Check, Shield, Mail, Users, ChevronDown, ChevronRight, Trash2, UserCog, Pencil, Phone, User, KeyRound, Calendar, Plus, Ban, Copy, TrendingUp, AlertTriangle, Clock, BarChart3, UserCheck, Search, Filter, ArrowUpDown, MapPin, Navigation, Activity, ShoppingBag, Package, Store, DollarSign, ArrowDownUp, MessageCircle, Send, ExternalLink, BellRing, BellOff, Volume2, Truck, ArrowRightLeft, Lock, Eye, EyeOff, Sparkles } from 'lucide-react';
 
 type WhatsAppTemplateType = 'approval' | 'licence' | 'reminder' | 'custom';
@@ -1133,33 +1133,53 @@ export default function SuperAdminPage() {
     }
   }
 
-  function handleRemoveMember(memberId: string, _tenantId: string) {
+  function handleRemoveMember(memberId: string, tenantId: string, memberUserId: string, memberEmail: string) {
     if (!isOnline) return;
     setConfirmAction({
-      title: lang === 'fr' ? 'Retirer ce membre ?' : 'Remove this member?',
+      title: lang === 'fr' ? 'Supprimer ce compte ?' : 'Delete this account?',
       message:
         lang === 'fr'
-          ? "Retirer ce membre de l'entreprise ? Il perdra l'accès à cet espace."
-          : 'Remove this member from the company? They will lose access to this workspace.',
-      confirmLabel: lang === 'fr' ? 'Retirer le membre' : 'Remove member',
+          ? `Supprimer « ${memberEmail} » de l'entreprise ainsi que son compte et son mot de passe ? Les dépôts et clients de l'entreprise seront conservés.`
+          : `Delete "${memberEmail}" from the company along with their account and password? Company deposits and clients will be preserved.`,
+      confirmLabel: lang === 'fr' ? 'Supprimer le compte' : 'Delete account',
       onConfirm: async () => {
         setSubmitting(true);
         setError(null);
         try {
-          const { error } = await supabase
-            .from('entreprise_members')
-            .delete()
-            .eq('id', memberId);
-
-          if (error) {
-            setError(error.message);
+          const rpcRes = await adminDeleteMemberAccount(memberUserId, tenantId);
+          if (rpcRes.error && rpcRes.missingRpc) {
+            const { error } = await supabase
+              .from('entreprise_members')
+              .delete()
+              .eq('id', memberId);
+            if (error) {
+              setError(error.message);
+            } else {
+              notifyRealtimeMutation('entreprise_members', true);
+              setSuccess(
+                lang === 'fr'
+                  ? `Membre retiré de l'entreprise (exécutez la migration SQL sur Supabase pour supprimer aussi le mot de passe).`
+                  : 'Member removed from company (run the SQL migration on Supabase to also wipe the password).',
+              );
+              await loadEntreprises(true);
+            }
+          } else if (rpcRes.error) {
+            setError(rpcRes.error);
           } else {
             notifyRealtimeMutation('entreprise_members', true);
-            setSuccess(lang === 'fr' ? 'Membre retiré' : 'Member removed');
+            setSuccess(
+              rpcRes.authAccountDeleted
+                ? lang === 'fr'
+                  ? `Compte « ${memberEmail} » et mot de passe supprimés définitivement.`
+                  : `Account "${memberEmail}" and password permanently deleted.`
+                : lang === 'fr'
+                  ? 'Membre retiré'
+                  : 'Member removed',
+            );
             await loadEntreprises(true);
           }
         } catch (err) {
-          setError(err instanceof Error ? err.message : (lang === 'fr' ? 'Erreur lors du retrait' : 'Error during removal'));
+          setError(err instanceof Error ? err.message : (lang === 'fr' ? 'Erreur lors de la suppression' : 'Error during deletion'));
         } finally {
           setSubmitting(false);
         }
@@ -3064,9 +3084,9 @@ export default function SuperAdminPage() {
                                   <Pencil className="w-4 h-4" />
                                 </button>
                                 <button
-                                  onClick={() => handleRemoveMember(m.id, e.user_id)}
+                                  onClick={() => handleRemoveMember(m.id, e.user_id, m.user_id, m.email)}
                                   className="p-2 rounded-lg text-slate-300 hover:text-red-500 hover:bg-red-50 transition-colors"
-                                  title={lang === 'fr' ? 'Retirer' : 'Remove'}
+                                  title={lang === 'fr' ? 'Supprimer le compte' : 'Delete account'}
                                 >
                                   <Trash2 className="w-4 h-4" />
                                 </button>

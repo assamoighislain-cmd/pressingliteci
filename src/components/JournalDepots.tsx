@@ -9,6 +9,7 @@ import {
   TypeTraitement,
   ModeReglementRow,
   Entreprise,
+  Commercial,
   formatPrice,
   formatDate,
   formatDateShort,
@@ -82,6 +83,7 @@ export default function JournalDepots() {
   const [avances, setAvances] = useState<DepotAvance[]>([]);
   const [types, setTypes] = useState<TypeTraitement[]>([]);
   const [modes, setModes] = useState<ModeReglementRow[]>([]);
+  const [commerciauxMap, setCommerciauxMap] = useState<Map<string, Commercial>>(new Map());
   const [entreprise, setEntreprise] = useState<Entreprise | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -94,18 +96,22 @@ export default function JournalDepots() {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
 
   const loadJournal = useCallback(async () => {
-    const [depotsData, avancesData, typesData, modesData, entData] = await Promise.all([
+    const [depotsData, avancesData, typesData, modesData, entData, comRes] = await Promise.all([
       db.getAllDepotsWithClient(),
       db.getAllAvances(),
       db.getTypesTraitement(),
       db.getModesReglement(),
       db.getEntreprise(),
+      db.getCommerciaux(),
     ]);
     setDepots(depotsData);
     setAvances(avancesData);
     setTypes(typesData);
     setModes(modesData);
     setEntreprise(entData);
+    const cMap = new Map<string, Commercial>();
+    for (const c of comRes.data) cMap.set(c.id, c);
+    setCommerciauxMap(cMap);
     setLoading(false);
   }, []);
 
@@ -114,7 +120,7 @@ export default function JournalDepots() {
   }, [loadJournal]);
 
   useRealtimeSync(
-    ['depots', 'depot_articles', 'depot_avances', 'clients', 'types_traitement', 'modes_reglement', 'entreprise'],
+    ['depots', 'depot_articles', 'depot_avances', 'clients', 'types_traitement', 'modes_reglement', 'entreprise', 'commerciaux'],
     loadJournal,
   );
 
@@ -603,6 +609,19 @@ export default function JournalDepots() {
                                       </strong>
                                     </span>
                                   ) : null}
+                                  {item.depot.commercial_id && (() => {
+                                    const com = commerciauxMap.get(item.depot.commercial_id);
+                                    const taux = item.depot.commission_taux ?? com?.taux_commission ?? 0;
+                                    const comm = item.depot.commission_montant ?? Math.round((item.total * taux) / 100);
+                                    return (
+                                      <span>
+                                        {lang === 'fr' ? 'Commercial :' : 'Sales agent:'}{' '}
+                                        <strong className="text-amber-700">
+                                          {com?.nom ?? '—'} ({taux} % · {formatPrice(comm)})
+                                        </strong>
+                                      </span>
+                                    );
+                                  })()}
                                 </div>
 
                                 {(item.depot.articles ?? []).length > 0 && (

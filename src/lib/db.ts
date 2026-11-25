@@ -83,6 +83,8 @@ import type {
   ConsommableMouvement,
   Relance,
   RelanceWithClient,
+  Commercial,
+  CommissionVersement,
 } from '@/types';
 
 // ─── Types ────────────────────────────────────────────────
@@ -107,7 +109,9 @@ export type TableName =
   | 'consommables'
   | 'consommable_mouvements'
   | 'modes_reglement'
-  | 'relances';
+  | 'relances'
+  | 'commerciaux'
+  | 'commission_versements';
 
 interface QueryOrder {
   column: string;
@@ -251,6 +255,7 @@ const TENANT_TABLES = new Set<TableName>([
   'depenses', 'depense_categories',
   'article_variants', 'fidelite_points', 'fidelite_history', 'bons_reduction',
   'consommables', 'consommable_mouvements', 'relances',
+  'commerciaux', 'commission_versements',
 ]);
 
 // Tenant-scoped tables whose PostgreSQL schema uses tenant_id (+ boutique_id) without a user_id column.
@@ -260,7 +265,20 @@ const TABLES_WITHOUT_USER_ID = new Set<TableName>([
   'consommables',
   'consommable_mouvements',
   'relances',
+  'commerciaux',
+  'commission_versements',
 ]);
+
+function isMissingTableError(error: { code?: string; message?: string } | null | undefined): boolean {
+  if (!error) return false;
+  const msg = (error.message ?? '').toLowerCase();
+  return (
+    error.code === '42P01' ||
+    error.code === 'PGRST205' ||
+    msg.includes('could not find the table') ||
+    (msg.includes('relation') && msg.includes('does not exist'))
+  );
+}
 
 function extractMissingSchemaColumn(message: string | null | undefined): string | null {
   if (!message) return null;
@@ -320,6 +338,7 @@ const QUEUEABLE_TABLES = new Set<TableName>([
   'depot_articles', 'depot_avances', 'depenses', 'depense_categories',
   'article_variants', 'bons_reduction', 'consommables', 'consommable_mouvements',
   'modes_reglement', 'fidelite_points', 'fidelite_history', 'relances',
+  'commerciaux', 'commission_versements',
 ]);
 
 export function isOffline(): boolean {
@@ -1266,6 +1285,9 @@ export const db = {
         coefficient: Number(depot.coefficient),
         taux_remise: depot.taux_remise != null ? Number(depot.taux_remise) : null,
         montant_remise: depot.montant_remise != null ? Number(depot.montant_remise) : null,
+        commercial_id: (depot.commercial_id as string | null) ?? null,
+        commission_taux: depot.commission_taux != null ? Number(depot.commission_taux) : null,
+        commission_montant: depot.commission_montant != null ? Number(depot.commission_montant) : null,
         articles: ((depot.depot_articles as Record<string, unknown>[]) ?? []).map((a) => ({
           ...a,
           prix_unitaire: Number(a.prix_unitaire),
@@ -1329,6 +1351,9 @@ export const db = {
         coefficient: Number(d.coefficient ?? 1),
         taux_remise: d.taux_remise != null ? Number(d.taux_remise) : null,
         montant_remise: d.montant_remise != null ? Number(d.montant_remise) : null,
+        commercial_id: (d.commercial_id as string | null) ?? null,
+        commission_taux: d.commission_taux != null ? Number(d.commission_taux) : null,
+        commission_montant: d.commission_montant != null ? Number(d.commission_montant) : null,
       } as unknown as Depot;
       observeDepotNumeros([depot], currentBoutiqueId);
       optimisticInsertDepot(depot, currentBoutiqueId);
@@ -2721,6 +2746,219 @@ export const db = {
     return result.error;
   },
 
+  // Commerciaux & Commissions
+  async getCommerciaux(): Promise<{ data: Commercial[]; missingTable: boolean; error: string | null }> {
+    const cacheKey = 'all_commerciaux';
+    if (isOffline()) {
+      return { data: getCached<Commercial[]>(cacheKey) ?? [], missingTable: false, error: null };
+    }
+    try {
+      const tId = await getTenantId();
+      let q = supabase.from('commerciaux').select('*').order('nom');
+      if (tId) q = q.eq('tenant_id', tId);
+      const { data, error } = await q;
+      if (error) {
+        if (isMissingTableError(error)) {
+          return { data: [], missingTable: true, error: null };
+        }
+        if (isLikelyNetworkError(error)) {
+          return { data: getCached<Commercial[]>(cacheKey) ?? [], missingTable: false, error: null };
+        }
+        return { data: [], missingTable: false, error: error.message };
+      }
+      const mapped = ((data as Record<string, unknown>[]) ?? []).map((r) => ({
+        ...r,
+        taux_commission: Number(r.taux_commission ?? 0),
+        actif: Boolean(r.actif ?? true),
+      })) as Commercial[];
+      setCached(cacheKey, mapped);
+      return { data: mapped, missingTable: false, error: null };
+    } catch (err) {
+      return {
+        data: getCached<Commercial[]>(cacheKey) ?? [],
+        missingTable: false,
+        error: err instanceof Error ? err.message : 'Erreur réseau',
+      };
+    }
+  },
+
+  async getActiveCommerciaux(): Promise<Commercial[]> {
+    const res = await db.getCommerciaux();
+    if (res.missingTable || res.error) return [];
+    return res.data.filter((c) => c.actif);
+  },
+
+  async insertCommercial(row: {
+    nom: string;
+    telephone?: string | null;
+    email?: string | null;
+    taux_commission: number;
+    actif?: boolean;
+    notes?: string | null;
+  }): Promise<{ data: Commercial | null; error: string | null }> {
+    const result = await insert<Commercial>({
+      table: 'commerciaux',
+      rows: {
+        nom: row.nom.trim(),
+        telephone: row.telephone?.trim() || null,
+        email: row.email?.trim() || null,
+        taux_commission: row.taux_commission,
+        actif: row.actif ?? true,
+        notes: row.notes?.trim() || null,
+      },
+      select: '*',
+    });
+    if (result.data) {
+      const c = {
+        ...result.data,
+        taux_commission: Number(result.data.taux_commission ?? 0),
+        actif: Boolean(result.data.actif ?? true),
+      };
+      return { data: c, error: null };
+    }
+    return { data: null, error: result.error };
+  },
+
+  async updateCommercial(
+    id: string,
+    values: {
+      nom?: string;
+      telephone?: string | null;
+      email?: string | null;
+      taux_commission?: number;
+      actif?: boolean;
+      notes?: string | null;
+    },
+  ): Promise<string | null> {
+    const cleanValues: Record<string, unknown> = {
+      ...values,
+      updated_at: new Date().toISOString(),
+    };
+    if (typeof values.nom === 'string') cleanValues.nom = values.nom.trim();
+    if (values.telephone !== undefined) cleanValues.telephone = values.telephone?.trim() || null;
+    if (values.email !== undefined) cleanValues.email = values.email?.trim() || null;
+    if (values.notes !== undefined) cleanValues.notes = values.notes?.trim() || null;
+    const result = await update({
+      table: 'commerciaux',
+      values: cleanValues,
+      filters: [{ column: 'id', operator: 'eq', value: id }],
+    });
+    return result.error;
+  },
+
+  async deleteCommercial(id: string): Promise<string | null> {
+    const result = await remove({
+      table: 'commerciaux',
+      filters: [{ column: 'id', operator: 'eq', value: id }],
+    });
+    return result.error;
+  },
+
+  async getCommissionVersements(
+    commercialId?: string,
+  ): Promise<{ data: CommissionVersement[]; missingTable: boolean; error: string | null }> {
+    const cacheKey = commercialId ? `commission_versements_${commercialId}` : 'all_commission_versements';
+    if (isOffline()) {
+      return { data: getCached<CommissionVersement[]>(cacheKey) ?? [], missingTable: false, error: null };
+    }
+    try {
+      const tId = await getTenantId();
+      let q = supabase
+        .from('commission_versements')
+        .select('*')
+        .order('date_versement', { ascending: false })
+        .order('created_at', { ascending: false });
+      if (tId) q = q.eq('tenant_id', tId);
+      if (commercialId) q = q.eq('commercial_id', commercialId);
+      const { data, error } = await q;
+      if (error) {
+        if (isMissingTableError(error)) {
+          return { data: [], missingTable: true, error: null };
+        }
+        if (isLikelyNetworkError(error)) {
+          return { data: getCached<CommissionVersement[]>(cacheKey) ?? [], missingTable: false, error: null };
+        }
+        return { data: [], missingTable: false, error: error.message };
+      }
+      const mapped = ((data as Record<string, unknown>[]) ?? []).map((r) => ({
+        ...r,
+        montant: Number(r.montant ?? 0),
+      })) as CommissionVersement[];
+      setCached(cacheKey, mapped);
+      return { data: mapped, missingTable: false, error: null };
+    } catch (err) {
+      return {
+        data: getCached<CommissionVersement[]>(cacheKey) ?? [],
+        missingTable: false,
+        error: err instanceof Error ? err.message : 'Erreur réseau',
+      };
+    }
+  },
+
+  async insertCommissionVersement(row: {
+    commercial_id: string;
+    montant: number;
+    mode_reglement?: string | null;
+    date_versement?: string;
+    periode_debut?: string | null;
+    periode_fin?: string | null;
+    reference?: string | null;
+    notes?: string | null;
+  }): Promise<{ data: CommissionVersement | null; error: string | null }> {
+    const result = await insert<CommissionVersement>({
+      table: 'commission_versements',
+      rows: {
+        commercial_id: row.commercial_id,
+        montant: row.montant,
+        mode_reglement: row.mode_reglement?.trim() || null,
+        date_versement: row.date_versement || new Date().toISOString(),
+        periode_debut: row.periode_debut || null,
+        periode_fin: row.periode_fin || null,
+        reference: row.reference?.trim() || null,
+        notes: row.notes?.trim() || null,
+      },
+      select: '*',
+    });
+    if (result.data) {
+      return {
+        data: { ...result.data, montant: Number(result.data.montant ?? 0) },
+        error: null,
+      };
+    }
+    return { data: null, error: result.error };
+  },
+
+  async deleteCommissionVersement(id: string): Promise<string | null> {
+    const result = await remove({
+      table: 'commission_versements',
+      filters: [{ column: 'id', operator: 'eq', value: id }],
+    });
+    return result.error;
+  },
+
+  async getDepotsForCommissions(): Promise<DepotWithClient[]> {
+    const cacheKey = 'all_depots_commissions';
+    return cachedRead(cacheKey, async () => {
+      const tId = await getTenantId();
+      const rows = await fetchAllPages<Record<string, unknown>>((from, to) => {
+        let q = supabase
+          .from('depots')
+          .select('id, numero, client_id, statut, total, date_depot, boutique_id, commercial_id, commission_taux, commission_montant, created_at, clients(nom, telephone)')
+          .order('date_depot', { ascending: false })
+          .range(from, to);
+        if (tId) q = q.eq('tenant_id', tId);
+        return q;
+      });
+      return rows.map((r) => ({
+        ...r,
+        total: Number(r.total ?? 0),
+        commercial_id: (r.commercial_id as string | null) ?? null,
+        commission_taux: r.commission_taux != null ? Number(r.commission_taux) : null,
+        commission_montant: r.commission_montant != null ? Number(r.commission_montant) : null,
+      })) as DepotWithClient[];
+    }, []);
+  },
+
   // ─── Offline Cache Warmup / Post-Sync Refresh ─────────────
   async prefetchOfflineData(): Promise<void> {
     if (isOffline()) return;
@@ -2741,6 +2979,8 @@ export const db = {
       db.getAllDepenseCategories(),
       db.getAllConsommables(),
       db.getBonsReduction(),
+      db.getCommerciaux(),
+      db.getCommissionVersements(),
       Promise.resolve(supabase.from('clients').select('code').limit(10000)).then(({ data }) => {
         if (data) observeClientCodes(data as Array<{ code?: string | null }>, currentBoutiqueId);
       }),

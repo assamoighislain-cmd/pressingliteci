@@ -28,6 +28,8 @@ export const UUID_PK_TABLES = new Set<string>([
   'consommables',
   'consommable_mouvements',
   'relances',
+  'commerciaux',
+  'commission_versements',
 ]);
 
 export function bKey(base: string, boutiqueId: string | null): string {
@@ -1218,6 +1220,15 @@ export function buildMutationLabel(
   }
   if (table === 'consommables' || table === 'consommable_mouvements') {
     return 'Mouvement de stock consommable';
+  }
+  if (table === 'commerciaux') {
+    if (op === 'insert') return `Nouveau commercial : ${String(data.nom ?? '')}`;
+    if (op === 'update') return `Modification commercial : ${String(data.nom ?? '')}`;
+    if (op === 'delete') return 'Suppression commercial';
+  }
+  if (table === 'commission_versements') {
+    if (op === 'insert') return `Versement commission (${Number(data.montant ?? 0).toLocaleString('fr-FR')} FCFA)`;
+    if (op === 'delete') return 'Suppression versement commission';
   }
   const verb = op === 'insert' ? 'Ajout' : op === 'update' ? 'Modification' : op === 'delete' ? 'Suppression' : 'Mise à jour';
   return `${verb} (${table})`;
