@@ -159,7 +159,7 @@ export default function ImportExcel({ config }: { config: ImportConfig }) {
       </button>
 
       {open && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm" onClick={reset}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm" onClick={() => { if (!importing) reset(); }}>
           <div className="bg-white rounded-2xl shadow-xl max-w-2xl w-full max-h-[85vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
               <div className="flex items-center gap-3">
@@ -173,7 +173,7 @@ export default function ImportExcel({ config }: { config: ImportConfig }) {
                   </p>
                 </div>
               </div>
-              <button onClick={reset} className="p-2 rounded-lg text-slate-400 hover:bg-slate-100 transition-colors">
+              <button onClick={reset} disabled={importing} className="p-2 rounded-lg text-slate-400 hover:bg-slate-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -190,11 +190,18 @@ export default function ImportExcel({ config }: { config: ImportConfig }) {
                     </div>
                     {importResult.errors.length > 0 && (
                       <ul className="mt-2 space-y-1">
-                        {importResult.errors.map((e, i) => (
+                        {importResult.errors.slice(0, 50).map((e, i) => (
                           <li key={i} className="text-xs text-red-600 flex items-start gap-1">
                             <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" /> {e}
                           </li>
                         ))}
+                        {importResult.errors.length > 50 && (
+                          <li className="text-xs text-red-500 font-medium pt-1">
+                            {fr
+                              ? `… et ${importResult.errors.length - 50} autre(s) erreur(s)`
+                              : `… and ${importResult.errors.length - 50} more error(s)`}
+                          </li>
+                        )}
                       </ul>
                     )}
                   </div>

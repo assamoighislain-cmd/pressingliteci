@@ -24,6 +24,8 @@ import {
   Store,
   Globe,
   Monitor,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import ImportExcel from '@/components/ImportExcel';
 import { PrintableReport, printReport, type ReportData } from '@/components/PrintableReport';
@@ -62,6 +64,8 @@ export default function Clients() {
   const [saving, setSaving] = useState(false);
 
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
   const [entreprise, setEntreprise] = useState<Entreprise | null>(null);
   const [billingPointCode, setBillingPointCodeState] = useState<string>(() => getBillingPointCode());
   const [showBillingPointPicker, setShowBillingPointPicker] = useState(false);
@@ -77,29 +81,42 @@ export default function Clients() {
   }, []);
 
   async function handleImportClients(rows: Record<string, string | number | null>[], onProgress?: (current: number, total: number) => void): Promise<{ success: number; errors: string[] }> {
-    let success = 0;
     const errors: string[] = [];
+    const prepared: Array<{
+      nom: string;
+      telephone: string | null;
+      taux_remise: number;
+      condition_remise: number | null;
+      date_naissance?: string | null;
+    }> = [];
+
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       const nom = String(row.nom ?? '').trim();
-      if (!nom) { errors.push(`Ligne: nom manquant`); onProgress?.(i + 1, rows.length); continue; }
-      try {
-        const { data: codeData } = await rpc<string>('generate_client_code');
-        const code = codeData ?? `C-${Date.now().toString(36).toUpperCase()}`;
-        const telephone = row.telephone ? applyPhonePrefix(String(row.telephone), entreprise?.phone_prefix) : null;
-        const taux = row.taux_remise != null ? Number(row.taux_remise) : 0;
-        const condition = row.condition_remise != null ? Number(row.condition_remise) : null;
-
-        const result = await db.insertClient({ code, nom, telephone, taux_remise: taux, condition_remise: condition });
-        if (result.error) { errors.push(`${nom}: ${result.error}`); }
-        else { success++; }
-      } catch (err) {
-        errors.push(`${nom}: ${err instanceof Error ? err.message : 'erreur'}`);
+      if (!nom) {
+        errors.push(`Ligne ${i + 2}: nom manquant`);
+        continue;
       }
-      onProgress?.(i + 1, rows.length);
+      const telephone = row.telephone ? applyPhonePrefix(String(row.telephone), entreprise?.phone_prefix) : null;
+      const taux = row.taux_remise != null ? Number(row.taux_remise) || 0 : 0;
+      const condition = row.condition_remise != null ? Number(row.condition_remise) || null : null;
+      prepared.push({ nom, telephone, taux_remise: taux, condition_remise: condition });
     }
-    if (success > 0) load();
-    return { success, errors };
+
+    const skippedCount = rows.length - prepared.length;
+    if (skippedCount > 0) {
+      onProgress?.(skippedCount, rows.length);
+    }
+
+    const batchResult = await db.insertClientsBatch(prepared, (done) => {
+      onProgress?.(skippedCount + done, rows.length);
+    });
+
+    if (batchResult.success > 0) load();
+    return {
+      success: batchResult.success,
+      errors: [...errors, ...batchResult.errors],
+    };
   }
 
   async function copyPortalLink(client: ClientWithLastDepot) {
@@ -264,7 +281,6 @@ export default function Clients() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm(lang === 'fr' ? 'Supprimer ce client ?' : 'Delete this client?')) return;
     setError(null);
     try {
       const deleteError = await db.deleteClient(id);
@@ -272,6 +288,7 @@ export default function Clients() {
         setError(deleteError);
         return;
       }
+      setConfirmDeleteId(null);
       setClients((prev) => prev.filter((c) => c.id !== id));
     } catch (err) {
       setError(err instanceof Error ? err.message : (lang === 'fr' ? 'Erreur lors de la suppression' : 'Error during deletion'));
@@ -279,6 +296,7 @@ export default function Clients() {
   }
 
   function startEdit(client: ClientWithLastDepot) {
+    setConfirmDeleteId(null);
     setEditingId(client.id);
     setEditNom(client.nom);
     setEditTel(client.telephone ?? '');
@@ -296,6 +314,12 @@ export default function Clients() {
       (c.telephone ?? '').toLowerCase().includes(term)
     );
   });
+
+  const PAGE_SIZE = 50;
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const pageStart = (safePage - 1) * PAGE_SIZE;
+  const paginatedClients = filtered.slice(pageStart, pageStart + PAGE_SIZE);
 
   const reportData: ReportData = {
     title: lang === 'fr' ? 'Liste des clients' : 'Client list',
@@ -356,7 +380,7 @@ export default function Clients() {
           <input
             type="text"
             value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+            onChange={(e) => { setSearchTerm(e.target.value); setPage(1); }}
             placeholder={lang === 'fr' ? 'Rechercher par nom, code ou téléphone…' : 'Search by name, code or phone…'}
             className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent"
           />
@@ -544,8 +568,20 @@ export default function Clients() {
         </div>
       ) : (
         <div className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
+          {filtered.length > PAGE_SIZE && (
+            <div className="px-5 py-2.5 bg-slate-50/70 border-b border-slate-100 flex items-center justify-between text-xs text-slate-500">
+              <span>
+                {lang === 'fr'
+                  ? `Affichage ${pageStart + 1}–${Math.min(pageStart + PAGE_SIZE, filtered.length)} sur ${filtered.length.toLocaleString('fr-FR')}`
+                  : `Showing ${pageStart + 1}–${Math.min(pageStart + PAGE_SIZE, filtered.length)} of ${filtered.length.toLocaleString('en-US')}`}
+              </span>
+              <span>
+                {lang === 'fr' ? `Page ${safePage} / ${totalPages}` : `Page ${safePage} / ${totalPages}`}
+              </span>
+            </div>
+          )}
           <div className="divide-y divide-slate-50">
-            {filtered.map((client) => (
+            {paginatedClients.map((client) => (
               <div
                 key={client.id}
                 className="px-5 py-3.5 flex items-center justify-between hover:bg-slate-50/50 transition-colors"
@@ -698,31 +734,73 @@ export default function Clients() {
                       </div>
                     </div>
                     <div className="flex items-center gap-1 ml-3 flex-shrink-0">
-                      <button
-                        onClick={() => copyPortalLink(client)}
-                        title={lang === 'fr' ? 'Partager le lien WhatsApp' : 'Share WhatsApp link'}
-                        className="p-2 rounded-lg text-slate-400 hover:text-emerald-500 hover:bg-emerald-50 transition-all"
-                      >
-                        {copiedId === client.id ? <Check className="w-4 h-4 text-emerald-500" /> : <Share2 className="w-4 h-4" />}
-                      </button>
-                      <button
-                        onClick={() => startEdit(client)}
-                        className="p-2 rounded-lg text-slate-400 hover:text-sky-500 hover:bg-sky-50 transition-all"
-                      >
-                        <Pencil className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => handleDelete(client.id)}
-                        className="p-2 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      {confirmDeleteId === client.id ? (
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => handleDelete(client.id)}
+                            className="px-2.5 py-1.5 rounded-lg bg-red-500 text-white text-xs font-medium hover:bg-red-600 transition-colors"
+                          >
+                            {lang === 'fr' ? 'Confirmer' : 'Confirm'}
+                          </button>
+                          <button
+                            onClick={() => setConfirmDeleteId(null)}
+                            className="px-2.5 py-1.5 rounded-lg bg-slate-100 text-slate-600 text-xs font-medium hover:bg-slate-200 transition-colors"
+                          >
+                            {t('common.cancel')}
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => copyPortalLink(client)}
+                            title={lang === 'fr' ? 'Partager le lien WhatsApp' : 'Share WhatsApp link'}
+                            className="p-2 rounded-lg text-slate-400 hover:text-emerald-500 hover:bg-emerald-50 transition-all"
+                          >
+                            {copiedId === client.id ? <Check className="w-4 h-4 text-emerald-500" /> : <Share2 className="w-4 h-4" />}
+                          </button>
+                          <button
+                            onClick={() => startEdit(client)}
+                            className="p-2 rounded-lg text-slate-400 hover:text-sky-500 hover:bg-sky-50 transition-all"
+                          >
+                            <Pencil className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => setConfirmDeleteId(client.id)}
+                            className="p-2 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </>
+                      )}
                     </div>
                   </>
                 )}
               </div>
             ))}
           </div>
+          {totalPages > 1 && (
+            <div className="px-5 py-3 bg-slate-50/70 border-t border-slate-100 flex items-center justify-between gap-2">
+              <button
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={safePage <= 1}
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" />
+                {lang === 'fr' ? 'Précédent' : 'Previous'}
+              </button>
+              <span className="text-xs font-medium text-slate-500">
+                {lang === 'fr' ? `Page ${safePage} sur ${totalPages}` : `Page ${safePage} of ${totalPages}`}
+              </span>
+              <button
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={safePage >= totalPages}
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                {lang === 'fr' ? 'Suivant' : 'Next'}
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
         </div>
       )}
       <PrintableReport data={reportData} />

@@ -40,6 +40,8 @@ import {
   generateOfflineDepotNumero,
   computeNextOnlineClientCode,
   generateOfflineClientCode,
+  formatClientCode,
+  parseClientCodeInfo,
   generateOfflineRpcCode,
   prepareOfflineInsertRows,
   buildMutationLabel,
@@ -135,6 +137,7 @@ interface InsertConfig {
   table: TableName;
   rows: Record<string, unknown> | Record<string, unknown>[];
   select?: string;
+  timeoutMs?: number;
 }
 
 interface UpdateConfig {
@@ -324,8 +327,25 @@ export function isOffline(): boolean {
 }
 
 const FAST_WRITE_TIMEOUT_MS = 4500;
+const SUPABASE_PAGE_SIZE = 1000;
+const MAX_PAGINATED_ROWS = 100000;
 
-async function withWriteTimeout<R>(promiseLike: PromiseLike<R>): Promise<R> {
+async function fetchAllPages<T>(
+  fetchPage: (from: number, to: number) => PromiseLike<{ data: unknown; error: { message: string } | null }>,
+): Promise<T[]> {
+  const all: T[] = [];
+  for (let from = 0; from < MAX_PAGINATED_ROWS; from += SUPABASE_PAGE_SIZE) {
+    const { data, error } = await fetchPage(from, from + SUPABASE_PAGE_SIZE - 1);
+    throwIfNetworkError(error);
+    if (error) throw new Error(error.message);
+    const page = (data as T[] | null) ?? [];
+    all.push(...page);
+    if (page.length < SUPABASE_PAGE_SIZE) break;
+  }
+  return all;
+}
+
+async function withWriteTimeout<R>(promiseLike: PromiseLike<R>, timeoutMs = FAST_WRITE_TIMEOUT_MS): Promise<R> {
   let timer: ReturnType<typeof setTimeout> | null = null;
   try {
     return await Promise.race([
@@ -333,7 +353,7 @@ async function withWriteTimeout<R>(promiseLike: PromiseLike<R>): Promise<R> {
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
           reject(new OfflineNetworkError('Write timeout — continuing in background'));
-        }, FAST_WRITE_TIMEOUT_MS);
+        }, timeoutMs);
       }),
     ]);
   } finally {
@@ -400,7 +420,7 @@ export async function insert<T = Record<string, unknown>>(config: InsertConfig):
         q = q.select();
       }
       return QUEUEABLE_TABLES.has(config.table)
-        ? await withWriteTimeout<{ data: unknown; error: { message: string } | null }>(q)
+        ? await withWriteTimeout<{ data: unknown; error: { message: string } | null }>(q, config.timeoutMs)
         : await q;
     };
 
@@ -743,12 +763,17 @@ export const db = {
   async getAllClients(): Promise<Client[]> {
     const cacheKey = bKey('all_clients', currentBoutiqueId);
     const list = await cachedRead(cacheKey, async () => {
-      let q = supabase.from('clients').select('*').order('nom');
-      if (currentBoutiqueId) q = q.eq('boutique_id', currentBoutiqueId);
-      const { data, error } = await q;
-      throwIfNetworkError(error);
-      if (error) throw new Error(error.message);
-      const mapped = ((data as Record<string, unknown>[]) ?? []).map((r) => ({
+      const data = await fetchAllPages<Record<string, unknown>>((from, to) => {
+        let q = supabase
+          .from('clients')
+          .select('*')
+          .order('nom', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to);
+        if (currentBoutiqueId) q = q.eq('boutique_id', currentBoutiqueId);
+        return q;
+      });
+      const mapped = data.map((r) => ({
         ...r,
         taux_remise: Number(r.taux_remise),
         condition_remise: r.condition_remise != null ? Number(r.condition_remise) : null,
@@ -769,8 +794,8 @@ export const db = {
   async getLastDepotDates(clientIds: string[]): Promise<Record<string, { date: string; total: number; count: number }>> {
     const map: Record<string, { date: string; total: number; count: number }> = {};
     if (clientIds.length === 0) return map;
+    const idSet = new Set(clientIds);
     const computeFromCache = async () => {
-      const idSet = new Set(clientIds);
       const cached =
         (await getCachedWithScopeFallbackAsync<DepotWithArticles[]>(bKey('all_depots', currentBoutiqueId))) ?? [];
       for (const d of cached) {
@@ -784,22 +809,31 @@ export const db = {
       return map;
     };
     if (isOffline()) return computeFromCache();
-    let q = supabase
-      .from('depots')
-      .select('client_id, date_depot, total')
-      .in('client_id', clientIds)
-      .order('date_depot', { ascending: false });
-    if (currentBoutiqueId) q = q.eq('boutique_id', currentBoutiqueId);
-    const { data, error } = await q;
-    if (error) return isLikelyNetworkError(error) ? computeFromCache() : map;
-    for (const d of (data as { client_id: string; date_depot: string; total: string | number }[]) ?? []) {
-      if (!(d.client_id in map)) {
-        map[d.client_id] = { date: d.date_depot, total: 0, count: 0 };
+    try {
+      const useInFilter = clientIds.length <= 150;
+      const rows = await fetchAllPages<{ client_id: string; date_depot: string; total: string | number }>((from, to) => {
+        let q = supabase
+          .from('depots')
+          .select('client_id, date_depot, total')
+          .order('date_depot', { ascending: false })
+          .order('id', { ascending: true })
+          .range(from, to);
+        if (useInFilter) q = q.in('client_id', clientIds);
+        if (currentBoutiqueId) q = q.eq('boutique_id', currentBoutiqueId);
+        return q;
+      });
+      for (const d of rows) {
+        if (!idSet.has(d.client_id)) continue;
+        if (!(d.client_id in map)) {
+          map[d.client_id] = { date: d.date_depot, total: 0, count: 0 };
+        }
+        map[d.client_id].total += Number(d.total);
+        map[d.client_id].count += 1;
       }
-      map[d.client_id].total += Number(d.total);
-      map[d.client_id].count += 1;
+      return map;
+    } catch (err) {
+      return isLikelyNetworkError(err) ? computeFromCache() : map;
     }
-    return map;
   },
 
   async insertClient(row: { code: string; nom: string; telephone: string | null; taux_remise: number; condition_remise: number | null; date_naissance?: string | null }): Promise<{ data: Client | null; error: string | null }> {
@@ -823,6 +857,97 @@ export const db = {
       return { data: null, error: result.error };
     }
     return { data: null, error: 'duplicate key' };
+  },
+
+  async insertClientsBatch(
+    rows: Array<{
+      nom: string;
+      telephone: string | null;
+      taux_remise: number;
+      condition_remise: number | null;
+      date_naissance?: string | null;
+    }>,
+    onProgress?: (current: number, total: number) => void,
+  ): Promise<{ success: number; errors: string[] }> {
+    if (rows.length === 0) return { success: 0, errors: [] };
+
+    const pointCode = getBillingPointCode();
+    const resolveStartSeq = async (): Promise<number> => {
+      const firstCodeRes = await db.nextClientCode();
+      const parsed = parseClientCodeInfo(firstCodeRes.code);
+      return parsed?.seq ?? 1;
+    };
+
+    let nextSeq = await resolveStartSeq();
+    const BATCH_SIZE = 100;
+    let success = 0;
+    const errors: string[] = [];
+    const insertedCodes: Array<{ code: string }> = [];
+
+    for (let start = 0; start < rows.length; start += BATCH_SIZE) {
+      const slice = rows.slice(start, start + BATCH_SIZE);
+      const buildBatchPayload = (startSeq: number) =>
+        slice.map((r, idx) => ({
+          code: formatClientCode(startSeq + idx, pointCode),
+          nom: r.nom,
+          telephone: r.telephone,
+          taux_remise: r.taux_remise,
+          condition_remise: r.condition_remise,
+          ...(r.date_naissance ? { date_naissance: r.date_naissance } : {}),
+        }));
+
+      let payload = buildBatchPayload(nextSeq);
+      let res = await insert<Client[]>({
+        table: 'clients',
+        rows: payload,
+        select: 'id, code',
+        timeoutMs: 25000,
+      });
+
+      if (res.error && res.error.includes('duplicate key')) {
+        nextSeq = await resolveStartSeq();
+        payload = buildBatchPayload(nextSeq);
+        res = await insert<Client[]>({
+          table: 'clients',
+          rows: payload,
+          select: 'id, code',
+          timeoutMs: 25000,
+        });
+      }
+
+      if (!res.error) {
+        nextSeq += slice.length;
+        success += slice.length;
+        for (const p of payload) insertedCodes.push({ code: p.code });
+      } else {
+        // Fallback row-by-row for this chunk so valid rows still succeed and exact failures are reported
+        for (const r of slice) {
+          const code = formatClientCode(nextSeq++, pointCode);
+          const singleRes = await db.insertClient({
+            code,
+            nom: r.nom,
+            telephone: r.telephone,
+            taux_remise: r.taux_remise,
+            condition_remise: r.condition_remise,
+            date_naissance: r.date_naissance ?? null,
+          });
+          if (singleRes.error) {
+            errors.push(`${r.nom}: ${singleRes.error}`);
+          } else {
+            success++;
+            if (singleRes.data?.code) insertedCodes.push({ code: singleRes.data.code });
+          }
+        }
+      }
+
+      onProgress?.(Math.min(start + slice.length, rows.length), rows.length);
+    }
+
+    if (insertedCodes.length > 0) {
+      observeClientCodes(insertedCodes, currentBoutiqueId);
+    }
+
+    return { success, errors };
   },
 
   async updateClient(id: string, values: { nom: string; telephone: string | null; taux_remise: number; condition_remise: number | null; date_naissance?: string | null }): Promise<string | null> {
@@ -1398,22 +1523,24 @@ export const db = {
       };
     }
     try {
-      // Query across the entire tenant (clients_code_tenant_idx is tenant-scoped across all boutiques)
-      const { data, error } = await supabase.from('clients').select('code').limit(10000);
-      if (error) {
-        if (isLikelyNetworkError(error)) {
-          return {
-            code: generateOfflineClientCode(currentBoutiqueId, pointCode),
-            error: null,
-          };
-        }
-        return { code: null, error: error.message };
-      }
-      const rows = (data as Array<{ code?: string | null }> | null) ?? [];
+      // Paginate across the entire tenant (clients_code_tenant_idx is tenant-scoped across all boutiques)
+      const rows = await fetchAllPages<{ code?: string | null }>((from, to) =>
+        supabase
+          .from('clients')
+          .select('code')
+          .order('id', { ascending: true })
+          .range(from, to),
+      );
       observeClientCodes(rows, currentBoutiqueId);
       const code = computeNextOnlineClientCode(rows, pointCode);
       return { code, error: null };
-    } catch {
+    } catch (err) {
+      if (isLikelyNetworkError(err)) {
+        return {
+          code: generateOfflineClientCode(currentBoutiqueId, pointCode),
+          error: null,
+        };
+      }
       return {
         code: generateOfflineClientCode(currentBoutiqueId, pointCode),
         error: null,
@@ -2262,13 +2389,17 @@ export const db = {
 
   async getAllClientPoints(): Promise<Record<string, number>> {
     return cachedRead(bKey('all_client_points', currentBoutiqueId), async () => {
-      let q = supabase.from('fidelite_points').select('client_id, total_points');
-      if (currentBoutiqueId) q = q.eq('boutique_id', currentBoutiqueId);
-      const { data, error } = await q;
-      throwIfNetworkError(error);
-      if (error || !data) throw new Error(error?.message ?? 'Erreur lecture points');
+      const data = await fetchAllPages<{ client_id: string; total_points: number }>((from, to) => {
+        let q = supabase
+          .from('fidelite_points')
+          .select('client_id, total_points')
+          .order('client_id', { ascending: true })
+          .range(from, to);
+        if (currentBoutiqueId) q = q.eq('boutique_id', currentBoutiqueId);
+        return q;
+      });
       const map: Record<string, number> = {};
-      for (const row of data as { client_id: string; total_points: number }[]) {
+      for (const row of data) {
         map[row.client_id] = Number(row.total_points);
       }
       return map;
