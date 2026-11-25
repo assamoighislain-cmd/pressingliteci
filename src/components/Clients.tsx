@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { db, rpc } from '@/lib/db';
 import { useI18n } from '@/lib/i18n';
+import { useAuth } from '@/lib/auth';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 
 import { Client, formatDate, formatDateShort, formatPrice, applyPhonePrefix } from '@/types';
@@ -45,6 +46,8 @@ interface ClientWithLastDepot extends Client {
 
 export default function Clients() {
   const { t, lang } = useI18n();
+  const { role, currentBoutique } = useAuth();
+  const isAdmin = !role || role === 'admin';
   const [clients, setClients] = useState<ClientWithLastDepot[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -65,6 +68,9 @@ export default function Clients() {
 
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [showDeleteAllModal, setShowDeleteAllModal] = useState(false);
+  const [deleteAllConfirmText, setDeleteAllConfirmText] = useState('');
+  const [deletingAll, setDeletingAll] = useState(false);
   const [page, setPage] = useState(1);
   const [entreprise, setEntreprise] = useState<Entreprise | null>(null);
   const [billingPointCode, setBillingPointCodeState] = useState<string>(() => getBillingPointCode());
@@ -295,6 +301,26 @@ export default function Clients() {
     }
   }
 
+  async function handleDeleteAllClients() {
+    setError(null);
+    setDeletingAll(true);
+    try {
+      const deleteError = await db.deleteAllClientsForCurrentBoutique(currentBoutique?.id);
+      if (deleteError) {
+        setError(deleteError);
+        return;
+      }
+      setClients([]);
+      setPage(1);
+      setShowDeleteAllModal(false);
+      setDeleteAllConfirmText('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : (lang === 'fr' ? 'Erreur lors de la suppression' : 'Error during deletion'));
+    } finally {
+      setDeletingAll(false);
+    }
+  }
+
   function startEdit(client: ClientWithLastDepot) {
     setConfirmDeleteId(null);
     setEditingId(client.id);
@@ -363,14 +389,27 @@ export default function Clients() {
         </div>
       )}
 
-      {/* Print button */}
-      {!loading && filtered.length > 0 && (
-        <button
-          onClick={() => printReport()}
-          className="w-full py-2.5 rounded-lg bg-slate-100 text-slate-700 text-sm font-medium hover:bg-slate-200 transition-colors flex items-center justify-center gap-2"
-        >
-          <Printer className="w-4 h-4" /> {lang === 'fr' ? 'Imprimer la liste' : 'Print list'}
-        </button>
+      {/* Print & Admin bulk delete actions */}
+      {!loading && (filtered.length > 0 || (isAdmin && clients.length > 0)) && (
+        <div className="flex flex-wrap gap-2">
+          {filtered.length > 0 && (
+            <button
+              onClick={() => printReport()}
+              className="flex-1 py-2.5 px-4 rounded-lg bg-slate-100 text-slate-700 text-sm font-medium hover:bg-slate-200 transition-colors flex items-center justify-center gap-2"
+            >
+              <Printer className="w-4 h-4" /> {lang === 'fr' ? 'Imprimer la liste' : 'Print list'}
+            </button>
+          )}
+          {isAdmin && clients.length > 0 && (
+            <button
+              onClick={() => { setDeleteAllConfirmText(''); setShowDeleteAllModal(true); }}
+              className="py-2.5 px-4 rounded-lg border border-red-200 bg-red-50/70 text-red-600 text-sm font-medium hover:bg-red-100 transition-colors flex items-center justify-center gap-2"
+            >
+              <Trash2 className="w-4 h-4" />
+              {lang === 'fr' ? 'Supprimer tous les clients' : 'Delete all clients'}
+            </button>
+          )}
+        </div>
       )}
 
       {/* Search + Add */}
@@ -801,6 +840,89 @@ export default function Clients() {
               </button>
             </div>
           )}
+        </div>
+      )}
+      {showDeleteAllModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm"
+          onClick={() => { if (!deletingAll) setShowDeleteAllModal(false); }}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base font-bold text-red-700">
+                  {lang === 'fr' ? 'Supprimer tous les clients' : 'Delete all clients'}
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {currentBoutique?.nom ?? entreprise?.nom ?? ''}
+                </p>
+              </div>
+              <button
+                onClick={() => setShowDeleteAllModal(false)}
+                disabled={deletingAll}
+                className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 disabled:opacity-40"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="rounded-xl bg-red-50 border border-red-200 p-3.5 text-sm text-red-700 space-y-1.5">
+              <p className="font-semibold">
+                {lang === 'fr'
+                  ? `Vous êtes sur le point de supprimer définitivement les ${clients.length.toLocaleString('fr-FR')} client(s) de la boutique « ${currentBoutique?.nom ?? entreprise?.nom ?? ''} ».`
+                  : `You are about to permanently delete all ${clients.length.toLocaleString('en-US')} client(s) from "${currentBoutique?.nom ?? entreprise?.nom ?? ''}".`}
+              </p>
+              <p className="text-xs text-red-600">
+                {lang === 'fr'
+                  ? 'Attention : cette action est irréversible et supprimera également les dépôts associés à ces clients.'
+                  : 'Warning: this action is irreversible and will also delete deposits linked to these clients.'}
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1.5">
+                {lang === 'fr'
+                  ? 'Tapez SUPPRIMER pour confirmer :'
+                  : 'Type DELETE to confirm:'}
+              </label>
+              <input
+                type="text"
+                value={deleteAllConfirmText}
+                onChange={(e) => setDeleteAllConfirmText(e.target.value)}
+                placeholder={lang === 'fr' ? 'SUPPRIMER' : 'DELETE'}
+                className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm font-mono uppercase focus:outline-none focus:ring-2 focus:ring-red-500"
+                autoFocus
+              />
+            </div>
+
+            <div className="flex gap-2 pt-1">
+              <button
+                onClick={() => setShowDeleteAllModal(false)}
+                disabled={deletingAll}
+                className="flex-1 px-4 py-2.5 rounded-lg border border-slate-200 text-slate-600 text-sm font-medium hover:bg-slate-50 transition-colors disabled:opacity-40"
+              >
+                {t('common.cancel')}
+              </button>
+              <button
+                onClick={handleDeleteAllClients}
+                disabled={
+                  deletingAll ||
+                  deleteAllConfirmText.trim().toUpperCase() !== (lang === 'fr' ? 'SUPPRIMER' : 'DELETE')
+                }
+                className="flex-1 px-4 py-2.5 rounded-lg bg-red-600 text-white text-sm font-medium hover:bg-red-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {deletingAll ? (
+                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                ) : (
+                  <Trash2 className="w-4 h-4" />
+                )}
+                {lang === 'fr' ? 'Tout supprimer' : 'Delete all'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
       <PrintableReport data={reportData} />

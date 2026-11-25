@@ -962,6 +962,31 @@ export const db = {
     return result.error;
   },
 
+  async deleteAllClientsForCurrentBoutique(boutiqueId?: string | null): Promise<string | null> {
+    if (isOffline()) {
+      return 'Connexion internet requise pour supprimer tous les clients.';
+    }
+    const targetBoutiqueId = boutiqueId !== undefined ? boutiqueId : currentBoutiqueId;
+    try {
+      let q = supabase.from('clients').delete();
+      if (targetBoutiqueId) {
+        q = q.eq('boutique_id', targetBoutiqueId);
+      } else {
+        const tId = await getTenantId();
+        if (!tId) return 'Impossible d’identifier le compte.';
+        q = q.eq('tenant_id', tId);
+      }
+      const { error } = await withWriteTimeout<{ error: { message: string } | null }>(q, 60000);
+      if (error) return error.message;
+      setCached(bKey('all_clients', targetBoutiqueId), []);
+      notifyRealtimeMutation('clients');
+      notifyRealtimeMutation('depots');
+      return null;
+    } catch (err) {
+      return err instanceof Error ? err.message : 'Erreur réseau lors de la suppression';
+    }
+  },
+
   // Types traitement
   async getTypesTraitement(): Promise<TypeTraitement[]> {
     const cacheKey = bKey('types_traitement', currentBoutiqueId);
