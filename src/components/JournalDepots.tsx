@@ -31,8 +31,10 @@ import {
   Calendar,
   FileText,
   Layers,
+  Pencil,
 } from 'lucide-react';
 import { PrintableReport, printReport, type ReportData } from '@/components/PrintableReport';
+import EditDepotTraitementModal from '@/components/EditDepotTraitementModal';
 
 type PeriodFilter = 'today' | 'week' | 'month' | 'all' | 'custom';
 type StatutFilter = 'all' | 'EN_COURS' | 'RETIRE' | 'COMMANDE';
@@ -94,6 +96,12 @@ export default function JournalDepots() {
   const [statutFilter, setStatutFilter] = useState<StatutFilter>('all');
   const [paymentFilter, setPaymentFilter] = useState<PaymentFilter>('all');
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [depotToEditTraitement, setDepotToEditTraitement] = useState<{
+    depot: DepotWithArticles;
+    totalPaye: number;
+  } | null>(null);
+
+  const canEditTraitement = role === 'commercial' || role === 'gerant' || role === 'admin';
 
   const loadJournal = useCallback(async () => {
     const [depotsData, avancesData, typesData, modesData, entData, comRes] = await Promise.all([
@@ -559,7 +567,25 @@ export default function JournalDepots() {
                             {item.pieces}
                           </td>
                           <td className="px-3 py-3 text-slate-600 whitespace-nowrap">
-                            {item.traitementLabel}
+                            <div className="inline-flex items-center gap-1.5">
+                              <span>{item.traitementLabel}</span>
+                              {canEditTraitement && item.depot.statut === 'EN_COURS' && types.length > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const rawPaid =
+                                      (item.depot.avance_amount ? Number(item.depot.avance_amount) : 0) +
+                                      (avancesByDepot.get(item.depot.id)?.total ?? 0);
+                                    setDepotToEditTraitement({ depot: item.depot, totalPaye: rawPaid });
+                                  }}
+                                  title={lang === 'fr' ? 'Modifier le type de traitement' : 'Edit treatment type'}
+                                  className="p-1 rounded text-sky-500 hover:bg-sky-50 hover:text-sky-700 transition-colors"
+                                >
+                                  <Pencil className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
                           </td>
                           <td className="px-3 py-3 text-right font-semibold text-slate-900 whitespace-nowrap">
                             {formatPrice(item.total)}
@@ -755,6 +781,22 @@ export default function JournalDepots() {
                       {item.depot.notes && (
                         <p className="text-xs text-slate-500">{item.depot.notes}</p>
                       )}
+
+                      {canEditTraitement && item.depot.statut === 'EN_COURS' && types.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const rawPaid =
+                              (item.depot.avance_amount ? Number(item.depot.avance_amount) : 0) +
+                              (avancesByDepot.get(item.depot.id)?.total ?? 0);
+                            setDepotToEditTraitement({ depot: item.depot, totalPaye: rawPaid });
+                          }}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-sky-50 text-sky-700 border border-sky-200 hover:bg-sky-100 transition-colors"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                          {lang === 'fr' ? 'Modifier le traitement' : 'Edit treatment'}
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -762,6 +804,16 @@ export default function JournalDepots() {
             })}
           </div>
         </>
+      )}
+
+      {depotToEditTraitement && (
+        <EditDepotTraitementModal
+          depot={depotToEditTraitement.depot}
+          typesTraitement={types}
+          totalPaye={depotToEditTraitement.totalPaye}
+          onClose={() => setDepotToEditTraitement(null)}
+          onSaved={loadJournal}
+        />
       )}
 
       <PrintableReport data={reportData} />

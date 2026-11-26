@@ -1,7 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useI18n } from '@/lib/i18n';
 import { useAuth } from '@/lib/auth';
 import { db, rpc } from '@/lib/db';
+import { useRealtimeSync } from '@/hooks/useRealtimeSync';
+import { searchClientsIndexed } from '@/lib/clientSearchIndex';
 import {
   Client,
   TypeTraitement,
@@ -133,12 +135,14 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
 
   // Client state
   const [searchTerm, setSearchTerm] = useState('');
+  const [allClientsIndex, setAllClientsIndex] = useState<Client[] | null>(() => db.getCachedClientsSync());
   const [clients, setClients] = useState<Client[]>([]);
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [showNewClient, setShowNewClient] = useState(false);
   const [newClientNom, setNewClientNom] = useState('');
   const [newClientTel, setNewClientTel] = useState('');
   const [clientSearchLoading, setClientSearchLoading] = useState(false);
+  const searchReqIdRef = useRef(0);
 
   // Articles state
   const [articles, setArticles] = useState<ArticleDraft[]>([makeDefaultArticle()]);
@@ -255,20 +259,62 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
     })();
   }, []);
 
-  const searchClients = useCallback(async (term: string) => {
-    if (term.trim().length < 1) {
-      setClients([]);
-      return;
-    }
-    setClientSearchLoading(true);
-    setClients(await db.searchClients(term));
-    setClientSearchLoading(false);
+  // Keep boutique client index warm in RAM for instant (<1ms) search across 4,000+ clients
+  const loadClientIndex = useCallback(async () => {
+    const list = await db.getAllClients();
+    setAllClientsIndex(list);
   }, []);
 
   useEffect(() => {
-    const timer = setTimeout(() => searchClients(searchTerm), 250);
+    setAllClientsIndex(db.getCachedClientsSync());
+    void loadClientIndex();
+  }, [currentBoutique?.id, loadClientIndex]);
+
+  useRealtimeSync(['clients'], () => {
+    void loadClientIndex();
+  });
+
+  useEffect(() => {
+    const reqId = ++searchReqIdRef.current;
+    const trimmed = searchTerm.trim();
+
+    if (trimmed.length < 1) {
+      setClients([]);
+      setClientSearchLoading(false);
+      return;
+    }
+
+    // Fast path: synchronous in-memory indexed search (<1ms for 4,000+ clients, 0ms debounce)
+    if (allClientsIndex !== null) {
+      const localMatches = searchClientsIndexed(allClientsIndex, trimmed, 15);
+      setClients(localMatches);
+      setClientSearchLoading(false);
+
+      // Only verify remotely when local index has 0 hits and browser is online
+      // (catches a brand-new client just created on another terminal before sync)
+      if (localMatches.length === 0 && typeof navigator !== 'undefined' && navigator.onLine) {
+        const timer = setTimeout(async () => {
+          const remoteMatches = await db.searchClientsRemote(trimmed, 15);
+          if (searchReqIdRef.current === reqId && remoteMatches.length > 0) {
+            setClients(remoteMatches);
+          }
+        }, 250);
+        return () => clearTimeout(timer);
+      }
+      return;
+    }
+
+    // Cold-start fallback while the full client index is hydrating in background
+    setClientSearchLoading(true);
+    const timer = setTimeout(async () => {
+      const remoteMatches = await db.searchClientsRemote(trimmed, 15);
+      if (searchReqIdRef.current === reqId) {
+        setClients(remoteMatches);
+        setClientSearchLoading(false);
+      }
+    }, 180);
     return () => clearTimeout(timer);
-  }, [searchTerm, searchClients]);
+  }, [searchTerm, allClientsIndex]);
 
 
 
@@ -546,7 +592,11 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
         setError(newClient.error ?? t('depot.errorCreateClient'));
         return;
       }
-      setSelectedClient(newClient.data);
+      const createdClient = newClient.data;
+      setAllClientsIndex((prev) =>
+        prev ? [createdClient, ...prev.filter((c) => c.id !== createdClient.id)] : [createdClient],
+      );
+      setSelectedClient(createdClient);
       setShowNewClient(false);
       setNewClientNom('');
       setNewClientTel('');
@@ -1391,8 +1441,18 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
                   onChange={(e) => setSearchTerm(e.target.value)}
                   placeholder={t('depot.clientPlaceholder')}
                   autoFocus
-                  className="w-full pl-10 pr-4 py-2.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent"
+                  className="w-full pl-10 pr-9 py-2.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent"
                 />
+                {searchTerm && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchTerm('')}
+                    aria-label={lang === 'fr' ? 'Effacer la recherche' : 'Clear search'}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 rounded text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
 
               {clientSearchLoading && (

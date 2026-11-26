@@ -4,9 +4,10 @@ import { db, rpc } from '@/lib/db';
 import { useAuth } from '@/lib/auth';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import { DepotWithArticles, DepotAvance, TypeTraitement, Entreprise, formatPrice, formatDate, formatDateShort, getTraitementLabelById, applyPhonePrefix } from '@/types';
-import { CalendarDays, ChevronDown, ChevronRight, Clock, Check, Filter, TrendingUp, Package, Layers, Wallet, Trash2, AlertTriangle, Truck, CalendarClock, Tags, Printer } from 'lucide-react';
+import { CalendarDays, ChevronDown, ChevronRight, Clock, Check, Filter, TrendingUp, Package, Layers, Wallet, Trash2, AlertTriangle, Truck, CalendarClock, Tags, Printer, Pencil } from 'lucide-react';
 import ImportExcel from '@/components/ImportExcel';
 import PrintableLabels from '@/components/PrintableLabels';
+import EditDepotTraitementModal from '@/components/EditDepotTraitementModal';
 import { printDepotLabels } from '@/lib/print';
 import { PrintableReport, printReport, type ReportData } from '@/components/PrintableReport';
 
@@ -65,6 +66,9 @@ export default function Historique() {
   const [entreprise, setEntreprise] = useState<Entreprise | null>(null);
   const [labelDepot, setLabelDepot] = useState<DepotWithArticles | null>(null);
   const [deliveryFilter, setDeliveryFilter] = useState<'all' | 'delivery' | 'no-delivery'>('all');
+  const [depotToEditTraitement, setDepotToEditTraitement] = useState<DepotWithArticles | null>(null);
+
+  const canEditTraitement = role === 'commercial' || role === 'gerant' || role === 'admin';
 
   // Map of depot_id -> total extra avances
   const avancesMap = useMemo(() => {
@@ -744,6 +748,15 @@ export default function Historique() {
                                 </>
                               )}
                             </span>
+                            {canEditTraitement && isEnCours && typesTraitement.length > 0 && (
+                              <button
+                                onClick={() => setDepotToEditTraitement(depot)}
+                                title={lang === 'fr' ? 'Modifier le type de traitement' : 'Edit treatment type'}
+                                className="w-8 h-8 flex items-center justify-center rounded-lg text-sky-500 hover:bg-sky-50 hover:text-sky-700 transition-colors"
+                              >
+                                <Pencil className="w-4 h-4" />
+                              </button>
+                            )}
                             {role === 'admin' && (
                               <button
                                 onClick={() => setDepotToDelete(depot)}
@@ -816,6 +829,15 @@ export default function Historique() {
             </div>
           </div>
         </div>
+      )}
+      {depotToEditTraitement && (
+        <EditDepotTraitementModal
+          depot={depotToEditTraitement}
+          typesTraitement={typesTraitement}
+          totalPaye={getEncaisse(depotToEditTraitement)}
+          onClose={() => setDepotToEditTraitement(null)}
+          onSaved={load}
+        />
       )}
     </div>
 

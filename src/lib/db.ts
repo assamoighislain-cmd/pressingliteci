@@ -12,6 +12,7 @@ import {
   OfflineNetworkError,
 } from '@/lib/readCache';
 import { readOfflineSessionBackup } from '@/lib/offlineSession';
+import { searchClientsIndexed } from '@/lib/clientSearchIndex';
 import {
   bKey,
   getScopedCached,
@@ -744,70 +745,108 @@ async function applyPendingClientMutations(
 
 // ─── Typed convenience wrappers ────────────────────────────
 
+const CLIENT_SELECT_COLUMNS =
+  'id, code, nom, telephone, taux_remise, condition_remise, date_naissance, portal_code, boutique_id, created_at';
+
+const inFlightAllClients = new Map<string, Promise<Client[]>>();
+
+function sanitizePostgrestSearchTerm(raw: string): string {
+  return raw.replace(/[,()%*]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function mapClientRow(r: Record<string, unknown>): Client {
+  return {
+    ...r,
+    taux_remise: Number(r.taux_remise ?? 0),
+    condition_remise: r.condition_remise != null ? Number(r.condition_remise) : null,
+  } as Client;
+}
+
 export const db = {
   // Clients
-  async searchClients(term: string): Promise<Client[]> {
+  getCachedClientsSync(): Client[] | null {
+    const cacheKey = bKey('all_clients', currentBoutiqueId);
+    const cached = getCached<Client[]>(cacheKey);
+    return Array.isArray(cached) ? cached : null;
+  },
+
+  searchClientsLocal(term: string, limit = 15): Client[] | null {
     if (!term.trim()) return [];
-    const t = term.trim();
+    const cached = db.getCachedClientsSync();
+    if (!cached) return null;
+    return searchClientsIndexed(cached, term, limit);
+  },
+
+  async searchClientsRemote(term: string, limit = 15): Promise<Client[]> {
+    const trimmed = term.trim();
+    if (!trimmed) return [];
     const searchFromCache = async (): Promise<Client[]> => {
       const cached = await db.getAllClients();
-      const lower = t.toLowerCase();
-      return cached
-        .filter(
-          (c) =>
-            (c.nom ?? '').toLowerCase().includes(lower) ||
-            (c.telephone ?? '').toLowerCase().includes(lower) ||
-            (c.code ?? '').toLowerCase().includes(lower),
-        )
-        .slice(0, 10);
+      return searchClientsIndexed(cached, trimmed, limit);
     };
     if (isOffline()) return searchFromCache();
+    const safeTerm = sanitizePostgrestSearchTerm(trimmed);
+    if (!safeTerm) return [];
     let q = supabase
       .from('clients')
-      .select('*')
-      .or(`nom.ilike.%${t}%,telephone.ilike.%${t}%,code.ilike.%${t}%`)
+      .select(CLIENT_SELECT_COLUMNS)
+      .or(`nom.ilike.%${safeTerm}%,telephone.ilike.%${safeTerm}%,code.ilike.%${safeTerm}%`)
       .order('nom')
-      .limit(10);
+      .limit(limit);
     if (currentBoutiqueId) q = q.eq('boutique_id', currentBoutiqueId);
     const { data, error } = await q;
     if (error) return isLikelyNetworkError(error) ? searchFromCache() : [];
-    const remote = ((data as Record<string, unknown>[]) ?? []).map((r) => ({
-      ...r,
-      taux_remise: Number(r.taux_remise),
-      condition_remise: r.condition_remise != null ? Number(r.condition_remise) : null,
-    })) as Client[];
-    return remote;
+    return ((data as Record<string, unknown>[]) ?? []).map(mapClientRow);
+  },
+
+  async searchClients(term: string, limit = 15): Promise<Client[]> {
+    const trimmed = term.trim();
+    if (!trimmed) return [];
+    const localHits = db.searchClientsLocal(trimmed, limit);
+    if (localHits !== null) {
+      if (localHits.length > 0 || isOffline()) return localHits;
+      // Local cache is warm and returned 0 hits: check remote once in case a client was just created elsewhere
+      return db.searchClientsRemote(trimmed, limit);
+    }
+    return db.searchClientsRemote(trimmed, limit);
   },
 
   async getAllClients(): Promise<Client[]> {
-    const cacheKey = bKey('all_clients', currentBoutiqueId);
-    const list = await cachedRead(cacheKey, async () => {
-      const data = await fetchAllPages<Record<string, unknown>>((from, to) => {
-        let q = supabase
-          .from('clients')
-          .select('*')
-          .order('nom', { ascending: true })
-          .order('id', { ascending: true })
-          .range(from, to);
-        if (currentBoutiqueId) q = q.eq('boutique_id', currentBoutiqueId);
-        return q;
-      });
-      const mapped = data.map((r) => ({
-        ...r,
-        taux_remise: Number(r.taux_remise),
-        condition_remise: r.condition_remise != null ? Number(r.condition_remise) : null,
-      })) as Client[];
-      if (mapped.length === 0) {
-        await assertSafeToCacheEmptyList(cacheKey);
+    const boutiqueAtStart = currentBoutiqueId;
+    const cacheKey = bKey('all_clients', boutiqueAtStart);
+    const existingInFlight = inFlightAllClients.get(cacheKey);
+    if (existingInFlight) return existingInFlight;
+
+    const promise = (async () => {
+      const list = await cachedRead(cacheKey, async () => {
+        const data = await fetchAllPages<Record<string, unknown>>((from, to) => {
+          let q = supabase
+            .from('clients')
+            .select(CLIENT_SELECT_COLUMNS)
+            .order('nom', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to);
+          if (boutiqueAtStart) q = q.eq('boutique_id', boutiqueAtStart);
+          return q;
+        });
+        const mapped = data.map(mapClientRow);
+        if (mapped.length === 0) {
+          await assertSafeToCacheEmptyList(cacheKey);
+        }
+        observeClientCodes(mapped, boutiqueAtStart);
+        return mapped;
+      }, []);
+      const merged = await applyPendingClientMutations(list, boutiqueAtStart);
+      if (merged.length > 0) {
+        observeClientCodes(merged, boutiqueAtStart);
       }
-      observeClientCodes(mapped, currentBoutiqueId);
-      return mapped;
-    }, []);
-    const merged = await applyPendingClientMutations(list, currentBoutiqueId);
-    if (merged.length > 0) {
-      observeClientCodes(merged, currentBoutiqueId);
-    }
-    return merged;
+      return merged;
+    })().finally(() => {
+      inFlightAllClients.delete(cacheKey);
+    });
+
+    inFlightAllClients.set(cacheKey, promise);
+    return promise;
   },
 
   async getLastDepotDates(clientIds: string[]): Promise<Record<string, { date: string; total: number; count: number }>> {

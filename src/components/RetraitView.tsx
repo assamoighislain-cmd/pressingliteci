@@ -38,9 +38,11 @@ import {
   Trash2,
   Tags,
   Package,
+  Pencil,
 } from 'lucide-react';
 import PrintableReceipt, { ReceiptData, PrintFormat } from '@/components/PrintableReceipt';
 import PrintableLabels from '@/components/PrintableLabels';
+import EditDepotTraitementModal from '@/components/EditDepotTraitementModal';
 import { printWithFormat, printDepotLabels } from '@/lib/print';
 import { useAuth } from '@/lib/auth';
 import { Entreprise, DepotAvance, resolveReceiptHeader } from '@/types';
@@ -70,6 +72,9 @@ export default function RetraitView() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [showLabels, setShowLabels] = useState(false);
   const [markingReady, setMarkingReady] = useState(false);
+  const [editingTraitement, setEditingTraitement] = useState(false);
+
+  const canEditTraitement = role === 'commercial' || role === 'gerant' || role === 'admin';
 
   const selectedBoutique =
     (selected?.boutique_id ? boutiques.find((b) => b.id === selected.boutique_id) : null) ??
@@ -371,7 +376,7 @@ export default function RetraitView() {
         designation: art.designation,
         quantite: art.quantite,
         nb_pieces: art.nb_pieces,
-        prix_unitaire: Number(art.prix_unitaire),
+        prix_unitaire: Number(art.prix_traitement || art.prix_unitaire),
         prix_total: Number(art.prix_total),
         couleur: art.couleur,
         signe_particulier: art.signe_particulier,
@@ -397,6 +402,7 @@ export default function RetraitView() {
     setResults([]);
     setError(null);
     setConfirmDelete(false);
+    setEditingTraitement(false);
   }
 
   async function handleToggleReady() {
@@ -529,7 +535,7 @@ export default function RetraitView() {
     return (
       <div className="max-w-2xl mx-auto space-y-5">
         <button
-          onClick={() => { setSelected(null); setAvances([]); setSuccessData(null); setRetraitSuccessData(null); }}
+          onClick={() => { setSelected(null); setAvances([]); setSuccessData(null); setRetraitSuccessData(null); setEditingTraitement(false); }}
           className="flex items-center gap-1 text-sm text-slate-400 hover:text-slate-600 transition-colors"
         >
           <X className="w-4 h-4" /> {t('retrait.backToSearch')}
@@ -624,9 +630,21 @@ export default function RetraitView() {
 
               <div>
                 <p className="text-xs text-slate-400">{t('retrait.treatment')}</p>
-                <p className="text-sm font-medium text-slate-900 mt-0.5">
-                  {getTraitementLabelById(selected.type_traitement_id, typesTraitement, selected.traitement)} (×{Number(selected.coefficient)})
-                </p>
+                <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                  <p className="text-sm font-medium text-slate-900">
+                    {getTraitementLabelById(selected.type_traitement_id, typesTraitement, selected.traitement)} (×{Number(selected.coefficient)})
+                  </p>
+                  {canEditTraitement && selected.statut === 'EN_COURS' && typesTraitement.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setEditingTraitement(true)}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-sky-50 text-sky-700 border border-sky-200 hover:bg-sky-100 transition-colors"
+                    >
+                      <Pencil className="w-3 h-3" />
+                      {lang === 'fr' ? 'Modifier' : 'Edit'}
+                    </button>
+                  )}
+                </div>
               </div>
               <div>
                 <p className="text-xs text-slate-400">{t('retrait.retraitPrevu')}</p>
@@ -667,7 +685,7 @@ export default function RetraitView() {
                         </p>
                         <div className="flex items-center gap-2 mt-0.5">
                           <p className="text-xs text-slate-400">
-                            {art.quantite} × {formatPrice(Number(art.prix_unitaire))}
+                            {art.quantite} × {formatPrice(Number(art.prix_traitement || art.prix_unitaire))}
                           </p>
                           {selected.statut === 'EN_COURS' ? (
                             <label className="flex items-center gap-1 text-xs text-slate-400">
@@ -1222,6 +1240,21 @@ export default function RetraitView() {
             )}
             {showLabels && <PrintableLabels depot={selected} entreprise={entreprise} />}
           </div>
+        )}
+
+        {editingTraitement && (
+          <EditDepotTraitementModal
+            depot={selected}
+            typesTraitement={typesTraitement}
+            totalPaye={totalPaye}
+            onClose={() => setEditingTraitement(false)}
+            onSaved={async () => {
+              await refreshSelected(selected.id);
+              if (searchTerm.trim().length >= 1) {
+                void search(searchTerm, true);
+              }
+            }}
+          />
         )}
       </div>
     );

@@ -12,9 +12,15 @@ const BOUTIQUE_STORAGE_KEY = 'app-current-boutique';
 
 // Minimum age before a cached read triggers a silent background network check
 const SWR_REVALIDATE_AFTER_MS = 2500;
+// Large lists (e.g. 4,000+ clients) revalidate less aggressively on idle reads;
+// any local mutation or Realtime event still invalidates immediately via lastInvalidatedAt.
+const LARGE_LIST_SWR_REVALIDATE_AFTER_MS = 60_000;
 
 // Non-pinned entries larger than this stay in Memory + IndexedDB so they never evict core lists from localStorage
 const MAX_LOCALSTORAGE_UNPINNED_CHARS = 350_000;
+// Even pinned lists larger than this (e.g. 4,000+ clients ≈ 1 MB) stay in Memory + IndexedDB
+// to avoid synchronous main-thread JSON/localStorage stalls and QuotaExceededError eviction loops.
+const MAX_LOCALSTORAGE_PINNED_CHARS = 550_000;
 
 // Core tables that must stay pinned in localStorage AND IndexedDB
 const PINNED_CACHE_BASES = [
@@ -125,9 +131,14 @@ function cacheKey(key: string): string {
 }
 
 function writeLocalStorageEntry<T>(key: string, entry: CacheEntry<T>): void {
+  // Fast heuristic before JSON.stringify: huge arrays (e.g. > 1,500 rows) belong in Memory + IndexedDB only
+  if (Array.isArray(entry.data) && entry.data.length > 1500) {
+    return;
+  }
   const serialized = JSON.stringify({ data: entry.data, timestamp: entry.timestamp });
-  if (!isPinnedKey(key) && serialized.length > MAX_LOCALSTORAGE_UNPINNED_CHARS) {
-    // Keep large unpinned datasets (e.g. hundreds of depots) in Memory + IndexedDB only
+  const maxChars = isPinnedKey(key) ? MAX_LOCALSTORAGE_PINNED_CHARS : MAX_LOCALSTORAGE_UNPINNED_CHARS;
+  if (serialized.length > maxChars) {
+    // Keep large datasets (e.g. 4,000 clients or hundreds of depots) in Memory + IndexedDB only
     return;
   }
 
@@ -437,7 +448,11 @@ export async function cachedRead<T>(
   }
 
   if (existingEntry !== null && existingEntry.timestamp >= lastInvalidatedAt) {
-    if (Date.now() - existingEntry.timestamp >= SWR_REVALIDATE_AFTER_MS) {
+    const isLargeList = Array.isArray(existingEntry.data) && existingEntry.data.length >= 500;
+    const revalidateAfter = isLargeList
+      ? LARGE_LIST_SWR_REVALIDATE_AFTER_MS
+      : SWR_REVALIDATE_AFTER_MS;
+    if (Date.now() - existingEntry.timestamp >= revalidateAfter) {
       revalidateInBackground(key, fetcher, existingEntry.data);
     }
     return existingEntry.data;
