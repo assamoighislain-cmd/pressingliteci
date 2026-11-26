@@ -27,9 +27,11 @@ import {
   Monitor,
   ChevronLeft,
   ChevronRight,
+  Hash,
 } from 'lucide-react';
 import ImportExcel from '@/components/ImportExcel';
 import { PrintableReport, printReport, type ReportData } from '@/components/PrintableReport';
+import NormalizeClientCodesModal from '@/components/NormalizeClientCodesModal';
 import {
   getBillingPointCode,
   setBillingPointCode,
@@ -48,6 +50,7 @@ export default function Clients() {
   const { t, lang } = useI18n();
   const { role, currentBoutique } = useAuth();
   const isAdmin = !role || role === 'admin';
+  const canNormalizeCodes = !role || role === 'admin' || role === 'gerant';
   const [clients, setClients] = useState<ClientWithLastDepot[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -71,6 +74,7 @@ export default function Clients() {
   const [showDeleteAllModal, setShowDeleteAllModal] = useState(false);
   const [deleteAllConfirmText, setDeleteAllConfirmText] = useState('');
   const [deletingAll, setDeletingAll] = useState(false);
+  const [showNormalizeModal, setShowNormalizeModal] = useState(false);
   const [page, setPage] = useState(1);
   const [entreprise, setEntreprise] = useState<Entreprise | null>(null);
   const [billingPointCode, setBillingPointCodeState] = useState<string>(() => getBillingPointCode());
@@ -389,8 +393,8 @@ export default function Clients() {
         </div>
       )}
 
-      {/* Print & Admin bulk delete actions */}
-      {!loading && (filtered.length > 0 || (isAdmin && clients.length > 0)) && (
+      {/* Print & Admin bulk actions */}
+      {!loading && (filtered.length > 0 || (canNormalizeCodes && clients.length > 0)) && (
         <div className="flex flex-wrap gap-2">
           {filtered.length > 0 && (
             <button
@@ -398,6 +402,15 @@ export default function Clients() {
               className="flex-1 py-2.5 px-4 rounded-lg bg-slate-100 text-slate-700 text-sm font-medium hover:bg-slate-200 transition-colors flex items-center justify-center gap-2"
             >
               <Printer className="w-4 h-4" /> {lang === 'fr' ? 'Imprimer la liste' : 'Print list'}
+            </button>
+          )}
+          {canNormalizeCodes && clients.length > 0 && (
+            <button
+              onClick={() => setShowNormalizeModal(true)}
+              className="py-2.5 px-4 rounded-lg border border-sky-200 bg-sky-50/70 text-sky-700 text-sm font-medium hover:bg-sky-100 transition-colors flex items-center justify-center gap-2"
+            >
+              <Hash className="w-4 h-4" />
+              {lang === 'fr' ? 'Conformer préfixe codes' : 'Normalize code prefix'}
             </button>
           )}
           {isAdmin && clients.length > 0 && (
@@ -924,6 +937,17 @@ export default function Clients() {
             </div>
           </div>
         </div>
+      )}
+      {showNormalizeModal && (
+        <NormalizeClientCodesModal
+          boutiqueId={currentBoutique?.id ?? null}
+          boutiqueName={currentBoutique?.nom ?? entreprise?.nom ?? ''}
+          clients={clients}
+          currentBillingPointCode={billingPointCode}
+          onBillingPointChanged={(code) => setBillingPointCodeState(code)}
+          onClose={() => setShowNormalizeModal(false)}
+          onNormalized={() => load(true)}
+        />
       )}
       <PrintableReport data={reportData} />
     </div>

@@ -22,6 +22,7 @@ import {
   observeArticleCodes,
   observeTraitementCodes,
   getBillingPointCode,
+  normalizeBillingPointCode,
   getDepotStartSeq,
   setDepotStartSeq,
   getBoutiqueDepotStartSeq,
@@ -1042,6 +1043,219 @@ export const db = {
       return null;
     } catch (err) {
       return err instanceof Error ? err.message : 'Erreur réseau lors de la suppression';
+    }
+  },
+
+  async normalizeBoutiqueClientCodes(
+    targetPrefix: string,
+    boutiqueId?: string | null,
+    onProgress?: (done: number, total: number) => void,
+  ): Promise<{ updated: number; alreadyCompliant: number; total: number; error: string | null }> {
+    if (isOffline()) {
+      return {
+        updated: 0,
+        alreadyCompliant: 0,
+        total: 0,
+        error: 'Connexion internet requise pour harmoniser les codes clients.',
+      };
+    }
+
+    const targetBoutiqueId = boutiqueId !== undefined ? boutiqueId : currentBoutiqueId;
+    const cleanPrefix = normalizeBillingPointCode(targetPrefix);
+
+    // 1. Try fast atomic server RPC first (if migration is deployed)
+    if (targetBoutiqueId) {
+      try {
+        const { data: rpcData, error: rpcErr } = await supabase.rpc('normalize_boutique_client_codes', {
+          p_boutique_id: targetBoutiqueId,
+          p_target_prefix: cleanPrefix,
+        });
+        if (!rpcErr && rpcData && typeof rpcData === 'object') {
+          const payload = rpcData as { updated?: number; already_compliant?: number; total?: number };
+          const updated = Number(payload.updated ?? 0);
+          const alreadyCompliant = Number(payload.already_compliant ?? 0);
+          const total = Number(payload.total ?? updated + alreadyCompliant);
+          onProgress?.(updated, updated);
+          notifyRealtimeMutation('clients');
+          await db.getAllClients();
+          return { updated, alreadyCompliant, total, error: null };
+        }
+        if (
+          rpcErr &&
+          !rpcErr.message.toLowerCase().includes('could not find the function') &&
+          !rpcErr.message.toLowerCase().includes('does not exist') &&
+          rpcErr.code !== 'PGRST202' &&
+          rpcErr.code !== '42883'
+        ) {
+          return { updated: 0, alreadyCompliant: 0, total: 0, error: rpcErr.message };
+        }
+      } catch {
+        // Fallback to collision-proof batched client-side update below
+      }
+    }
+
+    // 2. Fallback: collision-proof batched update using existing tenant RLS policies
+    try {
+      const allTenantClients = await fetchAllPages<{
+        id: string;
+        code: string | null;
+        boutique_id: string | null;
+        created_at: string;
+      }>((from, to) =>
+        supabase
+          .from('clients')
+          .select('id, code, boutique_id, created_at')
+          .order('created_at', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to),
+      );
+
+      const usedCodes = new Set<string>();
+      const boutiqueClients: typeof allTenantClients = [];
+      let maxSeqForPrefix = 0;
+
+      const isConforming = (rawCode: string | null | undefined): boolean => {
+        if (!rawCode) return false;
+        const parsed = parseClientCodeInfo(rawCode);
+        if (!parsed || parsed.pointCode !== cleanPrefix) return false;
+        return formatClientCode(parsed.seq, cleanPrefix) === rawCode;
+      };
+
+      for (const row of allTenantClients) {
+        const parsed = parseClientCodeInfo(row.code);
+        if (parsed && parsed.pointCode === cleanPrefix && parsed.seq > maxSeqForPrefix) {
+          maxSeqForPrefix = parsed.seq;
+        }
+        const belongsToTarget = targetBoutiqueId ? row.boutique_id === targetBoutiqueId : true;
+        if (belongsToTarget) {
+          boutiqueClients.push(row);
+        } else if (row.code?.trim()) {
+          usedCodes.add(row.code.trim().toUpperCase());
+        }
+      }
+
+      const conforming: typeof allTenantClients = [];
+      const toRename: typeof allTenantClients = [];
+
+      for (const row of boutiqueClients) {
+        if (isConforming(row.code)) {
+          conforming.push(row);
+          if (row.code) usedCodes.add(row.code.toUpperCase());
+        } else {
+          toRename.push(row);
+        }
+      }
+
+      if (toRename.length === 0) {
+        return {
+          updated: 0,
+          alreadyCompliant: conforming.length,
+          total: boutiqueClients.length,
+          error: null,
+        };
+      }
+
+      let nextSeq = maxSeqForPrefix + 1;
+      const plan: Array<{ id: string; oldCode: string; newCode: string }> = [];
+
+      for (const row of toRename) {
+        const raw = (row.code ?? '').trim().toUpperCase();
+        const trailingMatch = raw.match(/(\d+)$/);
+        const extractedSeq = trailingMatch ? parseInt(trailingMatch[1], 10) : NaN;
+        let candidate: string | null = null;
+
+        if (Number.isFinite(extractedSeq) && extractedSeq > 0 && extractedSeq < 10_000_000) {
+          const tryCode = formatClientCode(extractedSeq, cleanPrefix);
+          if (!usedCodes.has(tryCode)) {
+            candidate = tryCode;
+          }
+        }
+
+        if (!candidate) {
+          while (usedCodes.has(formatClientCode(nextSeq, cleanPrefix))) {
+            nextSeq++;
+          }
+          candidate = formatClientCode(nextSeq, cleanPrefix);
+          nextSeq++;
+        }
+
+        usedCodes.add(candidate);
+        plan.push({ id: row.id, oldCode: raw, newCode: candidate });
+      }
+
+      // Phase 1: Temporarily rename only rows whose old code is needed as another row's new code
+      const plannedNewCodes = new Set(plan.map((p) => p.newCode));
+      const collidingRows = plan.filter((p) => p.oldCode && plannedNewCodes.has(p.oldCode));
+      const CONCURRENCY = 25;
+
+      for (let i = 0; i < collidingRows.length; i += CONCURRENCY) {
+        const slice = collidingRows.slice(i, i + CONCURRENCY);
+        const results = await Promise.all(
+          slice.map((item) =>
+            supabase
+              .from('clients')
+              .update({ code: `TMP-${item.id.slice(0, 8)}` })
+              .eq('id', item.id),
+          ),
+        );
+        const firstErr = results.find((r) => r.error)?.error;
+        if (firstErr) {
+          return {
+            updated: 0,
+            alreadyCompliant: conforming.length,
+            total: boutiqueClients.length,
+            error: firstErr.message,
+          };
+        }
+      }
+
+      // Phase 2: Write final normalized codes in parallel batches
+      let done = 0;
+      onProgress?.(0, plan.length);
+      for (let i = 0; i < plan.length; i += CONCURRENCY) {
+        const slice = plan.slice(i, i + CONCURRENCY);
+        const results = await Promise.all(
+          slice.map((item) =>
+            supabase.from('clients').update({ code: item.newCode }).eq('id', item.id),
+          ),
+        );
+        const firstErr = results.find((r) => r.error)?.error;
+        if (firstErr) {
+          notifyRealtimeMutation('clients');
+          return {
+            updated: done,
+            alreadyCompliant: conforming.length,
+            total: boutiqueClients.length,
+            error: firstErr.message,
+          };
+        }
+        done += slice.length;
+        onProgress?.(done, plan.length);
+      }
+
+      observeClientCodes(
+        plan.map((p) => ({ code: p.newCode })),
+        targetBoutiqueId,
+      );
+      notifyRealtimeMutation('clients');
+      await db.getAllClients();
+
+      return {
+        updated: plan.length,
+        alreadyCompliant: conforming.length,
+        total: boutiqueClients.length,
+        error: null,
+      };
+    } catch (err) {
+      return {
+        updated: 0,
+        alreadyCompliant: 0,
+        total: 0,
+        error:
+          err instanceof Error
+            ? err.message
+            : 'Erreur lors de la mise en conformité des codes clients',
+      };
     }
   },
 
