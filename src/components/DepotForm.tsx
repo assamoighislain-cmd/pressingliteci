@@ -14,6 +14,7 @@ import {
   ModeReglementRow,
   BonReduction,
   Commercial,
+  CommercialClientWithDetails,
   getCoefficientById,
   getNbJoursById,
   computeDateRetraitPrevueById,
@@ -21,6 +22,8 @@ import {
   formatPrice,
   formatDate,
   formatDateShort,
+  isCommercialClientLinkActiveOnDate,
+  getDaysRemainingUntil,
 } from '@/types';
 import {
   Trash2,
@@ -130,7 +133,9 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
   const [allVariants, setAllVariants] = useState<ArticleVariant[]>([]);
   const [modesReglement, setModesReglement] = useState<ModeReglementRow[]>([]);
   const [commerciaux, setCommerciaux] = useState<Commercial[]>([]);
+  const [commercialClients, setCommercialClients] = useState<CommercialClientWithDetails[]>([]);
   const [selectedCommercialId, setSelectedCommercialId] = useState<string>('');
+  const [commercialManualOverride, setCommercialManualOverride] = useState(false);
   const [fieldHistory, setFieldHistory] = useState<{ couleur: string[]; signe_particulier: string[]; griffe: string[] }>({ couleur: [], signe_particulier: [], griffe: [] });
 
   // Client state
@@ -233,13 +238,14 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
   // Load treatment types and catalog
   useEffect(() => {
     (async () => {
-      const [typesData, articlesData, variantsData, entreprise, modesData, activeCommerciaux, couleurs, signes, griffes] = await Promise.all([
+      const [typesData, articlesData, variantsData, entreprise, modesData, activeCommerciaux, commercialLinksRes, couleurs, signes, griffes] = await Promise.all([
         db.getTypesTraitement(),
         db.getArticles(),
         db.getAllVariants(),
         db.getEntreprise(),
         db.getModesReglement(),
         db.getActiveCommerciaux(),
+        db.getCommercialClients(),
         db.getDistinctFieldValues('couleur'),
         db.getDistinctFieldValues('signe_particulier'),
         db.getDistinctFieldValues('griffe'),
@@ -250,6 +256,9 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
       setAllVariants(variantsData);
       setModesReglement(modesData);
       setCommerciaux(activeCommerciaux);
+      if (!commercialLinksRes.missingTable) {
+        setCommercialClients(commercialLinksRes.data);
+      }
       setEntreprise(entreprise);
       setFieldHistory({
         couleur: couleurs.filter((v) => v.toUpperCase() !== 'AUCUN'),
@@ -258,6 +267,34 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
       });
     })();
   }, []);
+
+  // Resolve active commercial link for the currently selected client
+  const activeClientCommercialLink = (() => {
+    if (!selectedClient || commercialClients.length === 0 || commerciaux.length === 0) return null;
+    const todayYmd = new Date().toISOString().slice(0, 10);
+    const activeComIds = new Set(commerciaux.map((c) => c.id));
+    return (
+      commercialClients.find(
+        (cc) =>
+          cc.client_id === selectedClient.id &&
+          activeComIds.has(cc.commercial_id) &&
+          isCommercialClientLinkActiveOnDate(cc, todayYmd),
+      ) ?? null
+    );
+  })();
+
+  useEffect(() => {
+    setCommercialManualOverride(false);
+  }, [selectedClient?.id]);
+
+  useEffect(() => {
+    if (commercialManualOverride) return;
+    if (activeClientCommercialLink) {
+      setSelectedCommercialId(activeClientCommercialLink.commercial_id);
+    } else if (!selectedClient) {
+      setSelectedCommercialId('');
+    }
+  }, [activeClientCommercialLink, selectedClient, commercialManualOverride]);
 
   // Keep boutique client index warm in RAM for instant (<1ms) search across 4,000+ clients
   const loadClientIndex = useCallback(async () => {
@@ -695,10 +732,20 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
       const traitementLibelle = selectedType?.libelle ?? '';
 
       const selectedCommercial = commerciaux.find((c) => c.id === selectedCommercialId) ?? null;
-      const commissionTaux = selectedCommercial ? selectedCommercial.taux_commission : null;
-      const commissionMontant = selectedCommercial
-        ? Math.round((totalFinal * selectedCommercial.taux_commission) / 100)
+      const matchingPeriodLink =
+        selectedCommercial &&
+        activeClientCommercialLink &&
+        activeClientCommercialLink.commercial_id === selectedCommercial.id
+          ? activeClientCommercialLink
+          : null;
+      const effectiveCommissionRate = selectedCommercial
+        ? (matchingPeriodLink?.taux_commission ?? selectedCommercial.taux_commission)
         : null;
+      const commissionTaux = effectiveCommissionRate;
+      const commissionMontant =
+        selectedCommercial && effectiveCommissionRate !== null
+          ? Math.round((totalFinal * effectiveCommissionRate) / 100)
+          : null;
 
       const depotData = await db.insertDepot({
         numero,
@@ -837,6 +884,7 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
     setTypeTraitementId(getDefaultTypeTraitementId(typesTraitement));
     setPaymentLines([makeDefaultPaymentLine()]);
     setSelectedCommercialId('');
+    setCommercialManualOverride(false);
     setNotes('');
     setCouponCode('');
     setAppliedCoupon(null);
@@ -2059,7 +2107,10 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
               </label>
               <select
                 value={selectedCommercialId}
-                onChange={(e) => setSelectedCommercialId(e.target.value)}
+                onChange={(e) => {
+                  setCommercialManualOverride(true);
+                  setSelectedCommercialId(e.target.value);
+                }}
                 className="w-full px-3 py-2.5 rounded-lg border border-slate-200 bg-white text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent"
               >
                 <option value="">
@@ -2074,14 +2125,29 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
               {(() => {
                 const chosen = commerciaux.find((c) => c.id === selectedCommercialId);
                 if (!chosen) return null;
-                const commAmount = Math.round((totalFinal * chosen.taux_commission) / 100);
+                const matchedLink =
+                  activeClientCommercialLink && activeClientCommercialLink.commercial_id === chosen.id
+                    ? activeClientCommercialLink
+                    : null;
+                const effectiveRate = matchedLink?.taux_commission ?? chosen.taux_commission;
+                const commAmount = Math.round((totalFinal * effectiveRate) / 100);
+                const daysLeft = matchedLink ? getDaysRemainingUntil(matchedLink.date_fin) : null;
                 return (
-                  <p className="text-xs text-amber-800 mt-1.5 tabular-nums">
-                    {lang === 'fr'
-                      ? `Commission calculée (${chosen.taux_commission} % sur ${formatPrice(totalFinal)}) : `
-                      : `Calculated commission (${chosen.taux_commission}% of ${formatPrice(totalFinal)}): `}
-                    <span className="font-semibold">{formatPrice(commAmount)}</span>
-                  </p>
+                  <div className="mt-1.5 space-y-1">
+                    {matchedLink && (
+                      <p className="text-xs text-sky-700 font-medium">
+                        {lang === 'fr'
+                          ? `Client lié automatiquement à ${chosen.nom} jusqu'au ${formatDateShort(matchedLink.date_fin)} (${daysLeft === 0 ? 'dernier jour' : `${daysLeft} j restant${(daysLeft ?? 0) > 1 ? 's' : ''}`})`
+                          : `Client automatically linked to ${chosen.nom} until ${formatDateShort(matchedLink.date_fin)} (${daysLeft}d left)`}
+                      </p>
+                    )}
+                    <p className="text-xs text-amber-800 tabular-nums">
+                      {lang === 'fr'
+                        ? `Commission calculée (${effectiveRate} % sur ${formatPrice(totalFinal)}) : `
+                        : `Calculated commission (${effectiveRate}% of ${formatPrice(totalFinal)}): `}
+                      <span className="font-semibold">{formatPrice(commAmount)}</span>
+                    </p>
+                  </div>
                 );
               })()}
             </div>

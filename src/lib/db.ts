@@ -86,8 +86,31 @@ import type {
   Relance,
   RelanceWithClient,
   Commercial,
+  CommercialClient,
+  CommercialClientWithDetails,
+  CommercialPortalBranding,
+  CommercialPortalData,
   CommissionVersement,
 } from '@/types';
+import { computeDateFinFromDays } from '@/types';
+
+const COMMERCIAL_PORTAL_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+
+export function generateCommercialPortalCode(): string {
+  const bytes = new Uint8Array(8);
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < bytes.length; i++) {
+      bytes[i] = Math.floor(Math.random() * 256);
+    }
+  }
+  let suffix = '';
+  for (let i = 0; i < bytes.length; i++) {
+    suffix += COMMERCIAL_PORTAL_ALPHABET[bytes[i] % COMMERCIAL_PORTAL_ALPHABET.length];
+  }
+  return `COM-${suffix}`;
+}
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -113,7 +136,8 @@ export type TableName =
   | 'modes_reglement'
   | 'relances'
   | 'commerciaux'
-  | 'commission_versements';
+  | 'commission_versements'
+  | 'commercial_clients';
 
 interface QueryOrder {
   column: string;
@@ -3046,21 +3070,35 @@ export const db = {
     telephone?: string | null;
     email?: string | null;
     taux_commission: number;
+    portal_code?: string | null;
     actif?: boolean;
     notes?: string | null;
   }): Promise<{ data: Commercial | null; error: string | null }> {
-    const result = await insert<Commercial>({
+    const baseRow = {
+      nom: row.nom.trim(),
+      telephone: row.telephone?.trim() || null,
+      email: row.email?.trim() || null,
+      taux_commission: row.taux_commission,
+      actif: row.actif ?? true,
+      notes: row.notes?.trim() || null,
+    };
+    const code = row.portal_code?.trim().toUpperCase() || generateCommercialPortalCode();
+
+    let result = await insert<Commercial>({
       table: 'commerciaux',
-      rows: {
-        nom: row.nom.trim(),
-        telephone: row.telephone?.trim() || null,
-        email: row.email?.trim() || null,
-        taux_commission: row.taux_commission,
-        actif: row.actif ?? true,
-        notes: row.notes?.trim() || null,
-      },
+      rows: { ...baseRow, portal_code: code },
       select: '*',
     });
+
+    // Graceful fallback if portal_code column hasn't been added by migration yet
+    if (result.error && /portal_code|column/i.test(result.error)) {
+      result = await insert<Commercial>({
+        table: 'commerciaux',
+        rows: baseRow,
+        select: '*',
+      });
+    }
+
     if (result.data) {
       const c = {
         ...result.data,
@@ -3079,6 +3117,7 @@ export const db = {
       telephone?: string | null;
       email?: string | null;
       taux_commission?: number;
+      portal_code?: string | null;
       actif?: boolean;
       notes?: string | null;
     },
@@ -3091,6 +3130,7 @@ export const db = {
     if (values.telephone !== undefined) cleanValues.telephone = values.telephone?.trim() || null;
     if (values.email !== undefined) cleanValues.email = values.email?.trim() || null;
     if (values.notes !== undefined) cleanValues.notes = values.notes?.trim() || null;
+    if (typeof values.portal_code === 'string') cleanValues.portal_code = values.portal_code.trim().toUpperCase();
     const result = await update({
       table: 'commerciaux',
       values: cleanValues,
@@ -3099,12 +3139,199 @@ export const db = {
     return result.error;
   },
 
+  async regenerateCommercialPortalCode(id: string): Promise<{ code: string | null; error: string | null }> {
+    const nextCode = generateCommercialPortalCode();
+    const err = await db.updateCommercial(id, { portal_code: nextCode });
+    if (err) return { code: null, error: err };
+    return { code: nextCode, error: null };
+  },
+
   async deleteCommercial(id: string): Promise<string | null> {
     const result = await remove({
       table: 'commerciaux',
       filters: [{ column: 'id', operator: 'eq', value: id }],
     });
     return result.error;
+  },
+
+  // Commercial ↔ Clients (time-bounded assignments)
+  async getCommercialClients(
+    commercialId?: string,
+  ): Promise<{ data: CommercialClientWithDetails[]; missingTable: boolean; error: string | null }> {
+    const cacheKey = commercialId ? `commercial_clients_${commercialId}` : 'all_commercial_clients';
+    if (isOffline()) {
+      return { data: getCached<CommercialClientWithDetails[]>(cacheKey) ?? [], missingTable: false, error: null };
+    }
+    try {
+      const tId = await getTenantId();
+      let q = supabase
+        .from('commercial_clients')
+        .select('*, clients(nom, code, telephone)')
+        .order('date_fin', { ascending: false })
+        .order('created_at', { ascending: false });
+      if (tId) q = q.eq('tenant_id', tId);
+      if (commercialId) q = q.eq('commercial_id', commercialId);
+      const { data, error } = await q;
+      if (error) {
+        if (isMissingTableError(error)) {
+          return { data: [], missingTable: true, error: null };
+        }
+        if (isLikelyNetworkError(error)) {
+          return { data: getCached<CommercialClientWithDetails[]>(cacheKey) ?? [], missingTable: false, error: null };
+        }
+        return { data: [], missingTable: false, error: error.message };
+      }
+      const mapped = ((data as Record<string, unknown>[]) ?? []).map((r) => {
+        const cl = r.clients as Record<string, unknown> | null;
+        return {
+          id: String(r.id),
+          tenant_id: String(r.tenant_id),
+          boutique_id: (r.boutique_id as string | null) ?? null,
+          commercial_id: String(r.commercial_id),
+          client_id: String(r.client_id),
+          duree_jours: Number(r.duree_jours ?? 30),
+          date_debut: String(r.date_debut ?? '').slice(0, 10),
+          date_fin: String(r.date_fin ?? '').slice(0, 10),
+          taux_commission: r.taux_commission != null ? Number(r.taux_commission) : null,
+          actif: Boolean(r.actif ?? true),
+          notes: (r.notes as string | null) ?? null,
+          created_at: String(r.created_at ?? ''),
+          updated_at: r.updated_at ? String(r.updated_at) : undefined,
+          client_nom: (cl?.nom as string) ?? '—',
+          client_code: (cl?.code as string | null) ?? null,
+          client_telephone: (cl?.telephone as string | null) ?? null,
+        };
+      }) as CommercialClientWithDetails[];
+      setCached(cacheKey, mapped);
+      return { data: mapped, missingTable: false, error: null };
+    } catch (err) {
+      return {
+        data: getCached<CommercialClientWithDetails[]>(cacheKey) ?? [],
+        missingTable: false,
+        error: err instanceof Error ? err.message : 'Erreur réseau',
+      };
+    }
+  },
+
+  async insertCommercialClientsBulk(rows: Array<{
+    commercial_id: string;
+    client_id: string;
+    duree_jours: number;
+    date_debut: string;
+    date_fin?: string;
+    taux_commission?: number | null;
+    actif?: boolean;
+    notes?: string | null;
+  }>): Promise<{ count: number; error: string | null }> {
+    if (rows.length === 0) return { count: 0, error: null };
+    const payload = rows.map((r) => {
+      const duree = Math.max(1, Math.min(3650, Math.round(r.duree_jours)));
+      const debut = r.date_debut.slice(0, 10);
+      const fin = r.date_fin ? r.date_fin.slice(0, 10) : computeDateFinFromDays(debut, duree);
+      return {
+        commercial_id: r.commercial_id,
+        client_id: r.client_id,
+        duree_jours: duree,
+        date_debut: debut,
+        date_fin: fin,
+        taux_commission: r.taux_commission ?? null,
+        actif: r.actif ?? true,
+        notes: r.notes?.trim() || null,
+      };
+    });
+    const result = await insert<CommercialClient>({
+      table: 'commercial_clients',
+      rows: payload,
+      select: '*',
+    });
+    if (result.error) return { count: 0, error: result.error };
+    return { count: payload.length, error: null };
+  },
+
+  async updateCommercialClient(
+    id: string,
+    values: {
+      commercial_id?: string;
+      duree_jours?: number;
+      date_debut?: string;
+      date_fin?: string;
+      taux_commission?: number | null;
+      actif?: boolean;
+      notes?: string | null;
+    },
+  ): Promise<string | null> {
+    const cleanValues: Record<string, unknown> = {
+      ...values,
+      updated_at: new Date().toISOString(),
+    };
+    if (values.notes !== undefined) cleanValues.notes = values.notes?.trim() || null;
+    if (values.date_debut) cleanValues.date_debut = values.date_debut.slice(0, 10);
+    if (values.date_fin) cleanValues.date_fin = values.date_fin.slice(0, 10);
+    const result = await update({
+      table: 'commercial_clients',
+      values: cleanValues,
+      filters: [{ column: 'id', operator: 'eq', value: id }],
+    });
+    return result.error;
+  },
+
+  async deleteCommercialClient(id: string): Promise<string | null> {
+    const result = await remove({
+      table: 'commercial_clients',
+      filters: [{ column: 'id', operator: 'eq', value: id }],
+    });
+    return result.error;
+  },
+
+  // Commercial Portal (public code-authenticated RPCs)
+  async getCommercialPortalBranding(entrepriseId: number): Promise<CommercialPortalBranding | null> {
+    try {
+      const { data, error } = await supabase.rpc('get_commercial_portal_branding', {
+        p_entreprise_id: entrepriseId,
+      });
+      if (error || !data || typeof data !== 'object') return null;
+      return data as CommercialPortalBranding;
+    } catch {
+      return null;
+    }
+  },
+
+  async getCommercialPortalData(
+    portalCode: string,
+    entrepriseId?: number | null,
+  ): Promise<{ data: CommercialPortalData | null; error: string | null }> {
+    const cleanCode = portalCode.trim().toUpperCase();
+    if (cleanCode.length < 4) {
+      return { data: null, error: "Veuillez saisir un code d'accès valide." };
+    }
+    try {
+      const { data, error } = await supabase.rpc('get_commercial_portal_data', {
+        p_portal_code: cleanCode,
+        p_entreprise_id: entrepriseId ?? null,
+      });
+      if (error) {
+        if (/get_commercial_portal_data|function.*does not exist/i.test(error.message)) {
+          return {
+            data: null,
+            error: "Le portail commercial n'est pas encore activé sur la base de données. Demandez à votre administrateur d'exécuter la mise à jour SQL.",
+          };
+        }
+        return { data: null, error: error.message };
+      }
+      if (!data || typeof data !== 'object') {
+        return { data: null, error: 'Code invalide ou compte commercial inactif.' };
+      }
+      const obj = data as Record<string, unknown>;
+      if (typeof obj.error === 'string' && obj.error) {
+        return { data: null, error: obj.error };
+      }
+      return { data: obj as unknown as CommercialPortalData, error: null };
+    } catch (err) {
+      return {
+        data: null,
+        error: err instanceof Error ? err.message : 'Erreur de connexion au portail.',
+      };
+    }
   },
 
   async getCommissionVersements(
@@ -3233,6 +3460,7 @@ export const db = {
       db.getAllConsommables(),
       db.getBonsReduction(),
       db.getCommerciaux(),
+      db.getCommercialClients(),
       db.getCommissionVersements(),
       Promise.resolve(supabase.from('clients').select('code').limit(10000)).then(({ data }) => {
         if (data) observeClientCodes(data as Array<{ code?: string | null }>, currentBoutiqueId);

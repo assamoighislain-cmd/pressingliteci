@@ -544,6 +544,15 @@ export default function AuthForm() {
               {mode === 'signin' ? t('auth.createAccount') : t('auth.signIn')}
             </button>
           </p>
+
+          <div className="mt-4 pt-4 border-t border-slate-100 text-center">
+            <a
+              href="#/commercial"
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-sky-600 transition-colors"
+            >
+              {lang === 'fr' ? 'Vous êtes commercial ? Accéder au Portail Commercial →' : 'Sales agent? Open Commercial Portal →'}
+            </a>
+          </div>
         </div>
       </div>
     </div>

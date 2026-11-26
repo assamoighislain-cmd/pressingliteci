@@ -27,6 +27,7 @@ import ConsommablesPage from '@/components/ConsommablesPage';
 import Inventaire from '@/components/Inventaire';
 import BoutiquesPage from '@/components/BoutiquesPage';
 import ClientPortal from '@/components/ClientPortal';
+import CommercialPortal from '@/components/CommercialPortal';
 import ErrorBoundary from '@/components/ErrorBoundary';
 import DepotStartCounterModal from '@/components/DepotStartCounterModal';
 import PwaUpdateBanner from '@/components/PwaUpdateBanner';
@@ -777,6 +778,18 @@ export default function App() {
       <>
         {quotaBanner}
         <ClientPortal entrepriseId={portalEntrepriseId} />
+        <PwaUpdateBanner />
+      </>
+    );
+  }
+
+  const commercialPortalMatch = hash.match(/^#\/commercial(?:\/(\d+))?$/);
+  if (commercialPortalMatch) {
+    const comEntrepriseId = commercialPortalMatch[1] ? parseInt(commercialPortalMatch[1], 10) : null;
+    return (
+      <>
+        {quotaBanner}
+        <CommercialPortal entrepriseId={comEntrepriseId} />
         <PwaUpdateBanner />
       </>
     );

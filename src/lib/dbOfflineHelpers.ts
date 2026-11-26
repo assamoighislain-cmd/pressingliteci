@@ -30,6 +30,7 @@ export const UUID_PK_TABLES = new Set<string>([
   'relances',
   'commerciaux',
   'commission_versements',
+  'commercial_clients',
 ]);
 
 export function bKey(base: string, boutiqueId: string | null): string {
@@ -1229,6 +1230,11 @@ export function buildMutationLabel(
   if (table === 'commission_versements') {
     if (op === 'insert') return `Versement commission (${Number(data.montant ?? 0).toLocaleString('fr-FR')} FCFA)`;
     if (op === 'delete') return 'Suppression versement commission';
+  }
+  if (table === 'commercial_clients') {
+    if (op === 'insert') return 'Liaison client ↔ commercial';
+    if (op === 'update') return 'Mise à jour période client ↔ commercial';
+    if (op === 'delete') return 'Suppression lien client ↔ commercial';
   }
   const verb = op === 'insert' ? 'Ajout' : op === 'update' ? 'Modification' : op === 'delete' ? 'Suppression' : 'Mise à jour';
   return `${verb} (${table})`;

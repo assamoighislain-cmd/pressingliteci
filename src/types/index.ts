@@ -379,10 +379,109 @@ export interface Commercial {
   telephone: string | null;
   email: string | null;
   taux_commission: number;
+  portal_code?: string | null;
   actif: boolean;
   notes: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface CommercialClient {
+  id: string;
+  tenant_id: string;
+  boutique_id: string | null;
+  commercial_id: string;
+  client_id: string;
+  duree_jours: number;
+  date_debut: string;
+  date_fin: string;
+  taux_commission: number | null;
+  actif: boolean;
+  notes: string | null;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface CommercialClientWithDetails extends CommercialClient {
+  client_nom: string;
+  client_code: string | null;
+  client_telephone: string | null;
+}
+
+export interface CommercialPortalBranding {
+  id: number;
+  nom: string;
+  telephone: string | null;
+  adresse: string | null;
+  ville: string | null;
+  logo_url: string | null;
+}
+
+export interface CommercialPortalClientItem {
+  id: string;
+  client_id: string;
+  client_nom: string;
+  client_code: string | null;
+  client_telephone: string | null;
+  date_debut: string;
+  date_fin: string;
+  duree_jours: number;
+  taux_commission: number;
+  actif: boolean;
+  jours_restants: number;
+  est_actif_periode: boolean;
+  nb_factures: number;
+  chiffre_affaires: number;
+  commissions_generees: number;
+}
+
+export interface CommercialPortalFactureItem {
+  id: string;
+  numero: string | null;
+  date_depot: string;
+  client_id: string | null;
+  client_nom: string;
+  statut: string;
+  total: number;
+  commission_taux: number;
+  commission_montant: number;
+  source: 'direct' | 'client_period';
+}
+
+export interface CommercialPortalVersementItem {
+  id: string;
+  date_versement: string;
+  montant: number;
+  mode_reglement: string | null;
+  periode_debut: string | null;
+  periode_fin: string | null;
+  reference: string | null;
+  notes: string | null;
+}
+
+export interface CommercialPortalData {
+  commercial: {
+    id: string;
+    nom: string;
+    telephone: string | null;
+    email: string | null;
+    taux_commission: number;
+    portal_code: string;
+    actif: boolean;
+  };
+  entreprise: CommercialPortalBranding | null;
+  summary: {
+    total_clients: number;
+    clients_actifs: number;
+    nb_factures: number;
+    chiffre_affaires: number;
+    commissions_dues: number;
+    commissions_versees: number;
+    solde_a_payer: number;
+  };
+  clients: CommercialPortalClientItem[];
+  factures: CommercialPortalFactureItem[];
+  versements: CommercialPortalVersementItem[];
 }
 
 export interface CommissionVersement {
@@ -398,6 +497,41 @@ export interface CommissionVersement {
   reference: string | null;
   notes: string | null;
   created_at: string;
+}
+
+export function computeDateFinFromDays(dateDebutYmd: string, dureeJours: number): string {
+  const safeDays = Math.max(1, Math.min(3650, Math.round(dureeJours || 1)));
+  const parts = dateDebutYmd.slice(0, 10).split('-').map(Number);
+  if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) {
+    const fallback = new Date();
+    fallback.setDate(fallback.getDate() + safeDays);
+    return fallback.toISOString().slice(0, 10);
+  }
+  const d = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+  d.setUTCDate(d.getUTCDate() + safeDays);
+  return d.toISOString().slice(0, 10);
+}
+
+export function getDaysRemainingUntil(dateFinYmd: string, referenceYmd?: string): number {
+  const ref = (referenceYmd ?? new Date().toISOString().slice(0, 10)).slice(0, 10);
+  const fin = dateFinYmd.slice(0, 10);
+  const [ry, rm, rd] = ref.split('-').map(Number);
+  const [fy, fm, fd] = fin.split('-').map(Number);
+  if (![ry, rm, rd, fy, fm, fd].every(Number.isFinite)) return 0;
+  const refUtc = Date.UTC(ry, rm - 1, rd);
+  const finUtc = Date.UTC(fy, fm - 1, fd);
+  return Math.round((finUtc - refUtc) / (24 * 60 * 60 * 1000));
+}
+
+export function isCommercialClientLinkActiveOnDate(
+  link: Pick<CommercialClient, 'actif' | 'date_debut' | 'date_fin'>,
+  targetYmd?: string,
+): boolean {
+  if (!link.actif) return false;
+  const day = (targetYmd ?? new Date().toISOString().slice(0, 10)).slice(0, 10);
+  const start = (link.date_debut ?? '').slice(0, 10);
+  const end = (link.date_fin ?? '').slice(0, 10);
+  return Boolean(start && end && day >= start && day <= end);
 }
 
 export function getModeReglementLabel(mode: ModeReglement | null, modes: ModeReglementRow[] = []): string {
