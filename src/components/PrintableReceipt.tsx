@@ -71,14 +71,33 @@ function formatReceiptPaymentModes(data: ReceiptData, modesReglement: ModeReglem
   return getModeReglementLabel(data.modeReglement, modesReglement);
 }
 
+function getCachedOperatorName(
+  user: { id?: string; email?: string | null; user_metadata?: Record<string, unknown> } | null | undefined,
+): string | null {
+  if (!user) return null;
+  if (user.id) {
+    try {
+      const stored = localStorage.getItem(`offline_member_name_${user.id}`);
+      if (stored?.trim()) return stored.trim();
+    } catch {
+      // Ignore storage access errors
+    }
+  }
+  const metaName = user.user_metadata?.full_name;
+  if (typeof metaName === 'string' && metaName.trim()) return metaName.trim();
+  return user.email?.trim() || null;
+}
+
 function TicketReceipt({
   data,
   entreprise,
   modesReglement,
+  operatorName,
 }: {
   data: ReceiptData;
   entreprise: Entreprise | null;
   modesReglement: ModeReglementRow[];
+  operatorName: string | null;
 }) {
   const { t, lang } = useI18n();
   const footerMessage = entreprise?.message_pied?.trim() || null;
@@ -265,6 +284,11 @@ function TicketReceipt({
         <p style={{ margin: '2px 0 0', fontSize: '14px', fontWeight: 700 }}>
           {lang === 'fr' ? 'Conservez ce ticket pour le retrait' : 'Keep this ticket for pickup'}
         </p>
+        {operatorName && (
+          <p style={{ margin: '3px 0 0', fontSize: '14px', fontWeight: 800 }}>
+            {lang === 'fr' ? 'Établi par' : 'Served by'} : {operatorName}
+          </p>
+        )}
       </div>
 
       {/* ── Notes ── */}
@@ -287,10 +311,12 @@ function A5Receipt({
   data,
   entreprise,
   modesReglement,
+  operatorName,
 }: {
   data: ReceiptData;
   entreprise: Entreprise | null;
   modesReglement: ModeReglementRow[];
+  operatorName: string | null;
 }) {
   const { t, lang } = useI18n();
   const footerMessage = entreprise?.message_pied?.trim() || null;
@@ -436,6 +462,11 @@ function A5Receipt({
         ) : (
           <p>{lang === 'fr' ? 'Merci de votre confiance — Conservez cette facture pour le retrait' : 'Thank you for your trust — Keep this invoice for pickup'}</p>
         )}
+        {operatorName && (
+          <p className="font-semibold text-slate-800 mt-0.5">
+            {lang === 'fr' ? 'Établi par' : 'Served by'} : {operatorName}
+          </p>
+        )}
       </div>
 
       {/* Notes */}
@@ -454,15 +485,20 @@ export default function PrintableReceipt({
   modesReglement = [],
   entreprise: entrepriseProp,
   boutique: boutiqueProp,
+  operatorName: operatorNameProp,
 }: {
   data: ReceiptData;
   format: PrintFormat;
   modesReglement?: ModeReglementRow[];
   entreprise?: Entreprise | null;
   boutique?: Boutique | null;
+  operatorName?: string | null;
 }) {
-  const { currentBoutique } = useAuth();
+  const { user, currentBoutique } = useAuth();
   const [entrepriseState, setEntrepriseState] = useState<Entreprise | null>(null);
+  const [resolvedOperatorName, setResolvedOperatorName] = useState<string | null>(() =>
+    getCachedOperatorName(user),
+  );
 
   useEffect(() => {
     if (entrepriseProp) {
@@ -474,9 +510,28 @@ export default function PrintableReceipt({
     })();
   }, [entrepriseProp]);
 
+  useEffect(() => {
+    if (operatorNameProp !== undefined) return;
+    let active = true;
+    const cached = getCachedOperatorName(user);
+    if (cached) setResolvedOperatorName(cached);
+    (async () => {
+      const name = await db.getCurrentMemberName();
+      if (active && name?.trim()) {
+        setResolvedOperatorName(name.trim());
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [user, operatorNameProp]);
+
   const rawEntreprise = entrepriseProp ?? entrepriseState;
   const activeBoutique = boutiqueProp !== undefined ? boutiqueProp : currentBoutique;
   const effectiveEntreprise = mergeBoutiqueHeaderIntoEntreprise(rawEntreprise, activeBoutique);
+  const effectiveOperatorName =
+    (operatorNameProp !== undefined ? operatorNameProp : resolvedOperatorName ?? getCachedOperatorName(user))
+      ?.trim() || null;
   const isTicket = format === 'ticket';
   const formatClass = isTicket ? 'print-format-ticket' : 'print-format-a5';
 
@@ -484,9 +539,19 @@ export default function PrintableReceipt({
     <div className="print-receipt">
       <div className={formatClass}>
         {isTicket ? (
-          <TicketReceipt data={data} entreprise={effectiveEntreprise} modesReglement={modesReglement} />
+          <TicketReceipt
+            data={data}
+            entreprise={effectiveEntreprise}
+            modesReglement={modesReglement}
+            operatorName={effectiveOperatorName}
+          />
         ) : (
-          <A5Receipt data={data} entreprise={effectiveEntreprise} modesReglement={modesReglement} />
+          <A5Receipt
+            data={data}
+            entreprise={effectiveEntreprise}
+            modesReglement={modesReglement}
+            operatorName={effectiveOperatorName}
+          />
         )}
       </div>
     </div>
