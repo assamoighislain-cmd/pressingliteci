@@ -38,19 +38,58 @@ export function bKey(base: string, boutiqueId: string | null): string {
 }
 
 export function getScopedCached<T>(base: string, boutiqueId: string | null): T | null {
-  const scoped = getCached<T>(bKey(base, boutiqueId));
-  if (scoped !== null) return scoped;
+  if (boutiqueId) {
+    return getCached<T>(bKey(base, boutiqueId));
+  }
   const unscoped = getCached<T>(base);
   if (unscoped !== null) return unscoped;
   try {
     const storedBoutiqueId = localStorage.getItem('app-current-boutique');
-    if (storedBoutiqueId && storedBoutiqueId !== boutiqueId) {
+    if (storedBoutiqueId) {
       return getCached<T>(`${base}_${storedBoutiqueId}`);
     }
   } catch {
     // Ignore
   }
   return null;
+}
+
+/**
+ * Clears tenant- and boutique-specific localStorage state (sequence counters,
+ * start numbers, boutique selection, geo/header caches) on sign-out or tenant switch.
+ * Does NOT clear the offline mutation queue so unsynced operations remain protected.
+ */
+export function clearTenantScopedLocalState(): void {
+  try {
+    const prefixes = [
+      'offline_seq_',
+      'pressinglite_depot_start_seq_',
+      'pressinglite_depot_custom_prog_',
+      'pressinglite_company_depot_start_seq_',
+      'pressinglite_boutique_depot_start_seq_',
+      'pressinglite_boutique_geo_',
+      'pressinglite_boutique_receipt_header_',
+      'offline_member_name_',
+    ];
+    const exactKeys = new Set([
+      'app-current-boutique',
+      'offline_last_tenant_id',
+      'pressinglite_default_boutique_id',
+    ]);
+    const keysToRemove: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k) continue;
+      if (exactKeys.has(k) || prefixes.some((p) => k.startsWith(p))) {
+        keysToRemove.push(k);
+      }
+    }
+    for (const k of keysToRemove) {
+      localStorage.removeItem(k);
+    }
+  } catch {
+    // Ignore storage errors
+  }
 }
 
 export function generateUuid(): string {

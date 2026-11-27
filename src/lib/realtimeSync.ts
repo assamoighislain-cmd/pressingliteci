@@ -11,7 +11,8 @@ import { onPostSync, processQueue, getPendingCount } from '@/lib/offlineQueue';
 const INSTANCE_ID = `tab_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 const CROSS_TAB_CHANNEL = 'pressinglite-realtime';
 const DEBOUNCE_MS = 220;
-const IDLE_POLL_INTERVAL_MS = 25000;
+// Fallback idle poll every 3 minutes — only fires if the WebSocket Realtime channel isn't actively subscribed
+const IDLE_POLL_INTERVAL_MS = 180_000;
 
 export type RealtimeListener = (changedTables: Set<string>) => void;
 
@@ -21,6 +22,7 @@ let emitTimer: ReturnType<typeof setTimeout> | null = null;
 
 let activeTenantChannel: RealtimeChannel | null = null;
 let activeTenantKey: string | null = null;
+let isTenantChannelSubscribed = false;
 let platformChannel: RealtimeChannel | null = null;
 let crossTabBc: BroadcastChannel | null = null;
 let engineInitialized = false;
@@ -156,13 +158,14 @@ function ensureGlobalEngineInitialized(): void {
     }
   });
 
-  // Quiet background sync poll every 25s while online & visible (catches portal / DB trigger updates)
+  // Quiet fallback sync poll every 3 min while online & visible ONLY when Realtime WebSocket is degraded
   setInterval(() => {
     if (
       typeof document !== 'undefined' &&
       document.visibilityState === 'visible' &&
       navigator.onLine &&
-      listeners.size > 0
+      listeners.size > 0 &&
+      !isTenantChannelSubscribed
     ) {
       invalidateAllCacheFreshness();
       scheduleEmit(['*']);
@@ -192,28 +195,33 @@ export function connectRealtimeSync(params: {
     return () => {};
   }
 
-  // 1. Platform channel (for Super Admin approvals, licences, join requests, and pending companies)
-  if (!platformChannel) {
-    platformChannel = supabase
-      .channel('realtime-platform')
-      .on('broadcast', { event: 'data_changed' }, ({ payload }) => {
-        handleIncomingRemoteChange(String(payload?.table || 'entreprise'), payload?.sourceId);
-      })
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'entreprise' },
-        () => handleIncomingRemoteChange('entreprise'),
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'licences' },
-        () => handleIncomingRemoteChange('licences'),
-      )
-      .subscribe((status) => {
-        if (status === 'SUBSCRIBED' && getPendingCount() > 0) {
-          void processQueue();
-        }
-      });
+  // 1. Platform channel — strictly for Super Admins so regular tenants do not trigger platform-wide RLS fan-out
+  if (isSuperAdmin) {
+    if (!platformChannel) {
+      platformChannel = supabase
+        .channel('realtime-platform')
+        .on('broadcast', { event: 'data_changed' }, ({ payload }) => {
+          handleIncomingRemoteChange(String(payload?.table || 'entreprise'), payload?.sourceId);
+        })
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'entreprise' },
+          () => handleIncomingRemoteChange('entreprise'),
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'licences' },
+          () => handleIncomingRemoteChange('licences'),
+        )
+        .subscribe((status) => {
+          if (status === 'SUBSCRIBED' && getPendingCount() > 0) {
+            void processQueue();
+          }
+        });
+    }
+  } else if (platformChannel) {
+    void supabase.removeChannel(platformChannel);
+    platformChannel = null;
   }
 
   // 2. Tenant-scoped channel (for instant multi-user/multi-device sync within the pressing)
@@ -224,35 +232,66 @@ export function connectRealtimeSync(params: {
       activeTenantChannel = null;
     }
     activeTenantKey = desiredKey;
+    isTenantChannelSubscribed = false;
 
     let hadDisconnected = false;
-    const chan = supabase
+    let chan = supabase
       .channel(`realtime-tenant:${desiredKey}`)
       .on('broadcast', { event: 'data_changed' }, ({ payload }) => {
         handleIncomingRemoteChange(String(payload?.table || '*'), payload?.sourceId);
-      })
-      .on(
+      });
+
+    if (isSuperAdmin) {
+      chan = chan.on(
         'postgres_changes',
         { event: '*', schema: 'public' },
         (payload) => {
-          const table = payload.table || '*';
-          handleIncomingRemoteChange(table);
+          handleIncomingRemoteChange(payload.table || '*');
         },
-      )
-      .subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          if (getPendingCount() > 0) {
-            void processQueue();
-          }
-          if (hadDisconnected) {
-            hadDisconnected = false;
-            invalidateAllCacheFreshness();
-            scheduleEmit(['*']);
-          }
-        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-          hadDisconnected = true;
+      );
+    } else if (tenantId) {
+      // Filtered per-tenant subscriptions avoid evaluating every company's DB writes against every connected client
+      const tenantFilter = `tenant_id=eq.${tenantId}`;
+      const tenantTables = [
+        'depots',
+        'clients',
+        'depot_avances',
+        'depenses',
+        'boutiques',
+        'commerciaux',
+        'commercial_clients',
+        'commission_versements',
+      ];
+      for (const tbl of tenantTables) {
+        chan = chan.on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: tbl, filter: tenantFilter },
+          () => handleIncomingRemoteChange(tbl),
+        );
+      }
+      chan = chan.on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'entreprise', filter: `user_id=eq.${tenantId}` },
+        () => handleIncomingRemoteChange('entreprise'),
+      );
+    }
+
+    chan.subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        isTenantChannelSubscribed = true;
+        if (getPendingCount() > 0) {
+          void processQueue();
         }
-      });
+        if (hadDisconnected) {
+          hadDisconnected = false;
+          invalidateAllCacheFreshness();
+          scheduleEmit(['*']);
+        }
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        isTenantChannelSubscribed = false;
+        hadDisconnected = true;
+      }
+    });
 
     activeTenantChannel = chan;
   }
@@ -263,6 +302,7 @@ export function connectRealtimeSync(params: {
 }
 
 export function disconnectRealtimeSync(): void {
+  isTenantChannelSubscribed = false;
   if (activeTenantChannel) {
     void supabase.removeChannel(activeTenantChannel);
     activeTenantChannel = null;

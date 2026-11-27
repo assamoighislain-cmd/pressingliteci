@@ -3,13 +3,15 @@ import type { Session, User } from '@supabase/supabase-js';
 import { supabase, supabaseUrl, supabaseAnonKey } from '@/lib/supabase';
 import { resetTenantCache, setCachedTenantId, setCurrentBoutiqueId } from '@/lib/db';
 import { saveAuthSessionForSw, getMetaValue, setMetaValue } from '@/lib/offlineStorage';
-import { isLikelyNetworkError } from '@/lib/readCache';
+import { clearAllReadCache, isLikelyNetworkError } from '@/lib/readCache';
+import { setActiveQueueTenant } from '@/lib/offlineQueue';
 import {
   readOfflineSessionBackup,
   writeOfflineSessionBackup,
   clearOfflineSessionBackup,
 } from '@/lib/offlineSession';
 import {
+  clearTenantScopedLocalState,
   setCompanyDepotStartSeq,
   setDepotStartSeq,
   syncBoutiqueDepotStartSeqs,
@@ -114,6 +116,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   if (initialMembership?.tenantId) {
     setCachedTenantId(initialMembership.tenantId);
+    setActiveQueueTenant(initialMembership.tenantId);
   }
   if (initialBoutiqueState.selected?.id) {
     setCurrentBoutiqueId(initialBoutiqueState.selected.id);
@@ -139,6 +142,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [currentBoutique, setCurrentBoutique] = useState<Boutique | null>(() => initialBoutiqueState.selected);
 
   const signingOutRef = useRef(false);
+  const memberBoutiqueIdRef = useRef<string | null>(initialMembership?.memberBoutiqueId ?? null);
   const lastLoadedUserIdRef = useRef<string | null>(
     initialMembership && initialBackup?.user?.id ? initialBackup.user.id : null,
   );
@@ -182,13 +186,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   async function reloadBoutiques() {
     if (!tenantId) return;
     try {
-      const bs = await loadBoutiques(tenantId, null);
+      const restrictedBoutiqueId = memberBoutiqueIdRef.current;
+      const bs = await loadBoutiques(tenantId, restrictedBoutiqueId);
       if (user?.id) {
         writeCachedMembership(user.id, {
           role,
           tenantId,
           isSuperAdmin,
-          memberBoutiqueId: null,
+          memberBoutiqueId: restrictedBoutiqueId,
           boutiques: bs,
         });
       }
@@ -213,9 +218,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   function restoreCachedMembership(userId: string): boolean {
     const cached = readCachedMembership(userId);
     if (cached) {
+      memberBoutiqueIdRef.current = cached.memberBoutiqueId ?? null;
       setRole(cached.role);
       setTenantId(cached.tenantId);
       setCachedTenantId(cached.tenantId);
+      setActiveQueueTenant(cached.tenantId);
       setIsSuperAdmin(cached.isSuperAdmin);
       applyBoutiquesList(cached.boutiques ?? [], cached.memberBoutiqueId);
       return true;
@@ -228,23 +235,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } catch {
         // Ignore
       }
+      memberBoutiqueIdRef.current = idbCached.memberBoutiqueId ?? null;
       setRole(idbCached.role);
       setTenantId(idbCached.tenantId);
       setCachedTenantId(idbCached.tenantId);
+      setActiveQueueTenant(idbCached.tenantId);
       setIsSuperAdmin(idbCached.isSuperAdmin);
       applyBoutiquesList(idbCached.boutiques ?? [], idbCached.memberBoutiqueId);
     });
-    // Fallback if offline before membership cache was written: use stored tenant ID or user ID
+    // Fallback if offline before membership cache was written: restore tenant/boutique
+    // WITHOUT escalating role to 'admin' (prevents unauthorized offline UI/mutations).
     try {
-      const fallbackTenant = localStorage.getItem('offline_last_tenant_id') || userId;
+      const fallbackTenant = localStorage.getItem('offline_last_tenant_id');
       const storedBoutiqueId = localStorage.getItem(BOUTIQUE_STORAGE_KEY);
       if (storedBoutiqueId) {
         setCurrentBoutiqueId(storedBoutiqueId);
       }
       if (fallbackTenant) {
-        setRole('admin');
         setTenantId(fallbackTenant);
         setCachedTenantId(fallbackTenant);
+        setActiveQueueTenant(fallbackTenant);
         return true;
       }
     } catch {
@@ -300,10 +310,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const tId = (tenantRes.data as string) ?? null;
       const r = (roleRes.data as UserRole) ?? null;
       const superFlag = Boolean(superRes.data);
+
+      // Strict multi-tenant isolation on shared terminals:
+      // If a user from a DIFFERENT company signs in on the same browser, purge the previous company's read cache.
+      let previousStoredTenant: string | null = null;
+      try {
+        previousStoredTenant = localStorage.getItem('offline_last_tenant_id');
+      } catch {
+        // Ignore
+      }
+      if (previousStoredTenant && tId && previousStoredTenant !== tId) {
+        await clearAllReadCache();
+        clearTenantScopedLocalState();
+        setCurrentBoutiqueId(null);
+      }
+
       setRole(r);
       setTenantId(tId);
       setCachedTenantId(tId);
+      setActiveQueueTenant(tId);
       setIsSuperAdmin(superFlag);
+
+      if (session?.access_token) {
+        void saveAuthSessionForSw({
+          accessToken: session.access_token,
+          supabaseUrl,
+          supabaseAnonKey,
+          tenantId: tId,
+        });
+      }
 
       let memberBoutiqueId: string | null = null;
       let loadedBoutiques: Boutique[] = [];
@@ -312,7 +347,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const { data: boutiqueData } = await supabase.rpc('get_member_boutique_id');
           memberBoutiqueId = (boutiqueData as string) ?? null;
         }
+        memberBoutiqueIdRef.current = memberBoutiqueId;
         loadedBoutiques = await loadBoutiques(tId, memberBoutiqueId);
+      } else {
+        memberBoutiqueIdRef.current = null;
       }
 
       writeCachedMembership(uid, {
@@ -326,6 +364,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!restoreCachedMembership(uid)) {
         setRole(null);
         setTenantId(null);
+        setActiveQueueTenant(null);
         setIsSuperAdmin(false);
         setBoutiques([]);
         setCurrentBoutique(null);
@@ -337,19 +376,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   function clearLocalAuthState() {
     lastLoadedUserIdRef.current = null;
+    memberBoutiqueIdRef.current = null;
     clearOfflineSessionBackup();
     setUser(null);
     setSession(null);
     setRole(null);
     setTenantId(null);
     setCachedTenantId(null);
+    setActiveQueueTenant(null);
+    setCurrentBoutiqueId(null);
     setIsSuperAdmin(false);
     setBoutiques([]);
     setCurrentBoutique(null);
     setMembershipLoading(false);
     setLoading(false);
     resetTenantCache();
-    void saveAuthSessionForSw({ accessToken: null, supabaseUrl, supabaseAnonKey });
+    clearTenantScopedLocalState();
+    void clearAllReadCache();
+    void saveAuthSessionForSw({ accessToken: null, supabaseUrl, supabaseAnonKey, tenantId: null });
   }
 
   useEffect(() => {

@@ -3,7 +3,7 @@
 // protects core tables (clients, articles, entreprise, etc.) from localStorage quota eviction,
 // supports automatic boutique-scope fallback on cold offline boot, and never wipes cache on errors.
 
-import { idbGet, idbGetAll, idbPut, READ_CACHE_STORE } from '@/lib/offlineStorage';
+import { idbClear, idbGet, idbGetAll, idbPut, READ_CACHE_STORE } from '@/lib/offlineStorage';
 
 const CACHE_PREFIX = 'offline_cache_';
 const CACHE_TIMESTAMP_KEY = 'offline_cache_timestamps';
@@ -76,6 +76,38 @@ export function onBackgroundCacheDiff(listener: CacheDiffListener): () => void {
 
 export function invalidateAllCacheFreshness(): void {
   lastInvalidatedAt = Date.now();
+}
+
+/**
+ * Purges all cached read entries across RAM, localStorage, and IndexedDB.
+ * Must be called on explicit sign-out or when switching between different companies
+ * on a shared terminal so data from Company A can never bleed into Company B.
+ */
+export async function clearAllReadCache(): Promise<void> {
+  memoryCache.clear();
+  inFlightRevalidations.clear();
+  lastInvalidatedAt = 0;
+  hydrationPromise = null;
+  try {
+    const keysToRemove: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (
+        k &&
+        (k.startsWith(CACHE_PREFIX) ||
+          k === CACHE_TIMESTAMP_KEY ||
+          k === LAST_CACHE_REFRESH_KEY)
+      ) {
+        keysToRemove.push(k);
+      }
+    }
+    for (const k of keysToRemove) {
+      localStorage.removeItem(k);
+    }
+  } catch {
+    // Ignore storage errors
+  }
+  await idbClear(READ_CACHE_STORE);
 }
 
 export class OfflineNetworkError extends Error {
@@ -252,10 +284,12 @@ export async function getCachedWithScopeFallbackAsync<T>(key: string): Promise<T
 
   const base = getBaseKey(key);
 
-  // 1. Try unscoped base key (if key was boutique-scoped)
+  // Strict multi-boutique isolation:
+  // If the caller explicitly requested a boutique-scoped key (`key !== base`), NEVER
+  // fall back to another boutique's cached dataset or an unscoped list!
+  // Cross-scope fallback is only safe on cold offline boot when boutiqueId is not yet known (`key === base`).
   if (key !== base) {
-    const unscoped = await getCachedEntryAsync<T>(base);
-    if (unscoped !== null) return unscoped.data;
+    return null;
   }
 
   // 2. Try last stored boutique ID from localStorage (covers cold offline boot when currentBoutiqueId was still null)

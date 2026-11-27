@@ -33,6 +33,9 @@ const TABLES_WITHOUT_USER_ID = new Set([
   'consommables',
   'consommable_mouvements',
   'relances',
+  'commerciaux',
+  'commission_versements',
+  'commercial_clients',
 ]);
 
 function extractMissingSchemaColumn(message: string | null | undefined): string | null {
@@ -87,6 +90,7 @@ export interface QueuedMutation {
   lastError?: string | null;
   nextRetryAt?: number | null;
   label?: string;
+  tenantId?: string | null;
 }
 
 export interface SyncStateSnapshot {
@@ -110,6 +114,7 @@ const countListeners = new Set<CountListener>();
 const postSyncCallbacks = new Set<PostSyncCallback>();
 
 let memoryQueue: QueuedMutation[] = loadQueueFromLocalStorage();
+let activeQueueTenantId: string | null = loadInitialActiveTenantId();
 let isSyncingFlag = false;
 let syncedInBatchCount = 0;
 let totalInBatchCount = 0;
@@ -117,6 +122,41 @@ let lastSyncAtState: string | null = loadLastSyncFromLocalStorage();
 let inFlightSyncPromise: Promise<{ processed: number; failed: number }> | null = null;
 let autoSyncInitialized = false;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+function loadInitialActiveTenantId(): string | null {
+  try {
+    return localStorage.getItem('offline_last_tenant_id');
+  } catch {
+    return null;
+  }
+}
+
+export function setActiveQueueTenant(tenantId: string | null): void {
+  const prev = activeQueueTenantId;
+  activeQueueTenantId = tenantId;
+  if (prev !== tenantId) {
+    emitState();
+  }
+}
+
+function resolveMutationTenantId(m: QueuedMutation): string | null {
+  if (typeof m.tenantId === 'string' && m.tenantId) return m.tenantId;
+  const fromData = m.data?.tenant_id;
+  if (typeof fromData === 'string' && fromData) return fromData;
+  return null;
+}
+
+function belongsToActiveTenant(m: QueuedMutation): boolean {
+  if (!activeQueueTenantId) return false;
+  const mTenant = resolveMutationTenantId(m);
+  // Untagged legacy mutations created before tenant stamping belong to the current session;
+  // stamped mutations must match the active tenant strictly.
+  return !mTenant || mTenant === activeQueueTenantId;
+}
+
+function getScopedQueueView(): QueuedMutation[] {
+  return memoryQueue.filter(belongsToActiveTenant);
+}
 
 function loadQueueFromLocalStorage(): QueuedMutation[] {
   try {
@@ -148,18 +188,19 @@ function saveLastSyncAt(iso: string): void {
 }
 
 function buildSnapshot(): SyncStateSnapshot {
-  const failedCount = memoryQueue.filter((m) => m.status === 'failed').length;
-  const pendingCount = memoryQueue.length - failedCount;
+  const scoped = getScopedQueueView();
+  const failedCount = scoped.filter((m) => m.status === 'failed').length;
+  const pendingCount = scoped.length - failedCount;
   return {
     isOnline: typeof navigator !== 'undefined' ? navigator.onLine : true,
     isSyncing: isSyncingFlag,
     pendingCount,
     failedCount,
-    totalQueueCount: memoryQueue.length,
+    totalQueueCount: scoped.length,
     syncedInBatch: syncedInBatchCount,
     totalInBatch: totalInBatchCount,
     lastSyncAt: lastSyncAtState,
-    mutations: [...memoryQueue],
+    mutations: [...scoped],
   };
 }
 
@@ -246,12 +287,12 @@ export function onPostSync(callback: PostSyncCallback): () => void {
 export async function getPendingMutationsForTableAsync(table: string): Promise<QueuedMutation[]> {
   const byId = new Map<string, QueuedMutation>();
   for (const m of memoryQueue) {
-    if (m.table === table) byId.set(m.id, m);
+    if (m.table === table && belongsToActiveTenant(m)) byId.set(m.id, m);
   }
   try {
     const idbItems = await idbGetAll<QueuedMutation>(MUTATIONS_STORE);
     for (const m of idbItems) {
-      if (m && m.table === table && !byId.has(m.id)) {
+      if (m && m.table === table && belongsToActiveTenant(m) && !byId.has(m.id)) {
         byId.set(m.id, m);
       }
     }
@@ -392,6 +433,11 @@ export function enqueueMutation(
     }
   }
 
+  const resolvedTenantId =
+    (typeof data.tenant_id === 'string' && data.tenant_id) ||
+    activeQueueTenantId ||
+    loadInitialActiveTenantId();
+
   const entry: QueuedMutation = {
     id: genId(),
     table,
@@ -404,6 +450,7 @@ export function enqueueMutation(
     lastError: null,
     nextRetryAt: null,
     label,
+    tenantId: resolvedTenantId,
   };
   queue.push(entry);
   persistQueue(queue);
@@ -418,11 +465,11 @@ export function enqueueMutation(
 }
 
 export function getPendingCount(): number {
-  return memoryQueue.filter((m) => m.status !== 'failed').length;
+  return getScopedQueueView().filter((m) => m.status !== 'failed').length;
 }
 
 export function getPendingMutations(): QueuedMutation[] {
-  return [...memoryQueue];
+  return [...getScopedQueueView()];
 }
 
 export function removeFromQueue(id: string): void {
@@ -484,6 +531,22 @@ export async function checkRealConnectivity(): Promise<boolean> {
   }
 }
 
+async function fetchAllQueuePages<T>(
+  fetchPage: (from: number, to: number) => PromiseLike<{ data: unknown; error: { message: string } | null }>,
+): Promise<{ rows: T[]; error: { message: string } | null }> {
+  const PAGE_SIZE = 1000;
+  const MAX_ROWS = 100000;
+  const rows: T[] = [];
+  for (let from = 0; from < MAX_ROWS; from += PAGE_SIZE) {
+    const { data, error } = await fetchPage(from, from + PAGE_SIZE - 1);
+    if (error) return { rows: [], error };
+    const page = (data as T[] | null) ?? [];
+    rows.push(...page);
+    if (page.length < PAGE_SIZE) break;
+  }
+  return { rows, error: null };
+}
+
 async function resolveDuplicateKeyAndMutateData(m: QueuedMutation): Promise<boolean> {
   if (m.operation !== 'insert') return false;
   if (m.table === 'depots' && 'numero' in m.data) {
@@ -496,25 +559,22 @@ async function resolveDuplicateKeyAndMutateData(m: QueuedMutation): Promise<bool
     const pointCode = parsed ? parsed.pointCode : getBillingPointCode();
     const pattern = pointCode ? `${pointCode}-D%-${year}` : `D%-${year}`;
 
-    let q = supabase.from('depots').select('numero').limit(10000);
-    if (year <= 2026) {
-      q = q.or(`numero.like.${pattern},numero.like.D-%`);
-    } else {
-      q = q.like('numero', pattern);
-    }
-    if (boutiqueId) {
-      q = q.eq('boutique_id', boutiqueId);
-    } else {
-      q = q.is('boutique_id', null);
-    }
-    const { data, error } = await q;
+    const { rows, error } = await fetchAllQueuePages<{ numero?: string | null }>((from, to) => {
+      let q = supabase.from('depots').select('numero').order('id', { ascending: true }).range(from, to);
+      if (year <= 2026) {
+        q = q.or(`numero.like.${pattern},numero.like.D-%`);
+      } else {
+        q = q.like('numero', pattern);
+      }
+      if (boutiqueId) {
+        q = q.eq('boutique_id', boutiqueId);
+      } else {
+        q = q.is('boutique_id', null);
+      }
+      return q;
+    });
     if (!error) {
-      const nextNumero = computeNextOnlineDepotNumero(
-        (data as Array<{ numero?: string | null }> | null) ?? [],
-        boutiqueId,
-        year,
-        pointCode,
-      );
+      const nextNumero = computeNextOnlineDepotNumero(rows, boutiqueId, year, pointCode);
       m.data = { ...m.data, numero: nextNumero };
       return true;
     }
@@ -523,12 +583,11 @@ async function resolveDuplicateKeyAndMutateData(m: QueuedMutation): Promise<bool
     const parsed = parseClientCodeInfo(String(m.data.code ?? ''));
     const pointCode = parsed ? parsed.pointCode : getBillingPointCode();
     const boutiqueId = (m.data.boutique_id as string | null) ?? null;
-    const { data, error } = await supabase.from('clients').select('code').limit(10000);
+    const { rows, error } = await fetchAllQueuePages<{ code?: string | null }>((from, to) =>
+      supabase.from('clients').select('code').order('id', { ascending: true }).range(from, to),
+    );
     if (!error) {
-      const nextCode = computeNextOnlineClientCode(
-        (data as Array<{ code?: string | null }> | null) ?? [],
-        pointCode,
-      );
+      const nextCode = computeNextOnlineClientCode(rows, pointCode);
       m.data = { ...m.data, code: nextCode };
       if (m.data.id) {
         optimisticPatchClient(String(m.data.id), { code: nextCode }, boutiqueId);
@@ -653,9 +712,13 @@ function scheduleRetry(delayMs: number): void {
 async function runProcessQueueInternal(): Promise<{ processed: number; failed: number }> {
   await reconcileQueueWithIdb();
 
-  const actionable = memoryQueue.filter((m) => m.status !== 'failed');
+  if (!activeQueueTenantId) {
+    return { processed: 0, failed: 0 };
+  }
+
+  const actionable = memoryQueue.filter((m) => belongsToActiveTenant(m) && m.status !== 'failed');
   if (actionable.length === 0) {
-    return { processed: 0, failed: memoryQueue.length };
+    return { processed: 0, failed: getScopedQueueView().length };
   }
 
   if (typeof navigator !== 'undefined' && !navigator.onLine) {
@@ -676,6 +739,9 @@ async function runProcessQueueInternal(): Promise<{ processed: number; failed: n
 
   for (let i = 0; i < workingQueue.length; i++) {
     const m = workingQueue[i];
+    if (!belongsToActiveTenant(m)) {
+      continue;
+    }
     if (m.status === 'failed') {
       failed++;
       continue;

@@ -161,12 +161,27 @@ export default function BonsReduction() {
     window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, '_blank');
   }
 
+  function escapeHtml(raw: string): string {
+    return raw
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   function printCoupon(bon: BonReduction) {
-    const name = entreprise?.nom ?? '';
-    const discountText = bon.type_remise === 'pourcentage'
-      ? `${bon.valeur}%`
-      : formatPrice(bon.valeur);
-    const expiry = bon.date_fin ? formatDateShort(bon.date_fin) : (lang === 'fr' ? 'Sans limite' : 'No expiry');
+    const name = escapeHtml(entreprise?.nom ?? '');
+    const discountText = escapeHtml(
+      bon.type_remise === 'pourcentage'
+        ? `${bon.valeur}%`
+        : formatPrice(bon.valeur),
+    );
+    const expiry = escapeHtml(
+      bon.date_fin ? formatDateShort(bon.date_fin) : (lang === 'fr' ? 'Sans limite' : 'No expiry'),
+    );
+    const safeDesc = bon.description ? escapeHtml(bon.description) : '';
+    const safeCode = escapeHtml(bon.code);
 
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Coupon</title>
 <style>
@@ -188,8 +203,8 @@ body { margin: 0; font-family: system-ui, sans-serif; }
   <div class="name">${name}</div>
   <div class="label">${lang === 'fr' ? 'BON DE RÉDUCTION' : 'DISCOUNT COUPON'}</div>
   <div class="discount">-${discountText}</div>
-  ${bon.description ? `<div class="desc">${bon.description}</div>` : ''}
-  <div class="code">${bon.code}</div>
+  ${safeDesc ? `<div class="desc">${safeDesc}</div>` : ''}
+  <div class="code">${safeCode}</div>
   <div class="expiry">${lang === 'fr' ? 'Valable jusqu\'au' : 'Valid until'}: ${expiry}</div>
 </div>
 </body></html>`;

@@ -111,6 +111,9 @@ async function replayMutationRest(m, authMeta) {
       consommables: true,
       consommable_mouvements: true,
       relances: true,
+      commerciaux: true,
+      commission_versements: true,
+      commercial_clients: true,
     };
     const payloadData = m.data && typeof m.data === 'object' ? { ...m.data } : {};
     if (tablesWithoutUserId[m.table] && 'user_id' in payloadData) {
@@ -186,8 +189,13 @@ async function runSwQueueSync() {
 
     all.sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
 
+    const activeTenantId = authRecord.value.tenantId || null;
     let syncedAny = false;
     for (const m of all) {
+      const mTenant = m.tenantId || (m.data && m.data.tenant_id) || null;
+      if (activeTenantId && mTenant && mTenant !== activeTenantId) {
+        continue;
+      }
       const hadSchemaError = Boolean(
         m.lastError &&
           (String(m.lastError).includes('schema cache') || String(m.lastError).includes('user_id')),

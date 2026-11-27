@@ -112,6 +112,20 @@ export async function idbReplaceAll<T>(storeName: string, items: T[]): Promise<v
   }
 }
 
+export async function idbClear(storeName: string): Promise<void> {
+  try {
+    const db = await openOfflineDb();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(storeName, 'readwrite');
+      tx.objectStore(storeName).clear();
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch {
+    // Ignore
+  }
+}
+
 export async function setMetaValue<T>(key: string, value: T): Promise<void> {
   await idbPut(META_STORE, { key, value, updatedAt: Date.now() });
 }
@@ -125,6 +139,7 @@ export async function saveAuthSessionForSw(payload: {
   accessToken: string | null;
   supabaseUrl: string;
   supabaseAnonKey: string;
+  tenantId?: string | null;
 }): Promise<void> {
   if (!payload.accessToken) {
     await idbDelete(META_STORE, 'auth_session');

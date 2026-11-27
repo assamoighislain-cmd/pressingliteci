@@ -1521,17 +1521,20 @@ export const db = {
   },
 
   async getDepotsForPlanning(): Promise<DepotWithClient[]> {
-    const cacheKey = bKey('depots_planning', currentBoutiqueId);
+    const boutiqueAtStart = currentBoutiqueId;
+    const cacheKey = bKey('depots_planning', boutiqueAtStart);
     return cachedRead(cacheKey, async () => {
-      let q = supabase
-        .from('depots')
-        .select('*, clients!inner(nom, telephone, portal_code)')
-        .order('date_retrait_prevue', { ascending: true, nullsFirst: false });
-      if (currentBoutiqueId) q = q.eq('boutique_id', currentBoutiqueId);
-      const { data, error } = await q;
-      throwIfNetworkError(error);
-      if (error) throw new Error(error.message);
-      const mapped = ((data as Record<string, unknown>[]) ?? []).map((r) => ({
+      const data = await fetchAllPages<Record<string, unknown>>((from, to) => {
+        let q = supabase
+          .from('depots')
+          .select('*, clients!inner(nom, telephone, portal_code)')
+          .order('date_retrait_prevue', { ascending: true, nullsFirst: false })
+          .order('id', { ascending: true })
+          .range(from, to);
+        if (boutiqueAtStart) q = q.eq('boutique_id', boutiqueAtStart);
+        return q;
+      });
+      const mapped = data.map((r) => ({
         ...r,
         total: Number(r.total),
         avance_amount: r.avance_amount != null ? Number(r.avance_amount) : null,
@@ -1540,23 +1543,26 @@ export const db = {
         montant_remise: r.montant_remise != null ? Number(r.montant_remise) : null,
       })) as DepotWithClient[];
       if (mapped.length === 0) await assertSafeToCacheEmptyList(cacheKey);
-      observeDepotNumeros(mapped, currentBoutiqueId);
+      observeDepotNumeros(mapped, boutiqueAtStart);
       return mapped;
     }, []);
   },
 
   async getAllDepotsWithClient(): Promise<DepotWithArticles[]> {
-    const cacheKey = bKey('all_depots', currentBoutiqueId);
+    const boutiqueAtStart = currentBoutiqueId;
+    const cacheKey = bKey('all_depots', boutiqueAtStart);
     return cachedRead(cacheKey, async () => {
-      let q = supabase
-        .from('depots')
-        .select('*, clients!inner(nom, telephone, portal_code), depot_articles(*)')
-        .order('date_depot', { ascending: false });
-      if (currentBoutiqueId) q = q.eq('boutique_id', currentBoutiqueId);
-      const { data, error } = await q;
-      throwIfNetworkError(error);
-      if (error) throw new Error(error.message);
-      const mapped = ((data as Record<string, unknown>[]) ?? []).map((depot) => ({
+      const data = await fetchAllPages<Record<string, unknown>>((from, to) => {
+        let q = supabase
+          .from('depots')
+          .select('*, clients!inner(nom, telephone, portal_code), depot_articles(*)')
+          .order('date_depot', { ascending: false })
+          .order('id', { ascending: true })
+          .range(from, to);
+        if (boutiqueAtStart) q = q.eq('boutique_id', boutiqueAtStart);
+        return q;
+      });
+      const mapped = data.map((depot) => ({
         ...depot,
         total: Number(depot.total),
         avance_amount: depot.avance_amount != null ? Number(depot.avance_amount) : null,
@@ -1577,7 +1583,7 @@ export const db = {
         client: depot.clients ?? null,
       })) as DepotWithArticles[];
       if (mapped.length === 0) await assertSafeToCacheEmptyList(cacheKey);
-      observeDepotNumeros(mapped, currentBoutiqueId);
+      observeDepotNumeros(mapped, boutiqueAtStart);
       return mapped;
     }, []);
   },
@@ -1703,18 +1709,34 @@ export const db = {
 
   // Dashboard stats
   async getDashboardStats(): Promise<{ enCours: number; retires: number; totalJour: number; caJour: number; recettePrevuJour: number }> {
-    return cachedRead(bKey('dashboard_stats', currentBoutiqueId), async () => {
+    const bid = currentBoutiqueId;
+    return cachedRead(bKey('dashboard_stats', bid), async () => {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       const todayISO = today.toISOString();
       const tomorrowISO = new Date(today.getTime() + 24 * 60 * 60 * 1000).toISOString();
 
-      const bid = currentBoutiqueId;
+      let qEnCours = supabase.from('depots').select('*', { count: 'exact', head: true }).eq('statut', 'EN_COURS');
+      let qRetires = supabase.from('depots').select('*', { count: 'exact', head: true }).eq('statut', 'RETIRE');
+      let qToday = supabase.from('depots').select('total').gte('date_depot', todayISO);
+      let qRetraitToday = supabase
+        .from('depots')
+        .select('total')
+        .gte('date_retrait_prevue', todayISO)
+        .lt('date_retrait_prevue', tomorrowISO);
+
+      if (bid) {
+        qEnCours = qEnCours.eq('boutique_id', bid);
+        qRetires = qRetires.eq('boutique_id', bid);
+        qToday = qToday.eq('boutique_id', bid);
+        qRetraitToday = qRetraitToday.eq('boutique_id', bid);
+      }
+
       const [enCoursRes, retiresRes, todayRes, retraitTodayRes] = await Promise.all([
-        supabase.from('depots').select('*', { count: 'exact', head: true }).eq('statut', 'EN_COURS').eq('boutique_id', bid ?? ''),
-        supabase.from('depots').select('*', { count: 'exact', head: true }).eq('statut', 'RETIRE').eq('boutique_id', bid ?? ''),
-        supabase.from('depots').select('total').gte('date_depot', todayISO).eq('boutique_id', bid ?? ''),
-        supabase.from('depots').select('total').gte('date_retrait_prevue', todayISO).lt('date_retrait_prevue', tomorrowISO).eq('boutique_id', bid ?? ''),
+        qEnCours,
+        qRetires,
+        qToday,
+        qRetraitToday,
       ]);
       throwIfNetworkError(enCoursRes.error || retiresRes.error || todayRes.error || retraitTodayRes.error);
 
@@ -2079,69 +2101,67 @@ export const db = {
   async previewNextDepotNumero(dateDepot?: Date): Promise<string> {
     const targetYear = (dateDepot ?? new Date()).getFullYear();
     const pointCode = getBillingPointCode();
+    const bid = currentBoutiqueId;
     if (isOffline()) {
-      return previewOfflineDepotNumero(currentBoutiqueId, targetYear, pointCode);
+      return previewOfflineDepotNumero(bid, targetYear, pointCode);
     }
     try {
       const pattern = pointCode ? `${pointCode}-D%-${targetYear}` : `D%-${targetYear}`;
-      let q = supabase.from('depots').select('numero').limit(10000);
-      if (targetYear <= 2026) {
-        q = q.or(`numero.like.${pattern},numero.like.D-%`);
-      } else {
-        q = q.like('numero', pattern);
-      }
-      if (currentBoutiqueId) {
-        q = q.eq('boutique_id', currentBoutiqueId);
-      }
-      const { data, error } = await q;
-      if (error) {
-        return previewOfflineDepotNumero(currentBoutiqueId, targetYear, pointCode);
-      }
-      const rows = (data as Array<{ numero?: string | null }> | null) ?? [];
-      return previewOnlineDepotNumero(rows, currentBoutiqueId, targetYear, pointCode);
+      const rows = await fetchAllPages<{ numero?: string | null }>((from, to) => {
+        let q = supabase.from('depots').select('numero').order('id', { ascending: true }).range(from, to);
+        if (targetYear <= 2026) {
+          q = q.or(`numero.like.${pattern},numero.like.D-%`);
+        } else {
+          q = q.like('numero', pattern);
+        }
+        if (bid) {
+          q = q.eq('boutique_id', bid);
+        }
+        return q;
+      });
+      return previewOnlineDepotNumero(rows, bid, targetYear, pointCode);
     } catch {
-      return previewOfflineDepotNumero(currentBoutiqueId, targetYear, pointCode);
+      return previewOfflineDepotNumero(bid, targetYear, pointCode);
     }
   },
 
   async nextDepotNumero(dateDepot?: Date): Promise<{ numero: string | null; error: string | null }> {
     const targetYear = (dateDepot ?? new Date()).getFullYear();
     const pointCode = getBillingPointCode();
+    const bid = currentBoutiqueId;
 
     if (isOffline()) {
       return {
-        numero: generateOfflineDepotNumero(currentBoutiqueId, targetYear, pointCode),
+        numero: generateOfflineDepotNumero(bid, targetYear, pointCode),
         error: null,
       };
     }
 
     try {
       const pattern = pointCode ? `${pointCode}-D%-${targetYear}` : `D%-${targetYear}`;
-      let q = supabase.from('depots').select('numero').limit(10000);
-      if (targetYear <= 2026) {
-        q = q.or(`numero.like.${pattern},numero.like.D-%`);
-      } else {
-        q = q.like('numero', pattern);
-      }
-      if (currentBoutiqueId) {
-        q = q.eq('boutique_id', currentBoutiqueId);
-      }
-      const { data, error } = await q;
-      if (error) {
-        if (isLikelyNetworkError(error)) {
-          return {
-            numero: generateOfflineDepotNumero(currentBoutiqueId, targetYear, pointCode),
-            error: null,
-          };
+      const rows = await fetchAllPages<{ numero?: string | null }>((from, to) => {
+        let q = supabase.from('depots').select('numero').order('id', { ascending: true }).range(from, to);
+        if (targetYear <= 2026) {
+          q = q.or(`numero.like.${pattern},numero.like.D-%`);
+        } else {
+          q = q.like('numero', pattern);
         }
-        return { numero: null, error: error.message };
-      }
-      const rows = (data as Array<{ numero?: string | null }> | null) ?? [];
-      const numero = computeNextOnlineDepotNumero(rows, currentBoutiqueId, targetYear, pointCode);
+        if (bid) {
+          q = q.eq('boutique_id', bid);
+        }
+        return q;
+      });
+      const numero = computeNextOnlineDepotNumero(rows, bid, targetYear, pointCode);
       return { numero, error: null };
-    } catch {
+    } catch (err) {
+      if (isLikelyNetworkError(err)) {
+        return {
+          numero: generateOfflineDepotNumero(bid, targetYear, pointCode),
+          error: null,
+        };
+      }
       return {
-        numero: generateOfflineDepotNumero(currentBoutiqueId, targetYear, pointCode),
+        numero: generateOfflineDepotNumero(bid, targetYear, pointCode),
         error: null,
       };
     }
@@ -2204,16 +2224,20 @@ export const db = {
   },
 
   async getAllAvances(): Promise<DepotAvance[]> {
-    const cacheKey = bKey('all_avances', currentBoutiqueId);
+    const bid = currentBoutiqueId;
+    const cacheKey = bKey('all_avances', bid);
     return cachedRead(cacheKey, async () => {
-      let q = supabase
-        .from('depot_avances')
-        .select('*');
-      if (currentBoutiqueId) q = q.eq('boutique_id', currentBoutiqueId);
-      const { data, error } = await q;
-      throwIfNetworkError(error);
-      if (error) throw new Error(error.message);
-      const mapped = ((data as Record<string, unknown>[]) ?? []).map((r) => ({
+      const data = await fetchAllPages<Record<string, unknown>>((from, to) => {
+        let q = supabase
+          .from('depot_avances')
+          .select('*')
+          .order('date_paiement', { ascending: false })
+          .order('id', { ascending: true })
+          .range(from, to);
+        if (bid) q = q.eq('boutique_id', bid);
+        return q;
+      });
+      const mapped = data.map((r) => ({
         ...r,
         montant: Number(r.montant),
       })) as DepotAvance[];
@@ -2224,17 +2248,20 @@ export const db = {
 
   // Depenses
   async getAllDepenses(): Promise<Depense[]> {
-    const cacheKey = bKey('depenses', currentBoutiqueId);
+    const bid = currentBoutiqueId;
+    const cacheKey = bKey('depenses', bid);
     return cachedRead(cacheKey, async () => {
-      let q = supabase
-        .from('depenses')
-        .select('*')
-        .order('date_depense', { ascending: false });
-      if (currentBoutiqueId) q = q.eq('boutique_id', currentBoutiqueId);
-      const { data, error } = await q;
-      throwIfNetworkError(error);
-      if (error) throw new Error(error.message);
-      const mapped = ((data as Record<string, unknown>[]) ?? []).map((r) => ({
+      const data = await fetchAllPages<Record<string, unknown>>((from, to) => {
+        let q = supabase
+          .from('depenses')
+          .select('*')
+          .order('date_depense', { ascending: false })
+          .order('id', { ascending: true })
+          .range(from, to);
+        if (bid) q = q.eq('boutique_id', bid);
+        return q;
+      });
+      const mapped = data.map((r) => ({
         ...r,
         montant: Number(r.montant),
       })) as Depense[];
@@ -2543,22 +2570,25 @@ export const db = {
   // ── Advanced stats for enhanced dashboard ──
 
   async getRevenueByDay(days: number): Promise<{ date: string; revenue: number; count: number }[]> {
-    return cachedRead(bKey(`revenue_by_day_${days}`, currentBoutiqueId), async () => {
+    const bid = currentBoutiqueId;
+    return cachedRead(bKey(`revenue_by_day_${days}`, bid), async () => {
       const since = new Date();
       since.setDate(since.getDate() - days);
       since.setHours(0, 0, 0, 0);
-      let q = supabase
-        .from('depots')
-        .select('date_depot, total')
-        .gte('date_depot', since.toISOString())
-        .not('statut', 'eq', 'COMMANDE')
-        .order('date_depot', { ascending: true });
-      if (currentBoutiqueId) q = q.eq('boutique_id', currentBoutiqueId);
-      const { data, error } = await q;
-      throwIfNetworkError(error);
-      if (error || !data) return [];
+      const data = await fetchAllPages<{ date_depot: string; total: number }>((from, to) => {
+        let q = supabase
+          .from('depots')
+          .select('date_depot, total')
+          .gte('date_depot', since.toISOString())
+          .not('statut', 'eq', 'COMMANDE')
+          .order('date_depot', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to);
+        if (bid) q = q.eq('boutique_id', bid);
+        return q;
+      });
       const map = new Map<string, { revenue: number; count: number }>();
-      for (const row of data as { date_depot: string; total: number }[]) {
+      for (const row of data) {
         const day = row.date_depot.slice(0, 10);
         const existing = map.get(day) ?? { revenue: 0, count: 0 };
         existing.revenue += Number(row.total);
@@ -2570,17 +2600,20 @@ export const db = {
   },
 
   async getTopClients(limit: number): Promise<{ nom: string; totalCA: number; nbDepots: number }[]> {
-    return cachedRead(bKey(`top_clients_${limit}`, currentBoutiqueId), async () => {
-      let q = supabase
-        .from('depots')
-        .select('total, clients!inner(nom)')
-        .not('statut', 'eq', 'COMMANDE');
-      if (currentBoutiqueId) q = q.eq('boutique_id', currentBoutiqueId);
-      const { data, error } = await q;
-      throwIfNetworkError(error);
-      if (error || !data) return [];
+    const bid = currentBoutiqueId;
+    return cachedRead(bKey(`top_clients_${limit}`, bid), async () => {
+      const data = await fetchAllPages<{ total: number; clients: { nom: string } | { nom: string }[] | null }>((from, to) => {
+        let q = supabase
+          .from('depots')
+          .select('total, clients!inner(nom)')
+          .not('statut', 'eq', 'COMMANDE')
+          .order('id', { ascending: true })
+          .range(from, to);
+        if (bid) q = q.eq('boutique_id', bid);
+        return q;
+      });
       const map = new Map<string, { totalCA: number; nbDepots: number }>();
-      for (const row of data as unknown as { total: number; clients: { nom: string } | { nom: string }[] | null }[]) {
+      for (const row of data) {
         const clientRel = Array.isArray(row.clients) ? row.clients[0] : row.clients;
         const nom = clientRel?.nom ?? '?';
         const existing = map.get(nom) ?? { totalCA: 0, nbDepots: 0 };
@@ -2596,17 +2629,20 @@ export const db = {
   },
 
   async getPaymentBreakdown(): Promise<{ mode: string; total: number; count: number }[]> {
-    return cachedRead(bKey('payment_breakdown', currentBoutiqueId), async () => {
-      let q = supabase
-        .from('depots')
-        .select('mode_reglement, total')
-        .not('statut', 'eq', 'COMMANDE');
-      if (currentBoutiqueId) q = q.eq('boutique_id', currentBoutiqueId);
-      const { data, error } = await q;
-      throwIfNetworkError(error);
-      if (error || !data) return [];
+    const bid = currentBoutiqueId;
+    return cachedRead(bKey('payment_breakdown', bid), async () => {
+      const data = await fetchAllPages<{ mode_reglement: string | null; total: number }>((from, to) => {
+        let q = supabase
+          .from('depots')
+          .select('mode_reglement, total')
+          .not('statut', 'eq', 'COMMANDE')
+          .order('id', { ascending: true })
+          .range(from, to);
+        if (bid) q = q.eq('boutique_id', bid);
+        return q;
+      });
       const map = new Map<string, { total: number; count: number }>();
-      for (const row of data as { mode_reglement: string | null; total: number }[]) {
+      for (const row of data) {
         const mode = row.mode_reglement || 'Non réglé';
         const existing = map.get(mode) ?? { total: 0, count: 0 };
         existing.total += Number(row.total);
@@ -2620,16 +2656,19 @@ export const db = {
   },
 
   async getArticleStats(): Promise<{ designation: string; count: number; revenue: number }[]> {
-    return cachedRead(bKey('article_stats', currentBoutiqueId), async () => {
-      let q = supabase
-        .from('depot_articles')
-        .select('designation, quantite, nb_pieces, prix_total');
-      if (currentBoutiqueId) q = q.eq('boutique_id', currentBoutiqueId);
-      const { data, error } = await q;
-      throwIfNetworkError(error);
-      if (error || !data) return [];
+    const bid = currentBoutiqueId;
+    return cachedRead(bKey('article_stats', bid), async () => {
+      const data = await fetchAllPages<{ designation: string; quantite: number; nb_pieces: number; prix_total: number }>((from, to) => {
+        let q = supabase
+          .from('depot_articles')
+          .select('designation, quantite, nb_pieces, prix_total')
+          .order('id', { ascending: true })
+          .range(from, to);
+        if (bid) q = q.eq('boutique_id', bid);
+        return q;
+      });
       const map = new Map<string, { count: number; revenue: number }>();
-      for (const row of data as { designation: string; quantite: number; nb_pieces: number; prix_total: number }[]) {
+      for (const row of data) {
         const existing = map.get(row.designation) ?? { count: 0, revenue: 0 };
         existing.count += Number(row.quantite) * Number(row.nb_pieces);
         existing.revenue += Number(row.prix_total);
@@ -2643,42 +2682,84 @@ export const db = {
   },
 
   async getMonthlyComparison(): Promise<{ currentMonth: number; previousMonth: number; currentExpenses: number; previousExpenses: number }> {
-    return cachedRead(bKey('monthly_comparison', currentBoutiqueId), async () => {
+    const bid = currentBoutiqueId;
+    return cachedRead(bKey('monthly_comparison', bid), async () => {
       const now = new Date();
       const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
       const startOfPrevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      
-      const bid = currentBoutiqueId;
-      const [curRes, prevRes, curExpRes, prevExpRes] = await Promise.all([
-        supabase.from('depots').select('total').gte('date_depot', startOfMonth.toISOString()).not('statut', 'eq', 'COMMANDE').eq('boutique_id', bid ?? ''),
-        supabase.from('depots').select('total').gte('date_depot', startOfPrevMonth.toISOString()).lt('date_depot', startOfMonth.toISOString()).not('statut', 'eq', 'COMMANDE').eq('boutique_id', bid ?? ''),
-        supabase.from('depenses').select('montant').gte('date_depense', startOfMonth.toISOString()).eq('boutique_id', bid ?? ''),
-        supabase.from('depenses').select('montant').gte('date_depense', startOfPrevMonth.toISOString()).lt('date_depense', startOfMonth.toISOString()).eq('boutique_id', bid ?? ''),
+
+      const [curData, prevData, curExpData, prevExpData] = await Promise.all([
+        fetchAllPages<{ total: number }>((from, to) => {
+          let q = supabase
+            .from('depots')
+            .select('total')
+            .gte('date_depot', startOfMonth.toISOString())
+            .not('statut', 'eq', 'COMMANDE')
+            .order('id', { ascending: true })
+            .range(from, to);
+          if (bid) q = q.eq('boutique_id', bid);
+          return q;
+        }),
+        fetchAllPages<{ total: number }>((from, to) => {
+          let q = supabase
+            .from('depots')
+            .select('total')
+            .gte('date_depot', startOfPrevMonth.toISOString())
+            .lt('date_depot', startOfMonth.toISOString())
+            .not('statut', 'eq', 'COMMANDE')
+            .order('id', { ascending: true })
+            .range(from, to);
+          if (bid) q = q.eq('boutique_id', bid);
+          return q;
+        }),
+        fetchAllPages<{ montant: number }>((from, to) => {
+          let q = supabase
+            .from('depenses')
+            .select('montant')
+            .gte('date_depense', startOfMonth.toISOString())
+            .order('id', { ascending: true })
+            .range(from, to);
+          if (bid) q = q.eq('boutique_id', bid);
+          return q;
+        }),
+        fetchAllPages<{ montant: number }>((from, to) => {
+          let q = supabase
+            .from('depenses')
+            .select('montant')
+            .gte('date_depense', startOfPrevMonth.toISOString())
+            .lt('date_depense', startOfMonth.toISOString())
+            .order('id', { ascending: true })
+            .range(from, to);
+          if (bid) q = q.eq('boutique_id', bid);
+          return q;
+        }),
       ]);
-      throwIfNetworkError(curRes.error || prevRes.error || curExpRes.error || prevExpRes.error);
-      
+
       return {
-        currentMonth: ((curRes.data ?? []) as { total: number }[]).reduce((s, d) => s + Number(d.total), 0),
-        previousMonth: ((prevRes.data ?? []) as { total: number }[]).reduce((s, d) => s + Number(d.total), 0),
-        currentExpenses: ((curExpRes.data ?? []) as { montant: number }[]).reduce((s, d) => s + Number(d.montant), 0),
-        previousExpenses: ((prevExpRes.data ?? []) as { montant: number }[]).reduce((s, d) => s + Number(d.montant), 0),
+        currentMonth: curData.reduce((s, d) => s + Number(d.total), 0),
+        previousMonth: prevData.reduce((s, d) => s + Number(d.total), 0),
+        currentExpenses: curExpData.reduce((s, d) => s + Number(d.montant), 0),
+        previousExpenses: prevExpData.reduce((s, d) => s + Number(d.montant), 0),
       };
     }, { currentMonth: 0, previousMonth: 0, currentExpenses: 0, previousExpenses: 0 });
   },
 
   async getUnpaidTotal(): Promise<{ count: number; total: number }> {
-    return cachedRead(bKey('unpaid_total', currentBoutiqueId), async () => {
-      let q = supabase
-        .from('depots')
-        .select('total, avance_amount, mode_reglement')
-        .eq('statut', 'EN_COURS');
-      if (currentBoutiqueId) q = q.eq('boutique_id', currentBoutiqueId);
-      const { data, error } = await q;
-      throwIfNetworkError(error);
-      if (error || !data) return { count: 0, total: 0 };
+    const bid = currentBoutiqueId;
+    return cachedRead(bKey('unpaid_total', bid), async () => {
+      const data = await fetchAllPages<{ total: number; avance_amount: number | null; mode_reglement: string | null }>((from, to) => {
+        let q = supabase
+          .from('depots')
+          .select('total, avance_amount, mode_reglement')
+          .eq('statut', 'EN_COURS')
+          .order('id', { ascending: true })
+          .range(from, to);
+        if (bid) q = q.eq('boutique_id', bid);
+        return q;
+      });
       let count = 0;
       let total = 0;
-      for (const row of data as { total: number; avance_amount: number | null; mode_reglement: string | null }[]) {
+      for (const row of data) {
         const t = Number(row.total);
         const paid = row.mode_reglement === 'PAYER_DEPOT' || row.mode_reglement === 'SOLDE' ? t : Number(row.avance_amount ?? 0);
         const reste = t - paid;
@@ -3471,9 +3552,6 @@ export const db = {
       db.getCommerciaux(),
       db.getCommercialClients(),
       db.getCommissionVersements(),
-      Promise.resolve(supabase.from('clients').select('code').limit(10000)).then(({ data }) => {
-        if (data) observeClientCodes(data as Array<{ code?: string | null }>, currentBoutiqueId);
-      }),
     ]);
     markCacheRefreshedNow();
   },
