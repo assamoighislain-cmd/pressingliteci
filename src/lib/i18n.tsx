@@ -48,7 +48,7 @@ const fr: Dict = {
   'nav.journal': 'Journal des règlements',
   'nav.comptabilite': 'Comptabilité',
   'nav.depenses': 'Dépenses',
-  'nav.commerciaux': 'Commerciaux & Commissions',
+  'nav.commerciaux': "Apporteurs d'affaire",
   'nav.modesReglement': 'Modes de règlement',
   'nav.team': 'Équipe',
   'nav.entreprise': 'Entreprise',

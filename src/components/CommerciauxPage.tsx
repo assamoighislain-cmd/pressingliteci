@@ -758,7 +758,7 @@ export default function CommerciauxPage() {
     const nom = formNom.trim();
     const taux = parseFloat(formTaux);
     if (!nom) {
-      setError(lang === 'fr' ? 'Veuillez saisir le nom du commercial.' : 'Please enter the sales agent name.');
+      setError(lang === 'fr' ? "Veuillez saisir le nom de l'apporteur d'affaire." : 'Please enter the referral partner name.');
       return;
     }
     if (!Number.isFinite(taux) || taux < 0 || taux > 100) {
@@ -782,7 +782,7 @@ export default function CommerciauxPage() {
         if (err) {
           setError(err);
         } else {
-          setSuccess(lang === 'fr' ? `Commercial « ${nom} » mis à jour.` : `Sales agent "${nom}" updated.`);
+          setSuccess(lang === 'fr' ? `Apporteur d'affaire « ${nom} » mis à jour.` : `Referral partner "${nom}" updated.`);
           setShowCommercialModal(false);
           await loadAll();
         }
@@ -798,7 +798,7 @@ export default function CommerciauxPage() {
         if (res.error) {
           setError(res.error);
         } else {
-          setSuccess(lang === 'fr' ? `Commercial « ${nom} » ajouté avec un taux de ${taux} %.` : `Sales agent "${nom}" added (${taux}% rate).`);
+          setSuccess(lang === 'fr' ? `Apporteur d'affaire « ${nom} » ajouté avec un taux de ${taux} %.` : `Referral partner "${nom}" added (${taux}% rate).`);
           setShowCommercialModal(false);
           await loadAll();
         }
@@ -835,7 +835,7 @@ export default function CommerciauxPage() {
     e.preventDefault();
     const montant = parseFloat(payoutMontant);
     if (!payoutCommercialId) {
-      setError(lang === 'fr' ? 'Veuillez choisir un commercial.' : 'Please select a sales agent.');
+      setError(lang === 'fr' ? "Veuillez choisir un apporteur d'affaire." : 'Please select a referral partner.');
       return;
     }
     if (!Number.isFinite(montant) || montant <= 0) {
@@ -869,7 +869,7 @@ export default function CommerciauxPage() {
       if (payoutLogDepense) {
         await db.insertDepense({
           date_depense: payoutDate || new Date().toISOString().slice(0, 10),
-          libelle: `Commission commercial — ${comNom}`,
+          libelle: `Commission apporteur d'affaire — ${comNom}`,
           categorie: 'Commissions',
           montant,
           mode_reglement: payoutMode || null,
@@ -918,7 +918,7 @@ export default function CommerciauxPage() {
         });
         if (err) setError(err);
         else {
-          setSuccess(lang === 'fr' ? 'Lien commercial retiré du dépôt.' : 'Sales agent unlinked from deposit.');
+          setSuccess(lang === 'fr' ? "Lien apporteur d'affaire retiré du dépôt." : 'Referral partner unlinked from deposit.');
           setLinkingDepot(null);
           await loadAll();
         }
@@ -970,7 +970,7 @@ export default function CommerciauxPage() {
       } else {
         setSuccess(
           confirmDelete.kind === 'commercial'
-            ? (lang === 'fr' ? `Commercial « ${confirmDelete.label} » supprimé.` : `Sales agent "${confirmDelete.label}" deleted.`)
+            ? (lang === 'fr' ? `Apporteur d'affaire « ${confirmDelete.label} » supprimé.` : `Referral partner "${confirmDelete.label}" deleted.`)
             : confirmDelete.kind === 'client_link'
               ? (lang === 'fr' ? `Lien client « ${confirmDelete.label} » retiré.` : `Client link "${confirmDelete.label}" removed.`)
               : (lang === 'fr' ? 'Versement supprimé.' : 'Payout deleted.'),
@@ -1010,7 +1010,7 @@ export default function CommerciauxPage() {
         subtitle:
           selectedCommercialFilter !== 'all'
             ? commerciauxMap.get(selectedCommercialFilter)?.nom
-            : (lang === 'fr' ? 'Tous les commerciaux' : 'All sales agents'),
+            : (lang === 'fr' ? "Tous les apporteurs d'affaire" : 'All referral partners'),
         entreprise,
         periodLabel:
           dateFrom || dateTo
@@ -1018,7 +1018,7 @@ export default function CommerciauxPage() {
             : undefined,
         columns: [
           { key: 'date', label: 'Date', render: (r) => formatDateShort(String(r.date_versement ?? '')) },
-          { key: 'commercial', label: 'Commercial', render: (r) => String(r.commercial_nom ?? '—') },
+          { key: 'commercial', label: "Apporteur d'affaire", render: (r) => String(r.commercial_nom ?? '—') },
           { key: 'periode', label: 'Période', render: (r) => String(r.periode_label ?? '—') },
           { key: 'mode', label: 'Mode', render: (r) => String(r.mode_reglement ?? '—') },
           { key: 'ref', label: 'Référence', render: (r) => String(r.reference ?? '—') },
@@ -1043,10 +1043,10 @@ export default function CommerciauxPage() {
     }
 
     const data: ReportData = {
-      title: lang === 'fr' ? 'État des commissions par commercial' : 'Commission summary by sales agent',
+      title: lang === 'fr' ? "État des commissions par apporteur d'affaire" : 'Commission summary by referral partner',
       entreprise,
       columns: [
-        { key: 'nom', label: 'Commercial', render: (r) => String(r.nom ?? '') },
+        { key: 'nom', label: "Apporteur d'affaire", render: (r) => String(r.nom ?? '') },
         { key: 'taux', label: 'Taux', align: 'right', render: (r) => `${Number(r.taux ?? 0)} %` },
         { key: 'depots', label: 'Dépôts', align: 'right', render: (r) => String(r.nbDepots ?? 0) },
         { key: 'ca', label: 'CA apporté', align: 'right', render: (r) => formatPrice(Number(r.ca ?? 0)) },
@@ -1081,12 +1081,12 @@ export default function CommerciauxPage() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-900">
-            {lang === 'fr' ? 'Commerciaux & Commissions' : 'Sales Agents & Commissions'}
+            {lang === 'fr' ? "Apporteurs d'affaire & Commissions" : 'Referral Partners & Commissions'}
           </h1>
           <p className="text-sm text-slate-500 mt-1">
             {lang === 'fr'
-              ? 'Définissez le taux de commission de chaque commercial, liez les dépôts et suivez les versements.'
-              : 'Configure commission rates, link deposits to sales agents, and track commission payouts.'}
+              ? "Définissez le taux de commission de chaque apporteur d'affaire, liez les clients ou dépôts et suivez les versements."
+              : 'Configure commission rates, link clients or deposits to referral partners, and track payouts.'}
           </p>
         </div>
         {!missingTable && (
@@ -1127,7 +1127,7 @@ export default function CommerciauxPage() {
                 className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-sky-600 text-white text-sm font-semibold hover:bg-sky-700 transition-colors whitespace-nowrap"
               >
                 <Plus className="w-4 h-4" />
-                {lang === 'fr' ? 'Nouveau commercial' : 'New agent'}
+                {lang === 'fr' ? "Nouvel apporteur d'affaire" : 'New partner'}
               </button>
             )}
           </div>
@@ -1169,7 +1169,7 @@ export default function CommerciauxPage() {
               </h2>
               <p className="text-sm text-slate-600">
                 {lang === 'fr'
-                  ? 'Les tables des commerciaux et des versements de commissions ne sont pas encore créées sur votre projet Supabase. Copiez le script SQL ci-dessous et exécutez-le dans Supabase → SQL Editor, puis cliquez sur « Vérifier ».'
+                  ? "Les tables des apporteurs d'affaire et des versements de commissions ne sont pas encore créées sur votre projet Supabase. Copiez le script SQL ci-dessous et exécutez-le dans Supabase → SQL Editor, puis cliquez sur « Vérifier »."
                   : 'The sales agents and commission payout tables have not been created on your Supabase project yet. Copy the SQL below and run it in Supabase → SQL Editor, then click "Verify".'}
               </p>
             </div>
@@ -1212,8 +1212,8 @@ export default function CommerciauxPage() {
                 <div>
                   <p className="font-semibold">
                     {lang === 'fr'
-                      ? 'Mise à jour SQL requise pour les clients liés et le Portail Commercial'
-                      : 'SQL update required for linked clients & Commercial Portal'}
+                      ? "Mise à jour SQL requise pour les clients liés et le Portail Apporteur d'affaire"
+                      : 'SQL update required for linked clients & Partner Portal'}
                   </p>
                   <p className="text-xs text-amber-800 mt-0.5">
                     {lang === 'fr'
@@ -1251,7 +1251,7 @@ export default function CommerciauxPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="bg-white rounded-xl border border-slate-200/80 p-4">
               <p className="text-xs font-medium text-slate-500">
-                {lang === 'fr' ? 'Commerciaux actifs' : 'Active sales agents'}
+                {lang === 'fr' ? "Apporteurs d'affaire actifs" : 'Active referral partners'}
               </p>
               <p className="mt-2 text-2xl font-bold text-slate-900 tabular-nums">
                 {kpis.actifs}
@@ -1314,7 +1314,7 @@ export default function CommerciauxPage() {
                   tab === 'overview' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                {lang === 'fr' ? 'Commerciaux & Soldes' : 'Agents & Balances'}
+                {lang === 'fr' ? "Apporteurs d'affaire & Soldes" : 'Partners & Balances'}
               </button>
               <button
                 type="button"
@@ -1376,7 +1376,7 @@ export default function CommerciauxPage() {
                     onChange={(e) => setSelectedCommercialFilter(e.target.value)}
                     className="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-500"
                   >
-                    <option value="all">{lang === 'fr' ? 'Tous les commerciaux' : 'All sales agents'}</option>
+                    <option value="all">{lang === 'fr' ? "Tous les apporteurs d'affaire" : 'All referral partners'}</option>
                     {commerciaux.map((c) => (
                       <option key={c.id} value={c.id}>
                         {c.nom} ({c.taux_commission}%)
@@ -1402,7 +1402,7 @@ export default function CommerciauxPage() {
                     onChange={(e) => setSelectedCommercialFilter(e.target.value)}
                     className="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-500"
                   >
-                    <option value="all">{lang === 'fr' ? 'Tous les commerciaux' : 'All sales agents'}</option>
+                    <option value="all">{lang === 'fr' ? "Tous les apporteurs d'affaire" : 'All referral partners'}</option>
                     {commerciaux.map((c) => (
                       <option key={c.id} value={c.id}>
                         {c.nom} ({c.taux_commission}%)
@@ -1453,8 +1453,8 @@ export default function CommerciauxPage() {
                   <Briefcase className="w-10 h-10 text-slate-300 mx-auto" />
                   <p className="text-sm font-medium text-slate-700">
                     {commerciaux.length === 0
-                      ? (lang === 'fr' ? 'Aucun commercial enregistré pour le moment.' : 'No sales agents recorded yet.')
-                      : (lang === 'fr' ? 'Aucun commercial ne correspond à votre filtre.' : 'No sales agent matches your filter.')}
+                      ? (lang === 'fr' ? "Aucun apporteur d'affaire enregistré pour le moment." : 'No referral partners recorded yet.')
+                      : (lang === 'fr' ? "Aucun apporteur d'affaire ne correspond à votre filtre." : 'No referral partner matches your filter.')}
                   </p>
                   {commerciaux.length === 0 && canManage && (
                     <button
@@ -1463,7 +1463,7 @@ export default function CommerciauxPage() {
                       className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-sky-600 text-white text-sm font-semibold hover:bg-sky-700 transition-colors"
                     >
                       <Plus className="w-4 h-4" />
-                      {lang === 'fr' ? 'Ajouter votre premier commercial' : 'Add your first sales agent'}
+                      {lang === 'fr' ? "Ajouter votre premier apporteur d'affaire" : 'Add your first referral partner'}
                     </button>
                   )}
                 </div>
@@ -1472,7 +1472,7 @@ export default function CommerciauxPage() {
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b border-slate-200 bg-slate-50/70 text-left text-xs font-semibold text-slate-500">
-                        <th className="py-3 px-4">{lang === 'fr' ? 'Commercial & Code portail' : 'Agent & Portal code'}</th>
+                        <th className="py-3 px-4">{lang === 'fr' ? "Apporteur d'affaire & Code portail" : 'Partner & Portal code'}</th>
                         <th className="py-3 px-4 text-right">{lang === 'fr' ? 'Taux' : 'Rate'}</th>
                         <th className="py-3 px-4 text-right">{lang === 'fr' ? 'Clients' : 'Clients'}</th>
                         <th className="py-3 px-4 text-right">{lang === 'fr' ? 'Factures' : 'Invoices'}</th>
@@ -1526,7 +1526,7 @@ export default function CommerciauxPage() {
                                   setTab('clients');
                                 }}
                                 className="hover:text-sky-600 underline decoration-slate-300 underline-offset-2 font-medium"
-                                title={lang === 'fr' ? 'Voir les clients liés à ce commercial' : 'View linked clients'}
+                                title={lang === 'fr' ? "Voir les clients liés à cet apporteur d'affaire" : 'View linked clients'}
                               >
                                 {row.nbClientsActifs}
                                 {row.nbClientsLies !== row.nbClientsActifs && (
@@ -1543,7 +1543,7 @@ export default function CommerciauxPage() {
                                   setTab('depots');
                                 }}
                                 className="hover:text-sky-600 underline decoration-slate-300 underline-offset-2 font-medium"
-                                title={lang === 'fr' ? 'Voir les factures de ce commercial' : 'View invoices'}
+                                title={lang === 'fr' ? "Voir les factures de cet apporteur d'affaire" : 'View invoices'}
                               >
                                 {row.nbDepots}
                               </button>
@@ -1576,7 +1576,7 @@ export default function CommerciauxPage() {
                                   type="button"
                                   onClick={() => setPortalShareCommercial(c)}
                                   className="p-1.5 rounded-lg text-slate-500 hover:text-sky-700 hover:bg-sky-50 transition-colors"
-                                  title={lang === 'fr' ? 'Code & Lien Portail Commercial' : 'Commercial Portal Code & Link'}
+                                  title={lang === 'fr' ? "Code & Lien Portail Apporteur d'affaire" : 'Partner Portal Code & Link'}
                                 >
                                   <KeyRound className="w-4 h-4" />
                                 </button>
@@ -1644,13 +1644,13 @@ export default function CommerciauxPage() {
                   <Users className="w-10 h-10 text-slate-300 mx-auto" />
                   <p className="text-sm font-medium text-slate-700">
                     {commercialClients.length === 0
-                      ? (lang === 'fr' ? 'Aucun client lié à un commercial pour le moment.' : 'No clients linked to sales agents yet.')
+                      ? (lang === 'fr' ? "Aucun client lié à un apporteur d'affaire pour le moment." : 'No clients linked to referral partners yet.')
                       : (lang === 'fr' ? 'Aucun rattachement ne correspond à votre filtre.' : 'No linked client matches your filter.')}
                   </p>
                   <p className="text-xs text-slate-500 max-w-md mx-auto">
                     {lang === 'fr'
-                      ? 'Rattachez un ou plusieurs clients à un commercial pour un nombre de jours donné : toutes leurs factures sur la période seront commissionnées automatiquement.'
-                      : 'Assign one or more clients to an agent for a set number of days: all their invoices during that period earn commission automatically.'}
+                      ? "Rattachez un ou plusieurs clients à un apporteur d'affaire pour un nombre de jours donné : toutes leurs factures sur la période seront commissionnées automatiquement."
+                      : 'Assign one or more clients to a referral partner for a set number of days: all their invoices during that period earn commission automatically.'}
                   </p>
                   {canManage && commerciaux.length > 0 && !missingClientsTable && (
                     <button
@@ -1669,7 +1669,7 @@ export default function CommerciauxPage() {
                     <thead>
                       <tr className="border-b border-slate-200 bg-slate-50/70 text-left text-xs font-semibold text-slate-500">
                         <th className="py-3 px-4">{lang === 'fr' ? 'Client' : 'Client'}</th>
-                        <th className="py-3 px-4">{lang === 'fr' ? 'Commercial' : 'Sales agent'}</th>
+                        <th className="py-3 px-4">{lang === 'fr' ? "Apporteur d'affaire" : 'Referral partner'}</th>
                         <th className="py-3 px-4">{lang === 'fr' ? 'Période (jours)' : 'Period (days)'}</th>
                         <th className="py-3 px-4">{lang === 'fr' ? 'Statut' : 'Status'}</th>
                         <th className="py-3 px-4 text-right">{lang === 'fr' ? 'Factures' : 'Invoices'}</th>
@@ -1790,7 +1790,7 @@ export default function CommerciauxPage() {
                     <thead>
                       <tr className="border-b border-slate-200 bg-slate-50/70 text-left text-xs font-semibold text-slate-500">
                         <th className="py-3 px-4">{lang === 'fr' ? 'Date' : 'Date'}</th>
-                        <th className="py-3 px-4">{lang === 'fr' ? 'Commercial' : 'Sales agent'}</th>
+                        <th className="py-3 px-4">{lang === 'fr' ? "Apporteur d'affaire" : 'Referral partner'}</th>
                         <th className="py-3 px-4">{lang === 'fr' ? 'Période couverte' : 'Period'}</th>
                         <th className="py-3 px-4">{lang === 'fr' ? 'Mode & Référence' : 'Method & Ref'}</th>
                         <th className="py-3 px-4 text-right">{lang === 'fr' ? 'Montant versé' : 'Amount paid'}</th>
@@ -1870,8 +1870,8 @@ export default function CommerciauxPage() {
                   </p>
                   <p className="text-xs text-slate-500">
                     {lang === 'fr'
-                      ? 'Liez un client à un commercial sur une période ou associez un commercial lors du dépôt.'
-                      : 'Link a client to a sales agent over a period or select a sales agent on deposit creation.'}
+                      ? "Liez un client à un apporteur d'affaire sur une période ou associez un apporteur d'affaire lors du dépôt."
+                      : 'Link a client to a referral partner over a period or select one on deposit creation.'}
                   </p>
                 </div>
               ) : (
@@ -1882,7 +1882,7 @@ export default function CommerciauxPage() {
                         <th className="py-3 px-4">{lang === 'fr' ? 'Date' : 'Date'}</th>
                         <th className="py-3 px-4">{lang === 'fr' ? 'N° Facture' : 'Invoice #'}</th>
                         <th className="py-3 px-4">{lang === 'fr' ? 'Client' : 'Client'}</th>
-                        <th className="py-3 px-4">{lang === 'fr' ? 'Commercial' : 'Sales agent'}</th>
+                        <th className="py-3 px-4">{lang === 'fr' ? "Apporteur d'affaire" : 'Referral partner'}</th>
                         <th className="py-3 px-4 text-right">{lang === 'fr' ? 'Montant facture' : 'Invoice total'}</th>
                         <th className="py-3 px-4 text-right">{lang === 'fr' ? 'Taux' : 'Rate'}</th>
                         <th className="py-3 px-4 text-right">{lang === 'fr' ? 'Commission' : 'Commission'}</th>
@@ -1981,8 +1981,8 @@ export default function CommerciauxPage() {
             <div className="flex items-center justify-between">
               <h3 className="text-base font-semibold text-slate-900">
                 {editingCommercial
-                  ? (lang === 'fr' ? 'Modifier le commercial' : 'Edit sales agent')
-                  : (lang === 'fr' ? 'Nouveau commercial' : 'New sales agent')}
+                  ? (lang === 'fr' ? "Modifier l'apporteur d'affaire" : 'Edit referral partner')
+                  : (lang === 'fr' ? "Nouvel apporteur d'affaire" : 'New referral partner')}
               </h3>
               <button
                 type="button"
@@ -2046,7 +2046,7 @@ export default function CommerciauxPage() {
                   type="email"
                   value={formEmail}
                   onChange={(e) => setFormEmail(e.target.value)}
-                  placeholder="commercial@exemple.com"
+                  placeholder="apporteur@exemple.com"
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
                 />
               </div>
@@ -2071,7 +2071,7 @@ export default function CommerciauxPage() {
                   onChange={(e) => setFormActif(e.target.checked)}
                   className="w-4 h-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
                 />
-                <span>{lang === 'fr' ? 'Commercial actif (disponible lors des nouveaux dépôts)' : 'Active (available on new deposits)'}</span>
+                <span>{lang === 'fr' ? "Apporteur d'affaire actif (disponible lors des nouveaux dépôts)" : 'Active (available on new deposits)'}</span>
               </label>
             </div>
 
@@ -2090,7 +2090,7 @@ export default function CommerciauxPage() {
                 className="flex-1 px-4 py-2 rounded-lg bg-sky-600 text-white text-sm font-semibold hover:bg-sky-700 disabled:opacity-50 flex items-center justify-center gap-2"
               >
                 {savingCommercial && <Loader2 className="w-4 h-4 animate-spin" />}
-                {editingCommercial ? (lang === 'fr' ? 'Enregistrer' : 'Save') : (lang === 'fr' ? 'Créer le commercial' : 'Create')}
+                {editingCommercial ? (lang === 'fr' ? 'Enregistrer' : 'Save') : (lang === 'fr' ? "Créer l'apporteur d'affaire" : 'Create')}
               </button>
             </div>
           </form>
@@ -2121,7 +2121,7 @@ export default function CommerciauxPage() {
             <div className="space-y-3.5">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">
-                  {lang === 'fr' ? 'Commercial' : 'Sales agent'} *
+                  {lang === 'fr' ? "Apporteur d'affaire" : 'Referral partner'} *
                 </label>
                 <select
                   required
@@ -2134,7 +2134,7 @@ export default function CommerciauxPage() {
                   }}
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
                 >
-                  <option value="">{lang === 'fr' ? '— Choisir un commercial —' : '— Select an agent —'}</option>
+                  <option value="">{lang === 'fr' ? "— Choisir un apporteur d'affaire —" : '— Select a partner —'}</option>
                   {commerciaux.map((c) => {
                     const st = statsMap.get(c.id);
                     return (
@@ -2346,7 +2346,7 @@ export default function CommerciauxPage() {
             <div className="space-y-3">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">
-                  {lang === 'fr' ? 'Commercial' : 'Sales agent'}
+                  {lang === 'fr' ? "Apporteur d'affaire" : 'Referral partner'}
                 </label>
                 <select
                   value={linkCommercialId}
@@ -2358,7 +2358,7 @@ export default function CommerciauxPage() {
                   }}
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
                 >
-                  <option value="">{lang === 'fr' ? '— Aucun commercial —' : '— None —'}</option>
+                  <option value="">{lang === 'fr' ? "— Aucun apporteur d'affaire —" : '— None —'}</option>
                   {commerciaux.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.nom} ({c.taux_commission} %){!c.actif ? ' — inactif' : ''}
@@ -2418,7 +2418,7 @@ export default function CommerciauxPage() {
           <div className="relative bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 space-y-4">
             <h3 className="text-base font-semibold text-slate-900">
               {confirmDelete.kind === 'commercial'
-                ? (lang === 'fr' ? 'Supprimer ce commercial ?' : 'Delete this sales agent?')
+                ? (lang === 'fr' ? "Supprimer cet apporteur d'affaire ?" : 'Delete this referral partner?')
                 : confirmDelete.kind === 'client_link'
                   ? (lang === 'fr' ? 'Retirer ce rattachement ?' : 'Remove this client link?')
                   : (lang === 'fr' ? 'Supprimer ce versement ?' : 'Delete this payout?')}
@@ -2433,8 +2433,8 @@ export default function CommerciauxPage() {
                       ? `Voulez-vous retirer le rattachement « ${confirmDelete.label} » ? Les factures déjà enregistrées dans l'entreprise restent intactes.`
                       : `Remove link "${confirmDelete.label}"? Existing company invoices remain untouched.`)
                   : (lang === 'fr'
-                      ? `Supprimer le versement « ${confirmDelete.label} » ? Le solde du commercial sera recalculé.`
-                      : `Delete payout "${confirmDelete.label}"? The agent's balance will be recalculated.`)}
+                      ? `Supprimer le versement « ${confirmDelete.label} » ? Le solde de l'apporteur d'affaire sera recalculé.`
+                      : `Delete payout "${confirmDelete.label}"? The partner's balance will be recalculated.`)}
             </p>
             <div className="flex gap-3 pt-1">
               <button

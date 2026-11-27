@@ -641,7 +641,7 @@ export default function JournalDepots() {
                                     const comm = item.depot.commission_montant ?? Math.round((item.total * taux) / 100);
                                     return (
                                       <span>
-                                        {lang === 'fr' ? 'Commercial :' : 'Sales agent:'}{' '}
+                                        {lang === 'fr' ? "Apporteur d'affaire :" : 'Referral partner:'}{' '}
                                         <strong className="text-amber-700">
                                           {com?.nom ?? '—'} ({taux} % · {formatPrice(comm)})
                                         </strong>

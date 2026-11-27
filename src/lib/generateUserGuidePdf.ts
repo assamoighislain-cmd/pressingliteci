@@ -438,8 +438,8 @@ export function downloadUserGuidePdf(entreprise: Entreprise | null, lang: Lang):
       lang === 'fr' ? "Guide d'utilisation complet" : 'Complete User Guide',
     docDescription:
       lang === 'fr'
-        ? 'Manuel opérationnel pas à pas pour les équipes de comptoir, gérants, administrateurs, collecteurs et commerciaux.'
-        : 'Step-by-step operational manual for front-desk staff, managers, administrators, drivers, and sales agents.',
+        ? "Manuel opérationnel pas à pas pour les équipes de comptoir, gérants, administrateurs, collecteurs et apporteurs d'affaire."
+        : 'Step-by-step operational manual for front-desk staff, managers, administrators, drivers, and referral partners.',
     entreprise,
     highlights:
       lang === 'fr'
@@ -447,7 +447,7 @@ export function downloadUserGuidePdf(entreprise: Entreprise | null, lang: Lang):
             'Prise en main, installation PWA (mobile & PC) et paramétrage multi-boutiques',
             'Enregistrement rapide des dépôts, recherche 4 000+ clients, reçus A5/80 mm, étiquettes et WhatsApp',
             'Retraits partiels ou totaux, modification du type de traitement, planning et inventaire atelier',
-            'Gestion des commerciaux, liaison multi-clients sur durée en jours et Portail Commercial par code',
+            "Gestion des apporteurs d'affaire, liaison multi-clients sur durée en jours et Portail dédié par code",
             'Portail Client QR Code, tournées collecte/livraison Google Maps, comptabilité et mode hors-ligne',
           ]
         : [
@@ -602,14 +602,14 @@ export function downloadPresentationPdf(entreprise: Entreprise | null, lang: Lan
         : 'Complete Dry Cleaning & Laundry Management',
     docDescription:
       lang === 'fr'
-        ? 'Une plateforme moderne en ligne et hors-ligne pour piloter vos dépôts, retraits, clients, commerciaux, tournées de livraison et finances.'
-        : 'A modern online and offline platform to run your deposits, pickups, customers, sales agents, delivery routes, and finances.',
+        ? "Une plateforme moderne en ligne et hors-ligne pour piloter vos dépôts, retraits, clients, apporteurs d'affaire, tournées de livraison et finances."
+        : 'A modern online and offline platform to run your deposits, pickups, customers, referral partners, delivery routes, and finances.',
     entreprise,
     highlights:
       lang === 'fr'
         ? [
             'Comptoir ultra-rapide : recherche instantanée sur 4 000+ clients et reçus A5 / ticket 80 mm / WhatsApp',
-            'Commerciaux & commissions automatiques sur clients liés + Portail Commercial par code',
+            "Apporteurs d'affaire & commissions automatiques sur clients liés + Portail dédié par code",
             'Portail Client QR Code + Collecte & Livraison géolocalisées sur Google Maps',
             'Comptabilité, dépenses, consommables, multi-boutiques et mode hors-ligne garanti',
           ]

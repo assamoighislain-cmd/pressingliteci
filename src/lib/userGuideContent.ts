@@ -169,15 +169,15 @@ export function getPresentationModules(lang: Lang): PresentationModule[] {
     },
     {
       id: 'commerciaux',
-      title: 'Commerciaux, Commissions & Portail dédié',
+      title: "Apporteurs d'affaire, Commissions & Portail dédié",
       category: 'Développement',
       summary:
-        'Pilotez votre force commerciale : taux de commission par agent, liaison multi-clients sur une durée en jours, suivi des versements et portail autonome par code.',
+        "Pilotez votre réseau d'apporteurs d'affaire : taux de commission personnalisé, liaison multi-clients sur une durée en jours, suivi des versements et portail autonome par code.",
       highlights: [
-        'Rattachement d\'un ou plusieurs clients sur un nombre de jours défini (commission sur toutes leurs factures)',
+        "Rattachement d'un ou plusieurs clients sur un nombre de jours défini (commission sur toutes leurs factures)",
         'Attribution automatique sur les nouveaux dépôts ou association directe sur facture',
         'Suivi du CA apporté, commissions générées, versements et solde restant à payer',
-        'Portail Commercial sécurisé accessible par code personnel (COM-XXXXXXXX)',
+        "Portail Apporteur d'affaire sécurisé accessible par code personnel (COM-XXXXXXXX)",
       ],
     },
     {
@@ -294,9 +294,9 @@ export function getWorkflowSteps(lang: Lang): WorkflowStep[] {
     },
     {
       num: '04',
-      title: 'Piloter finances & commerciaux',
+      title: "Piloter finances & apporteurs d'affaire",
       description:
-        'Consultez les journaux, les dépenses, les stocks consommables et les commissions commerciales depuis le tableau de bord ou en rapports A4.',
+        "Consultez les journaux, les dépenses, les stocks consommables et les commissions des apporteurs d'affaire depuis le tableau de bord ou en rapports A4.",
     },
   ];
 }
@@ -336,13 +336,13 @@ export function getRoleMatrix(lang: Lang): RolePermissionRow[] {
       role: 'Administrateur',
       scope: 'Toutes les boutiques & réglages',
       keyActions:
-        'Accès complet : dépôts, retraits, clients, catalogue, comptabilité, dépenses, commerciaux et versements, multi-boutiques, utilisateurs, compteurs de départ.',
+        "Accès complet : dépôts, retraits, clients, catalogue, comptabilité, dépenses, apporteurs d'affaire et versements, multi-boutiques, utilisateurs, compteurs de départ.",
     },
     {
       role: 'Gérant',
       scope: 'Boutique affectée',
       keyActions:
-        'Gestion quotidienne, dépôts, retraits, planning, clients, catalogue, journaux, dépenses, gestion des commerciaux et liaisons clients, consommables et compteurs.',
+        "Gestion quotidienne, dépôts, retraits, planning, clients, catalogue, journaux, dépenses, gestion des apporteurs d'affaire et liaisons clients, consommables et compteurs.",
     },
     {
       role: 'Commercial / Caissier',
@@ -382,7 +382,7 @@ export function getTechnicalSpecs(lang: Lang): Array<[string, string]> {
     ['Recherche clients', 'Indexée en mémoire (< 1 ms pour plus de 4 000 clients)'],
     ['Impressions & partage', 'Format A5, ticket thermique 80/100 mm, étiquettes et WhatsApp'],
     ['Numérotation', 'Annuelle (D-001-AAAA), compteur par boutique et préfixe multi-postes'],
-    ['Portails dédiés', 'Portail Client (QR Code) et Portail Commercial (code personnel)'],
+    ['Portails dédiés', "Portail Client (QR Code) et Portail Apporteur d'affaire (code personnel)"],
     ['Cartographie & alertes', 'Google Maps (collecte/livraison) et notifications Push temps réel'],
     ['Sécurité', 'Authentification sécurisée, rôles et isolation RLS par entreprise'],
     ['Continuité de caisse', 'Mises à jour différées + sauvegarde auto du brouillon de dépôt'],
@@ -742,7 +742,7 @@ export function getUserGuideChapters(lang: Lang): GuideChapter[] {
             'Ouvrez « Dépôt » dans le menu Opérations.',
             'Saisissez le nom, le téléphone ou le code client : la recherche indexée répond instantanément, même avec plus de 4 000 clients.',
             'Pour un nouveau client, cliquez sur « Nouveau client », saisissez son nom et son numéro : son code unique est généré automatiquement.',
-            'Si le client est rattaché à un commercial sur une période active, le commercial est présélectionné automatiquement.',
+            "Si le client est rattaché à un apporteur d'affaire sur une période active, l'apporteur d'affaire est présélectionné automatiquement.",
           ],
         },
         {
@@ -827,27 +827,27 @@ export function getUserGuideChapters(lang: Lang): GuideChapter[] {
     {
       number: '06',
       id: 'commerciaux-portail',
-      title: 'Commerciaux, commissions & Portail Commercial',
+      title: "Apporteurs d'affaire, commissions & Portail dédié",
       subtitle: 'Rattachement multi-clients sur durée en jours, versements et suivi par code',
       summary:
-        'Développez votre chiffre d\'affaires avec des commerciaux rémunérés à la commission sur toutes les factures de leurs clients durant une période définie.',
+        "Développez votre chiffre d'affaires avec des apporteurs d'affaire rémunérés à la commission sur toutes les factures de leurs clients durant une période définie.",
       sections: [
         {
-          heading: 'Créer un commercial et lier ses clients sur une durée',
+          heading: "Créer un apporteur d'affaire et lier ses clients sur une durée",
           steps: [
-            'Ouvrez « Commerciaux » dans Suivi & Finances, puis cliquez sur « Nouveau commercial » en indiquant son nom, son contact et son taux de commission (%).',
-            'Cliquez sur « Lier des clients », sélectionnez le commercial, cochez un ou plusieurs clients, choisissez la date de début et la durée en jours (15, 30, 60, 90, 180, 365 jours ou durée libre), puis cliquez sur « Lier ».',
-            'Toutes les factures non annulées de ces clients sur la période active génèrent automatiquement une commission pour le commercial (avec possibilité de prolonger ou définir un taux spécifique par client).',
+            "Ouvrez « Apporteurs d'affaire » dans Suivi & Finances, puis cliquez sur « Nouvel apporteur d'affaire » en indiquant son nom, son contact et son taux de commission (%).",
+            "Cliquez sur « Lier des clients », sélectionnez l'apporteur d'affaire, cochez un ou plusieurs clients, choisissez la date de début et la durée en jours (15, 30, 60, 90, 180, 365 jours ou durée libre), puis cliquez sur « Lier ».",
+            "Toutes les factures non annulées de ces clients sur la période active génèrent automatiquement une commission pour l'apporteur d'affaire (avec possibilité de prolonger ou définir un taux spécifique par client).",
           ],
         },
         {
-          heading: 'Verser les commissions et partager le Portail Commercial',
+          heading: "Verser les commissions et partager le Portail Apporteur d'affaire",
           steps: [
-            'Cliquez sur « Verser » sur la ligne d\'un commercial pour enregistrer un paiement (montant, mode de règlement, période couverte, référence) et, si souhaité, l\'inscrire directement en dépense.',
-            'Cliquez sur l\'icône Clé pour consulter et copier le code personnel du commercial (format COM-XXXXXXXX) ainsi que le lien direct vers le Portail Commercial.',
-            'Le commercial ouvre le Portail Commercial (également accessible depuis l\'écran de connexion), saisit son code et consulte en temps réel ses clients liés, les jours restants, ses factures commissionnées et ses versements.',
+            "Cliquez sur « Verser » sur la ligne d'un apporteur d'affaire pour enregistrer un paiement (montant, mode de règlement, période couverte, référence) et, si souhaité, l'inscrire directement en dépense.",
+            "Cliquez sur l'icône Clé pour consulter et copier le code personnel de l'apporteur d'affaire (format COM-XXXXXXXX) ainsi que le lien direct vers le Portail Apporteur d'affaire.",
+            "L'apporteur d'affaire ouvre le Portail Apporteur d'affaire (également accessible depuis l'écran de connexion), saisit son code et consulte en temps réel ses clients liés, les jours restants, ses factures commissionnées et ses versements.",
           ],
-          tip: 'En cas de perte ou de départ, vous pouvez régénérer un nouveau code portail à tout moment : l\'ancien code est immédiatement révoqué.',
+          tip: "En cas de perte ou de départ, vous pouvez régénérer un nouveau code portail à tout moment : l'ancien code est immédiatement révoqué.",
         },
       ],
     },

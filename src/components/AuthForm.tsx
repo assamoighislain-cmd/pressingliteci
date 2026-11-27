@@ -550,7 +550,9 @@ export default function AuthForm() {
               href="#/commercial"
               className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-sky-600 transition-colors"
             >
-              {lang === 'fr' ? 'Vous êtes commercial ? Accéder au Portail Commercial →' : 'Sales agent? Open Commercial Portal →'}
+              {lang === 'fr'
+                ? "Vous êtes apporteur d'affaire ? Accéder au Portail Apporteur d'affaire →"
+                : 'Referral partner? Open Partner Portal →'}
             </a>
           </div>
         </div>

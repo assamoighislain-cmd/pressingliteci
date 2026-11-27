@@ -2322,7 +2322,7 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1.5 flex items-center gap-1.5">
                 <Briefcase className="w-4 h-4 text-amber-600" />
-                {lang === 'fr' ? 'Commercial apporteur (optionnel)' : 'Sales agent (optional)'}
+                {lang === 'fr' ? "Apporteur d'affaire (optionnel)" : 'Referral partner (optional)'}
               </label>
               <select
                 value={selectedCommercialId}
@@ -2333,7 +2333,7 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
                 className="w-full px-3 py-2.5 rounded-lg border border-slate-200 bg-white text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent"
               >
                 <option value="">
-                  {lang === 'fr' ? '— Aucun commercial associé —' : '— No sales agent linked —'}
+                  {lang === 'fr' ? "— Aucun apporteur d'affaire associé —" : '— No referral partner linked —'}
                 </option>
                 {commerciaux.map((c) => (
                   <option key={c.id} value={c.id}>

@@ -99,7 +99,7 @@ export default function CommercialClientLinkModal({
     setError(null);
 
     if (!commercialId) {
-      setError(lang === 'fr' ? 'Veuillez choisir un commercial.' : 'Please select a sales agent.');
+      setError(lang === 'fr' ? "Veuillez choisir un apporteur d'affaire." : 'Please select a referral partner.');
       return;
     }
 
@@ -212,7 +212,7 @@ export default function CommercialClientLinkModal({
             <h3 className="text-base font-semibold text-slate-900">
               {isEdit
                 ? (lang === 'fr' ? `Modifier le rattachement — ${editingLink?.client_nom}` : `Edit assignment — ${editingLink?.client_nom}`)
-                : (lang === 'fr' ? 'Lier des clients à un commercial' : 'Link clients to a sales agent')}
+                : (lang === 'fr' ? "Lier des clients à un apporteur d'affaire" : 'Link clients to a referral partner')}
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
               {lang === 'fr'
@@ -234,7 +234,7 @@ export default function CommercialClientLinkModal({
           {/* Commercial selector */}
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">
-              {lang === 'fr' ? 'Commercial' : 'Sales agent'} *
+              {lang === 'fr' ? "Apporteur d'affaire" : 'Referral partner'} *
             </label>
             <select
               required
@@ -242,7 +242,7 @@ export default function CommercialClientLinkModal({
               onChange={(e) => setCommercialId(e.target.value)}
               className="w-full px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
             >
-              <option value="">{lang === 'fr' ? '— Choisir un commercial —' : '— Select an agent —'}</option>
+              <option value="">{lang === 'fr' ? "— Choisir un apporteur d'affaire —" : '— Select a partner —'}</option>
               {commerciaux.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.nom} ({c.taux_commission} %){!c.actif ? ' — inactif' : ''}

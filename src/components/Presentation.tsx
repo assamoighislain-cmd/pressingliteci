@@ -249,8 +249,8 @@ export default function Presentation() {
                   </h1>
                   <p className="text-base text-slate-600 leading-relaxed max-w-xl">
                     {lang === 'fr'
-                      ? "Une plateforme complète pour piloter chaque étape de votre pressing : accueil comptoir ultra-rapide, retraits, commerciaux et commissions, portails client et commercial, tournées Google Maps, comptabilité et continuité hors-ligne."
-                      : 'A complete platform to run every stage of your dry cleaning business: fast counter intake, pickups, sales agents and commissions, client and commercial portals, Google Maps runs, accounting, and offline continuity.'}
+                      ? "Une plateforme complète pour piloter chaque étape de votre pressing : accueil comptoir ultra-rapide, retraits, apporteurs d'affaire et commissions, portails client et apporteur d'affaire, tournées Google Maps, comptabilité et continuité hors-ligne."
+                      : 'A complete platform to run every stage of your dry cleaning business: fast counter intake, pickups, referral partners and commissions, client and partner portals, Google Maps runs, accounting, and offline continuity.'}
                   </p>
                 </div>
 
@@ -317,8 +317,8 @@ export default function Presentation() {
                     <p className="text-sm font-semibold text-slate-800">{companyName}</p>
                     <p className="text-xs text-slate-500">
                       {lang === 'fr'
-                        ? 'Tableau de bord, Dépôts, Retraits, Commerciaux & Comptabilité'
-                        : 'Dashboard, Deposits, Pickups, Sales Agents & Accounting'}
+                        ? "Tableau de bord, Dépôts, Retraits, Apporteurs d'affaire & Comptabilité"
+                        : 'Dashboard, Deposits, Pickups, Referral Partners & Accounting'}
                     </p>
                   </div>
                 )}

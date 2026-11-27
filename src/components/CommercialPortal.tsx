@@ -81,8 +81,8 @@ export default function CommercialPortal({ entrepriseId = null }: CommercialPort
     if (clean.length < 4) {
       setError(
         lang === 'fr'
-          ? "Veuillez saisir votre code commercial (ex: COM-A1B2C3D4)."
-          : 'Please enter your sales agent code (e.g. COM-A1B2C3D4).',
+          ? "Veuillez saisir votre code apporteur d'affaire (ex: COM-A1B2C3D4)."
+          : 'Please enter your referral partner code (e.g. COM-A1B2C3D4).',
       );
       return;
     }
@@ -199,7 +199,7 @@ export default function CommercialPortal({ entrepriseId = null }: CommercialPort
                   {headerBrand?.nom || 'PressingLite'}
                 </p>
                 <p className="text-xs text-slate-500 truncate">
-                  {lang === 'fr' ? 'Portail Commercial' : 'Sales Agent Portal'}
+                  {lang === 'fr' ? "Portail Apporteur d'affaire" : 'Partner Portal'}
                 </p>
               </div>
             </div>
@@ -221,7 +221,7 @@ export default function CommercialPortal({ entrepriseId = null }: CommercialPort
                 <KeyRound className="w-5 h-5" />
               </div>
               <h1 className="text-xl font-bold tracking-tight text-slate-900">
-                {lang === 'fr' ? 'Accès Portail Commercial' : 'Sales Agent Portal Access'}
+                {lang === 'fr' ? "Accès Portail Apporteur d'affaire" : 'Partner Portal Access'}
               </h1>
               <p className="text-sm text-slate-500 leading-relaxed">
                 {lang === 'fr'
@@ -247,7 +247,7 @@ export default function CommercialPortal({ entrepriseId = null }: CommercialPort
             <form onSubmit={handleSubmitCode} className="space-y-4">
               <div>
                 <label htmlFor="commercial-portal-code" className="block text-sm font-medium text-slate-700 mb-1.5">
-                  {lang === 'fr' ? 'Code commercial' : 'Access code'}
+                  {lang === 'fr' ? "Code apporteur d'affaire" : 'Access code'}
                 </label>
                 <input
                   id="commercial-portal-code"
@@ -315,7 +315,7 @@ export default function CommercialPortal({ entrepriseId = null }: CommercialPort
               <div className="flex items-center gap-2 text-xs text-slate-500">
                 <span className="truncate font-medium text-slate-600">{companyInfo?.nom || 'PressingLite'}</span>
                 <span>/</span>
-                <span className="whitespace-nowrap">{lang === 'fr' ? 'Portail Commercial' : 'Sales Portal'}</span>
+                <span className="whitespace-nowrap">{lang === 'fr' ? "Portail Apporteur d'affaire" : 'Partner Portal'}</span>
               </div>
               <p className="text-sm sm:text-base font-bold text-slate-900 truncate">
                 {commercial.nom}
@@ -503,7 +503,7 @@ export default function CommercialPortal({ entrepriseId = null }: CommercialPort
             <div className="bg-white rounded-xl border border-slate-200 px-5 py-4 flex flex-wrap items-center justify-between gap-4">
               <div className="space-y-1">
                 <p className="text-xs font-medium text-slate-500">
-                  {lang === 'fr' ? 'Profil commercial' : 'Agent profile'}
+                  {lang === 'fr' ? "Profil apporteur d'affaire" : 'Partner profile'}
                 </p>
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-700">
                   <span className="font-semibold text-slate-900">{commercial.nom}</span>

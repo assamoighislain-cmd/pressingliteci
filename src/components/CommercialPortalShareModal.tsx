@@ -72,8 +72,8 @@ export default function CommercialPortalShareModal({
 
   const whatsappMessage =
     lang === 'fr'
-      ? `Bonjour ${commercial.nom},\nVoici votre accès au Portail Commercial${entreprise?.nom ? ` (${entreprise.nom})` : ''} pour suivre vos clients, factures et commissions :\nLien : ${portalUrl}\nCode d'accès : ${code}`
-      : `Hello ${commercial.nom},\nHere is your Sales Agent Portal access${entreprise?.nom ? ` (${entreprise.nom})` : ''}:\nLink: ${portalUrl}\nAccess code: ${code}`;
+      ? `Bonjour ${commercial.nom},\nVoici votre accès au Portail Apporteur d'affaire${entreprise?.nom ? ` (${entreprise.nom})` : ''} pour suivre vos clients, factures et commissions :\nLien : ${portalUrl}\nCode d'accès : ${code}`
+      : `Hello ${commercial.nom},\nHere is your Partner Portal access${entreprise?.nom ? ` (${entreprise.nom})` : ''}:\nLink: ${portalUrl}\nAccess code: ${code}`;
 
   const whatsappHref = commercial.telephone
     ? buildWhatsAppUrl(commercial.telephone, whatsappMessage)
@@ -90,7 +90,7 @@ export default function CommercialPortalShareModal({
             </div>
             <div>
               <h3 className="text-base font-semibold text-slate-900">
-                {lang === 'fr' ? 'Accès Portail Commercial' : 'Sales Portal Access'}
+                {lang === 'fr' ? "Accès Portail Apporteur d'affaire" : 'Partner Portal Access'}
               </h3>
               <p className="text-xs text-slate-500">{commercial.nom}</p>
             </div>
@@ -110,7 +110,7 @@ export default function CommercialPortalShareModal({
         {/* Code block */}
         <div className="space-y-1.5">
           <label className="block text-xs font-medium text-slate-500">
-            {lang === 'fr' ? 'Code personnel du commercial' : 'Personal access code'}
+            {lang === 'fr' ? "Code personnel de l'apporteur d'affaire" : 'Personal access code'}
           </label>
           {code ? (
             <div className="flex items-center gap-2">
@@ -129,7 +129,7 @@ export default function CommercialPortalShareModal({
           ) : (
             <div className="rounded-lg bg-amber-50 border border-amber-200 px-3.5 py-2.5 text-xs text-amber-800">
               {lang === 'fr'
-                ? 'Aucun code généré pour ce commercial. Cliquez sur « Générer un code » (après avoir appliqué la mise à jour SQL).'
+                ? "Aucun code généré pour cet apporteur d'affaire. Cliquez sur « Générer un code » (après avoir appliqué la mise à jour SQL)."
                 : 'No code generated yet. Click "Generate code" (after running the SQL update).'}
             </div>
           )}
