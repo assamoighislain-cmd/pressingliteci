@@ -447,14 +447,14 @@ export function downloadUserGuidePdf(entreprise: Entreprise | null, lang: Lang):
             'Prise en main, installation PWA (mobile & PC) et paramétrage multi-boutiques',
             'Enregistrement rapide des dépôts, recherche 4 000+ clients, reçus A5/80 mm, étiquettes et WhatsApp',
             'Retraits partiels ou totaux, modification du type de traitement, planning et inventaire atelier',
-            "Gestion des apporteurs d'affaire, liaison multi-clients sur durée en jours et Portail dédié par code",
+            "Gestion des apporteurs d'affaire, liaison multi-clients sur durée en jours et Portail Apporteur d'affaire par code",
             'Portail Client QR Code, tournées collecte/livraison Google Maps, comptabilité et mode hors-ligne',
           ]
         : [
             'Onboarding, PWA installation (mobile & desktop), and multi-store configuration',
             'Fast deposit intake, 4,000+ client instant search, A5/80 mm receipts, labels, and WhatsApp',
             'Partial/full pickups, editing treatment type on validated deposits, schedule, and inventory',
-            'Sales agents, multi-client day-bounded commissions, payouts, and Commercial Portal',
+            'Referral partners, multi-client day-bounded commissions, payouts, and Partner Portal',
             'Client QR Portal, Google Maps pickup/delivery runs, accounting, and offline mode',
           ],
     lang,
@@ -609,13 +609,13 @@ export function downloadPresentationPdf(entreprise: Entreprise | null, lang: Lan
       lang === 'fr'
         ? [
             'Comptoir ultra-rapide : recherche instantanée sur 4 000+ clients et reçus A5 / ticket 80 mm / WhatsApp',
-            "Apporteurs d'affaire & commissions automatiques sur clients liés + Portail dédié par code",
+            "Apporteurs d'affaire & commissions automatiques sur clients liés + Portail Apporteur d'affaire par code",
             'Portail Client QR Code + Collecte & Livraison géolocalisées sur Google Maps',
             'Comptabilité, dépenses, consommables, multi-boutiques et mode hors-ligne garanti',
           ]
         : [
             'High-speed counter: instant 4,000+ client search and A5 / 80 mm / WhatsApp receipts',
-            'Sales agents & automated commissions on linked clients + Commercial Portal',
+            'Referral partners & automated commissions on linked clients + Partner Portal',
             'Client QR Portal + geolocated Google Maps pickup & delivery runs',
             'Accounting, expenses, consumables, multi-store management, and offline-first reliability',
           ],

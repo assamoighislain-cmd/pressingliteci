@@ -1170,7 +1170,7 @@ export default function CommerciauxPage() {
               <p className="text-sm text-slate-600">
                 {lang === 'fr'
                   ? "Les tables des apporteurs d'affaire et des versements de commissions ne sont pas encore créées sur votre projet Supabase. Copiez le script SQL ci-dessous et exécutez-le dans Supabase → SQL Editor, puis cliquez sur « Vérifier »."
-                  : 'The sales agents and commission payout tables have not been created on your Supabase project yet. Copy the SQL below and run it in Supabase → SQL Editor, then click "Verify".'}
+                  : 'The referral partners and commission payout tables have not been created on your Supabase project yet. Copy the SQL below and run it in Supabase → SQL Editor, then click "Verify".'}
               </p>
             </div>
           </div>

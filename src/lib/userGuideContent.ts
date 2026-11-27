@@ -67,15 +67,15 @@ export function getPresentationModules(lang: Lang): PresentationModule[] {
       },
       {
         id: 'commerciaux',
-        title: 'Sales Agents, Commissions & Portal',
+        title: 'Referral Partners, Commissions & Partner Portal',
         category: 'Growth',
         summary:
-          'Manage sales agents with custom commission rates, link multiple clients over predefined day periods, track payouts, and give each agent a standalone portal.',
+          'Manage referral partners with custom commission rates, link multiple clients over predefined day periods, track payouts, and give each partner a standalone portal.',
         highlights: [
-          'Link multiple clients to an agent for a set number of days (all client invoices earn commission)',
+          'Link multiple clients to a referral partner for a set number of days (all client invoices earn commission)',
           'Automatic attribution on new deposits plus direct linking on any invoice',
           'Payout ledger with remaining balance and optional expense booking',
-          'Dedicated Commercial Portal accessible via unique code (COM-XXXXXXXX)',
+          'Dedicated Partner Portal accessible via personal code (COM-XXXXXXXX)',
         ],
       },
       {
@@ -93,7 +93,7 @@ export function getPresentationModules(lang: Lang): PresentationModule[] {
       {
         id: 'clients',
         title: 'Clients, Catalog, Coupons & Consumables',
-        category: 'Commercial',
+        category: 'Customer Care',
         summary:
           'Centralize your customer base, item pricing variants, promotional vouchers, and pressing supplies inventory in one workspace.',
         highlights: [
@@ -195,7 +195,7 @@ export function getPresentationModules(lang: Lang): PresentationModule[] {
     {
       id: 'clients',
       title: 'Clients, Catalogue, Bons & Consommables',
-      category: 'Gestion commerciale',
+      category: 'Relation client',
       summary:
         'Centralisez votre fichier clients, vos tarifs avec variantes, vos campagnes de bons de réduction et votre stock de consommables pressing.',
       highlights: [
@@ -256,7 +256,7 @@ export function getWorkflowSteps(lang: Lang): WorkflowStep[] {
         num: '02',
         title: 'Record deposits in seconds',
         description:
-          'Find a client instantly, add items with Normal treatment preselected, apply discounts or sales agent attribution, and print or send via WhatsApp.',
+          'Find a client instantly, add items with Normal treatment preselected, apply discounts or referral partner attribution, and print or send via WhatsApp.',
       },
       {
         num: '03',
@@ -266,9 +266,9 @@ export function getWorkflowSteps(lang: Lang): WorkflowStep[] {
       },
       {
         num: '04',
-        title: 'Monitor finances & agents',
+        title: 'Monitor finances & referral partners',
         description:
-          'Review daily journals, expenses, consumables stock, and sales agent commissions from the dashboard or printable A4 reports.',
+          'Review daily journals, expenses, consumables stock, and referral partner commissions from the dashboard or printable A4 reports.',
       },
     ];
   }
@@ -308,13 +308,13 @@ export function getRoleMatrix(lang: Lang): RolePermissionRow[] {
         role: 'Administrator',
         scope: 'All stores & company settings',
         keyActions:
-          'Full access: deposits, pickups, clients, catalog, accounting, expenses, sales agents & payouts, multi-store setup, team & roles, starting counters.',
+          'Full access: deposits, pickups, clients, catalog, accounting, expenses, referral partners & payouts, multi-store setup, team & roles, starting counters.',
       },
       {
         role: 'Manager',
         scope: 'Assigned store',
         keyActions:
-          'Operations, pickups, planning, clients, catalog, journals, expenses, sales agents & client linking, consumables, and store counters.',
+          'Operations, pickups, planning, clients, catalog, journals, expenses, referral partners & client linking, consumables, and store counters.',
       },
       {
         role: 'Sales / Cashier',
@@ -336,7 +336,7 @@ export function getRoleMatrix(lang: Lang): RolePermissionRow[] {
       role: 'Administrateur',
       scope: 'Toutes les boutiques & réglages',
       keyActions:
-        "Accès complet : dépôts, retraits, clients, catalogue, comptabilité, dépenses, apporteurs d'affaire et versements, multi-boutiques, utilisateurs, compteurs de départ.",
+        "Accès complet : dépôts, retraits, clients, catalogue, comptabilité, dépenses, apporteurs d'affaire et versements, multi-boutiques, équipe et rôles, compteurs de départ.",
     },
     {
       role: 'Gérant',
@@ -368,7 +368,7 @@ export function getTechnicalSpecs(lang: Lang): Array<[string, string]> {
       ['Client search engine', 'In-memory indexed search (< 1 ms for 4,000+ clients)'],
       ['Receipts & labels', 'A5 sheet, 80/100 mm thermal ticket, garment labels & WhatsApp'],
       ['Numbering', 'Annual format (D-001-YYYY), per-store counter & terminal prefixes'],
-      ['Dedicated portals', 'Client Portal (QR code) & Commercial Portal (access code)'],
+      ['Dedicated portals', 'Client Portal (QR code) & Partner Portal (access code)'],
       ['Mapping & alerts', 'Google Maps pickup/delivery view & Web Push notifications'],
       ['Data protection', 'Company-scoped Row-Level Security (RLS) & role permissions'],
       ['Update resilience', 'Deferred PWA updates + local draft auto-save during deposits'],
@@ -405,7 +405,7 @@ export function getUserGuideChapters(lang: Lang): GuideChapter[] {
             steps: [
               'Open the application URL and sign in with your email address and password.',
               'New companies can register directly to receive an automatic 30-day Demo license while awaiting Super Admin validation.',
-              'Team members joining an existing pressing can submit a join request with the exact company name or ask their Administrator to create their account under Users.',
+              'Team members joining an existing pressing can submit a join request with the exact company name or ask their Administrator to create their account under "Team".',
             ],
           },
           {
@@ -457,10 +457,9 @@ export function getUserGuideChapters(lang: Lang): GuideChapter[] {
           {
             heading: 'Step 1 — Selecting or creating a client',
             steps: [
-              'Click "Deposit" in the Operations menu.',
+              'Click "New deposit" in the Operations menu.',
               'Type a client name, phone number, or client code: results appear instantaneously even with 4,000+ clients.',
               'If the client is new, click "New client", enter their name and phone, and their code is generated automatically.',
-              'If the client is linked to a sales agent within an active period, that sales agent is automatically preselected.',
             ],
           },
           {
@@ -472,10 +471,10 @@ export function getUserGuideChapters(lang: Lang): GuideChapter[] {
             ],
           },
           {
-            heading: 'Step 3 — Payment, discounts, printing & WhatsApp',
+            heading: 'Step 3 — Payment, referral partner, printing & WhatsApp',
             steps: [
-              'Enter the deposit payment. You can split a single deposit across multiple payment methods (e.g., Cash + Mobile Money).',
-              'Client discounts and promo coupons are calculated automatically.',
+              'If the client is linked to a referral partner within an active period, that partner is automatically preselected with live commission calculation (you can also select or change the partner manually).',
+              'Enter the deposit payment. You can split a single deposit across multiple payment methods (e.g., Cash + Mobile Money), and client discounts or promo coupons apply automatically.',
               'Click "Validate deposit". On the confirmation screen, print an A5 receipt or 80/100 mm thermal ticket (showing the logged-in operator name at the bottom), print garment labels, or send the formatted receipt via WhatsApp in one click.',
             ],
             tip: 'Your in-progress deposit is automatically saved locally as a draft, and software updates are deferred until you finish or leave the deposit.',
@@ -545,27 +544,27 @@ export function getUserGuideChapters(lang: Lang): GuideChapter[] {
       {
         number: '06',
         id: 'sales-agents',
-        title: 'Sales Agents, Commissions & Agent Portal',
+        title: 'Referral Partners, Commissions & Partner Portal',
         subtitle: 'Multi-client period assignments, payouts, and code-based portal',
         summary:
-          'Reward field agents and business developers transparently with automated commissions across all invoices of their linked clients.',
+          'Reward business introducers and referral partners transparently with automated commissions across all invoices of their linked clients.',
         sections: [
           {
-            heading: 'Creating agents & linking clients over a period',
+            heading: 'Creating referral partners & linking clients over a period',
             steps: [
-              'Open "Sales Agents" (Tracking & Finance) and click "New agent" to enter their name, contact details, and default commission rate (%).',
-              'Click "Link clients", select the sales agent, pick one or more clients, set the start date and duration in days (e.g., 30, 60, 90, 365 days), and confirm.',
-              'Every non-cancelled invoice for those clients within the active period automatically earns commission for that agent (with an optional per-client custom rate).',
+              'Open "Referral Partners" (Tracking & Finance) and click "New partner" to enter their name, contact details, and default commission rate (%).',
+              'Click "Link clients", select the referral partner, pick one or more clients, set the start date and duration in days (15, 30, 60, 90, 180, 365 days or custom), and confirm.',
+              'Every non-cancelled invoice for those clients within the active period automatically earns commission (with an optional per-client custom rate). You can also assign a partner directly during deposit Step 3 or on any existing invoice.',
             ],
           },
           {
-            heading: 'Recording payouts & sharing the Commercial Portal',
+            heading: 'Recording payouts & sharing the Partner Portal',
             steps: [
-              'Click "Pay" next to a sales agent to record a commission payout (amount, payment method, period covered, reference) and optionally log it as a company expense.',
-              'Click the key icon next to an agent to copy their personal portal code (COM-XXXXXXXX) and direct portal link.',
-              'The sales agent opens the Commercial Portal, enters their code, and views their KPIs, linked clients with days remaining, commissioned invoices, and payout history.',
+              'Click "Pay" next to a referral partner to record a commission payout (amount, payment method, period covered, reference) and optionally log it as a company expense.',
+              'Click the key icon next to a partner to copy their personal portal code (COM-XXXXXXXX) and direct Partner Portal link, or send it via WhatsApp.',
+              'The referral partner opens the Partner Portal (also accessible from the sign-in screen), enters their code, and views their KPIs, linked clients with days remaining, commissioned invoices, and payout history.',
             ],
-            tip: 'You can regenerate an agent portal code at any time to immediately revoke the previous code.',
+            tip: 'Referral partners do not need a staff account. You can regenerate a partner portal code at any time to immediately revoke the previous code.',
           },
         ],
       },
@@ -629,15 +628,15 @@ export function getUserGuideChapters(lang: Lang): GuideChapter[] {
           {
             heading: 'Managing users & accountability',
             steps: [
-              'Open "Users" (Admin only) to create team members, assign their role (Admin, Manager, Sales/Cashier, Collector), and assign them to a specific store.',
-              'Approve or reject pending join requests directly from the Users page.',
+              'Open "Team" (Admin only) to create team members, assign their role (Admin, Manager, Sales/Cashier, Collector), and assign them to a specific store.',
+              'Approve or reject pending join requests directly from the Team page.',
               'The logged-in user\'s full name is printed automatically in the footer of every receipt for clear cash-desk traceability.',
             ],
           },
           {
             heading: 'Billing points & independent starting counters',
             steps: [
-              'If multiple computers work offline in the same store, assign a unique short Billing Point prefix (e.g., C1, C2) on each terminal in the Deposit screen to guarantee collision-free numbers.',
+              'If multiple computers work offline in the same store, assign a unique short Billing Point prefix (e.g., C1, C2) on each terminal in the "New deposit" screen to guarantee collision-free numbers.',
               'Administrators and Managers can set a custom starting deposit number per store for the current year.',
             ],
           },
@@ -687,7 +686,7 @@ export function getUserGuideChapters(lang: Lang): GuideChapter[] {
           steps: [
             'Ouvrez l\'adresse du logiciel puis connectez-vous avec votre adresse email et votre mot de passe.',
             'Lors de la création d\'une nouvelle entreprise, une licence Démo de 30 jours est préparée automatiquement dès l\'inscription.',
-            'Pour intégrer une équipe existante, envoyez une demande d\'adhésion avec le nom exact de l\'entreprise ou demandez à l\'Administrateur de créer votre compte dans le menu « Utilisateurs ».',
+            'Pour intégrer une équipe existante, envoyez une demande d\'adhésion avec le nom exact de l\'entreprise ou demandez à l\'Administrateur de créer votre compte dans le menu « Équipe ».',
           ],
         },
         {
@@ -739,10 +738,9 @@ export function getUserGuideChapters(lang: Lang): GuideChapter[] {
         {
           heading: 'Étape 1 — Choisir ou créer le client',
           steps: [
-            'Ouvrez « Dépôt » dans le menu Opérations.',
+            'Ouvrez « Nouveau dépôt » dans le menu Opérations.',
             'Saisissez le nom, le téléphone ou le code client : la recherche indexée répond instantanément, même avec plus de 4 000 clients.',
             'Pour un nouveau client, cliquez sur « Nouveau client », saisissez son nom et son numéro : son code unique est généré automatiquement.',
-            "Si le client est rattaché à un apporteur d'affaire sur une période active, l'apporteur d'affaire est présélectionné automatiquement.",
           ],
         },
         {
@@ -754,10 +752,10 @@ export function getUserGuideChapters(lang: Lang): GuideChapter[] {
           ],
         },
         {
-          heading: 'Étape 3 — Paiement, impression et envoi WhatsApp',
+          heading: "Étape 3 — Apporteur d'affaire, paiement, impression et WhatsApp",
           steps: [
-            'Saisissez l\'avance ou le règlement complet. Vous pouvez répartir le paiement sur plusieurs modes (ex. Espèces + Mobile Money) via « Ajouter un mode ».',
-            'Les remises clients automatiques et les codes de bons de réduction s\'appliquent directement sur le total.',
+            "Si le client est rattaché à un apporteur d'affaire sur une période active, celui-ci est présélectionné automatiquement avec aperçu de la commission (vous pouvez aussi en choisir ou modifier un manuellement).",
+            'Saisissez l\'avance ou le règlement complet (multi-modes possible via « Ajouter un mode »). Les remises clients automatiques et bons de réduction s\'appliquent directement sur le total.',
             'Cliquez sur « Valider le dépôt ». Depuis l\'écran de confirmation, imprimez le reçu A5 ou le ticket thermique 80/100 mm (avec le nom de l\'utilisateur connecté en pied de reçu), imprimez les étiquettes vêtements ou envoyez le reçu par WhatsApp en 1 clic.',
           ],
           tip: 'Tout dépôt en cours est sauvegardé automatiquement en brouillon local et les mises à jour du logiciel patientent jusqu\'à la fin du dépôt : aucune saisie ne peut être perdue.',
@@ -837,17 +835,17 @@ export function getUserGuideChapters(lang: Lang): GuideChapter[] {
           steps: [
             "Ouvrez « Apporteurs d'affaire » dans Suivi & Finances, puis cliquez sur « Nouvel apporteur d'affaire » en indiquant son nom, son contact et son taux de commission (%).",
             "Cliquez sur « Lier des clients », sélectionnez l'apporteur d'affaire, cochez un ou plusieurs clients, choisissez la date de début et la durée en jours (15, 30, 60, 90, 180, 365 jours ou durée libre), puis cliquez sur « Lier ».",
-            "Toutes les factures non annulées de ces clients sur la période active génèrent automatiquement une commission pour l'apporteur d'affaire (avec possibilité de prolonger ou définir un taux spécifique par client).",
+            "Toutes les factures non annulées de ces clients sur la période active génèrent automatiquement une commission (avec possibilité de prolonger ou définir un taux spécifique par client). Vous pouvez aussi associer un apporteur d'affaire directement lors d'un dépôt ou depuis l'onglet « Factures & Dépôts ».",
           ],
         },
         {
           heading: "Verser les commissions et partager le Portail Apporteur d'affaire",
           steps: [
             "Cliquez sur « Verser » sur la ligne d'un apporteur d'affaire pour enregistrer un paiement (montant, mode de règlement, période couverte, référence) et, si souhaité, l'inscrire directement en dépense.",
-            "Cliquez sur l'icône Clé pour consulter et copier le code personnel de l'apporteur d'affaire (format COM-XXXXXXXX) ainsi que le lien direct vers le Portail Apporteur d'affaire.",
+            "Cliquez sur l'icône Clé pour consulter et copier le code personnel de l'apporteur d'affaire (format COM-XXXXXXXX), copier le lien direct du Portail Apporteur d'affaire ou l'envoyer par WhatsApp.",
             "L'apporteur d'affaire ouvre le Portail Apporteur d'affaire (également accessible depuis l'écran de connexion), saisit son code et consulte en temps réel ses clients liés, les jours restants, ses factures commissionnées et ses versements.",
           ],
-          tip: "En cas de perte ou de départ, vous pouvez régénérer un nouveau code portail à tout moment : l'ancien code est immédiatement révoqué.",
+          tip: "Un apporteur d'affaire n'a pas besoin de compte employé : son code personnel suffit. En cas de perte ou de départ, vous pouvez régénérer un nouveau code portail à tout moment pour révoquer immédiatement l'ancien.",
         },
       ],
     },
@@ -870,7 +868,7 @@ export function getUserGuideChapters(lang: Lang): GuideChapter[] {
           heading: 'Piloter les commandes, collectes et livraisons',
           steps: [
             'Chaque nouvelle commande ou demande de collecte déclenche une alerte sonore et une notification Push en temps réel.',
-            'Ouvrez « Commandes », « Collecte » ou « Livraison » pour visualiser les adresses des clients sur la carte Google Maps et valider chaque étape terrain.',
+            'Ouvrez « Commandes », « Linge à collecter » ou « Commandes à livrer » pour visualiser les adresses des clients sur la carte Google Maps et valider chaque étape terrain.',
           ],
         },
       ],
@@ -911,7 +909,7 @@ export function getUserGuideChapters(lang: Lang): GuideChapter[] {
         {
           heading: 'Utilisateurs, rôles et traçabilité',
           steps: [
-            'Ouvrez « Utilisateurs » (réservé à l\'Administrateur) pour créer les comptes de votre équipe, définir leur rôle et les affecter à une boutique.',
+            'Ouvrez « Équipe » (réservé à l\'Administrateur) pour créer les comptes de votre équipe, définir leur rôle et les affecter à une boutique.',
             'Validez ou refusez en un clic les demandes d\'adhésion reçues.',
             'Le nom complet de l\'utilisateur connecté s\'affiche automatiquement en pied de chaque reçu imprimé pour une traçabilité claire de la caisse.',
           ],
@@ -919,7 +917,7 @@ export function getUserGuideChapters(lang: Lang): GuideChapter[] {
         {
           heading: 'Points de facturation & compteurs de départ',
           steps: [
-            'Si plusieurs postes travaillent simultanément hors ligne dans la même boutique, attribuez un court préfixe de Point de facturation (ex. C1, C2) depuis l\'écran Dépôt pour éviter tout doublon de numéro.',
+            'Si plusieurs postes travaillent simultanément hors ligne dans la même boutique, attribuez un court préfixe de Point de facturation (ex. C1, C2) depuis l\'écran « Nouveau dépôt » pour éviter tout doublon de numéro.',
             'Les Administrateurs et Gérants peuvent configurer le numéro de départ annuel des dépôts indépendamment pour chaque boutique.',
           ],
         },

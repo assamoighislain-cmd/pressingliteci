@@ -502,7 +502,7 @@ const en: Dict = {
   'nav.journal': 'Payment journal',
   'nav.comptabilite': 'Accounting',
   'nav.depenses': 'Expenses',
-  'nav.commerciaux': 'Sales & Commissions',
+  'nav.commerciaux': 'Referral Partners',
   'nav.modesReglement': 'Payment methods',
   'nav.team': 'Team',
   'nav.entreprise': 'Company',
