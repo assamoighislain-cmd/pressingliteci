@@ -48,10 +48,103 @@ export interface CreateOrAttachMemberResult {
   needsEmailConfirmation: boolean;
   passwordUpdated?: boolean;
   passwordResetMissingRpc?: boolean;
+  roleConstraintMissing?: boolean;
   loginVerified?: boolean;
   email: string;
   password?: string;
 }
+
+export const ROLE_MIGRATION_SQL = `ALTER TABLE public.entreprise_members DROP CONSTRAINT IF EXISTS entreprise_members_role_check;
+ALTER TABLE public.entreprise_members ADD CONSTRAINT entreprise_members_role_check
+  CHECK (role = ANY (ARRAY['admin'::text, 'gerant'::text, 'commercial'::text, 'collecteur'::text, 'comptable'::text, 'associe'::text]));
+
+CREATE OR REPLACE FUNCTION public.add_team_member(member_email text, member_role text, member_boutique_id uuid DEFAULT NULL)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $$
+DECLARE uid uuid := auth.uid(); t_id uuid; member_uid uuid; v_full_name text; v_contact text;
+BEGIN
+  t_id := public.get_tenant_id();
+  IF t_id IS NULL THEN RAISE EXCEPTION 'Aucune entreprise trouvée'; END IF;
+  IF NOT public.is_tenant_admin(t_id) THEN RAISE EXCEPTION 'Seul l''administrateur peut ajouter des membres'; END IF;
+  IF member_role NOT IN ('admin', 'gerant', 'commercial', 'collecteur', 'comptable', 'associe') THEN RAISE EXCEPTION 'Rôle invalide'; END IF;
+  SELECT id, NULLIF(trim(COALESCE(raw_user_meta_data ->> 'full_name', '')), ''), NULLIF(trim(COALESCE(raw_user_meta_data ->> 'contact', '')), '')
+  INTO member_uid, v_full_name, v_contact FROM auth.users WHERE lower(email) = lower(trim(member_email)) LIMIT 1;
+  IF member_uid IS NULL THEN RAISE EXCEPTION 'Utilisateur introuvable. L''utilisateur doit d''abord créer un compte.'; END IF;
+  IF member_uid = uid THEN RAISE EXCEPTION 'Vous êtes déjà membre de cette entreprise'; END IF;
+  INSERT INTO public.entreprise_members (tenant_id, user_id, role, boutique_id, full_name, contact)
+  VALUES (t_id, member_uid, member_role, member_boutique_id, v_full_name, v_contact)
+  ON CONFLICT (tenant_id, user_id) DO UPDATE SET role = EXCLUDED.role, boutique_id = EXCLUDED.boutique_id,
+    full_name = COALESCE(public.entreprise_members.full_name, EXCLUDED.full_name), contact = COALESCE(public.entreprise_members.contact, EXCLUDED.contact);
+  UPDATE auth.users SET email_confirmed_at = COALESCE(email_confirmed_at, now()), updated_at = now() WHERE id = member_uid AND email_confirmed_at IS NULL;
+  RETURN member_uid;
+END; $$;
+
+CREATE OR REPLACE FUNCTION public.add_member_to_entreprise(member_email text, target_tenant_id uuid, member_role text)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $$
+DECLARE member_uid uuid; v_full_name text; v_contact text;
+BEGIN
+  IF NOT public.is_super_admin() THEN RAISE EXCEPTION 'Seul le super-administrateur peut ajouter des membres'; END IF;
+  IF member_role NOT IN ('admin', 'gerant', 'commercial', 'collecteur', 'comptable', 'associe') THEN RAISE EXCEPTION 'Rôle invalide'; END IF;
+  SELECT id, NULLIF(trim(COALESCE(raw_user_meta_data ->> 'full_name', '')), ''), NULLIF(trim(COALESCE(raw_user_meta_data ->> 'contact', '')), '')
+  INTO member_uid, v_full_name, v_contact FROM auth.users WHERE lower(email) = lower(trim(member_email)) LIMIT 1;
+  IF member_uid IS NULL THEN RAISE EXCEPTION 'Utilisateur introuvable. La personne doit d''abord créer un compte avec cet email.'; END IF;
+  INSERT INTO public.entreprise_members (tenant_id, user_id, role, full_name, contact)
+  VALUES (target_tenant_id, member_uid, member_role, v_full_name, v_contact)
+  ON CONFLICT (tenant_id, user_id) DO UPDATE SET role = EXCLUDED.role,
+    full_name = COALESCE(public.entreprise_members.full_name, EXCLUDED.full_name), contact = COALESCE(public.entreprise_members.contact, EXCLUDED.contact);
+  UPDATE auth.users SET email_confirmed_at = COALESCE(email_confirmed_at, now()), updated_at = now() WHERE id = member_uid AND email_confirmed_at IS NULL;
+  RETURN member_uid;
+END; $$;
+
+CREATE OR REPLACE FUNCTION public.current_user_can_write_financial()
+RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $$
+  SELECT public.is_super_admin() OR COALESCE(public.get_user_role(), 'admin') <> 'associe';
+$$;
+CREATE OR REPLACE FUNCTION public.current_user_can_write_operational()
+RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $$
+  SELECT public.is_super_admin() OR COALESCE(public.get_user_role(), 'admin') NOT IN ('associe', 'comptable');
+$$;
+GRANT EXECUTE ON FUNCTION public.current_user_can_write_financial() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.current_user_can_write_operational() TO authenticated;
+
+DO $$
+DECLARE
+  t text;
+  op_tables text[] := ARRAY['clients','depots','depot_articles','depot_avances','articles','article_variants','types_traitement','modes_reglement','consommables','consommable_mouvements','boutiques','entreprise','bons_reduction','commerciaux','commercial_clients','relances','fidelite_points'];
+  fin_tables text[] := ARRAY['depenses','depense_categories','commission_versements'];
+BEGIN
+  IF to_regclass('public.commission_versements') IS NOT NULL THEN
+    DROP POLICY IF EXISTS "insert_tenant_commission_versements" ON public.commission_versements;
+    CREATE POLICY "insert_tenant_commission_versements" ON public.commission_versements FOR INSERT TO authenticated
+      WITH CHECK (public.is_super_admin() OR EXISTS (SELECT 1 FROM public.entreprise_members em WHERE em.user_id = auth.uid() AND em.tenant_id = commission_versements.tenant_id AND em.role IN ('admin', 'gerant', 'comptable')));
+    DROP POLICY IF EXISTS "update_tenant_commission_versements" ON public.commission_versements;
+    CREATE POLICY "update_tenant_commission_versements" ON public.commission_versements FOR UPDATE TO authenticated
+      USING (public.is_super_admin() OR EXISTS (SELECT 1 FROM public.entreprise_members em WHERE em.user_id = auth.uid() AND em.tenant_id = commission_versements.tenant_id AND em.role IN ('admin', 'gerant', 'comptable')))
+      WITH CHECK (public.is_super_admin() OR EXISTS (SELECT 1 FROM public.entreprise_members em WHERE em.user_id = auth.uid() AND em.tenant_id = commission_versements.tenant_id AND em.role IN ('admin', 'gerant', 'comptable')));
+    DROP POLICY IF EXISTS "delete_tenant_commission_versements" ON public.commission_versements;
+    CREATE POLICY "delete_tenant_commission_versements" ON public.commission_versements FOR DELETE TO authenticated
+      USING (public.is_super_admin() OR EXISTS (SELECT 1 FROM public.entreprise_members em WHERE em.user_id = auth.uid() AND em.tenant_id = commission_versements.tenant_id AND em.role IN ('admin', 'gerant', 'comptable')));
+  END IF;
+  FOREACH t IN ARRAY op_tables LOOP
+    IF to_regclass('public.' || t) IS NOT NULL THEN
+      EXECUTE format('DROP POLICY IF EXISTS "restrict_readonly_insert" ON public.%I', t);
+      EXECUTE format('CREATE POLICY "restrict_readonly_insert" ON public.%I AS RESTRICTIVE FOR INSERT TO authenticated WITH CHECK (public.current_user_can_write_operational())', t);
+      EXECUTE format('DROP POLICY IF EXISTS "restrict_readonly_update" ON public.%I', t);
+      EXECUTE format('CREATE POLICY "restrict_readonly_update" ON public.%I AS RESTRICTIVE FOR UPDATE TO authenticated USING (public.current_user_can_write_operational()) WITH CHECK (public.current_user_can_write_operational())', t);
+      EXECUTE format('DROP POLICY IF EXISTS "restrict_readonly_delete" ON public.%I', t);
+      EXECUTE format('CREATE POLICY "restrict_readonly_delete" ON public.%I AS RESTRICTIVE FOR DELETE TO authenticated USING (public.current_user_can_write_operational())', t);
+    END IF;
+  END LOOP;
+  FOREACH t IN ARRAY fin_tables LOOP
+    IF to_regclass('public.' || t) IS NOT NULL THEN
+      EXECUTE format('DROP POLICY IF EXISTS "restrict_associe_insert" ON public.%I', t);
+      EXECUTE format('CREATE POLICY "restrict_associe_insert" ON public.%I AS RESTRICTIVE FOR INSERT TO authenticated WITH CHECK (public.current_user_can_write_financial())', t);
+      EXECUTE format('DROP POLICY IF EXISTS "restrict_associe_update" ON public.%I', t);
+      EXECUTE format('CREATE POLICY "restrict_associe_update" ON public.%I AS RESTRICTIVE FOR UPDATE TO authenticated USING (public.current_user_can_write_financial()) WITH CHECK (public.current_user_can_write_financial())', t);
+      EXECUTE format('DROP POLICY IF EXISTS "restrict_associe_delete" ON public.%I', t);
+      EXECUTE format('CREATE POLICY "restrict_associe_delete" ON public.%I AS RESTRICTIVE FOR DELETE TO authenticated USING (public.current_user_can_write_financial())', t);
+    END IF;
+  END LOOP;
+END $$;`;
 
 export function buildMemberPasswordResetSql(email: string, password: string): string {
   const safeEmail = email.trim().toLowerCase().replace(/'/g, "''");
@@ -319,8 +412,12 @@ export async function createOrAttachCompanyMember(
       member_role: params.role,
     });
 
-    // Fallback if live unpatched RPC doesn't yet accept 'collecteur'
-    if (rpcErr && params.role === 'collecteur' && rpcErr.message.toLowerCase().includes('invalide')) {
+    // Fallback if live unpatched RPC doesn't yet accept 'collecteur', 'comptable', or 'associe'
+    if (
+      rpcErr &&
+      (params.role === 'collecteur' || params.role === 'comptable' || params.role === 'associe') &&
+      rpcErr.message.toLowerCase().includes('invalide')
+    ) {
       const retry = await supabase.rpc('add_member_to_entreprise', {
         member_email: cleanEmail,
         target_tenant_id: params.targetTenantId,
@@ -329,11 +426,21 @@ export async function createOrAttachCompanyMember(
       rpcErr = retry.error;
       rpcData = retry.data;
       if (!rpcErr && typeof rpcData === 'string') {
-        await supabase
+        const { error: updErr } = await supabase
           .from('entreprise_members')
-          .update({ role: 'collecteur' })
+          .update({ role: params.role })
           .eq('tenant_id', params.targetTenantId)
           .eq('user_id', rpcData);
+        if (updErr) {
+          return {
+            error: updErr.message,
+            createdNewAccount,
+            alreadyExisted,
+            needsEmailConfirmation,
+            roleConstraintMissing: /role_check|violates check constraint|invalide/i.test(updErr.message),
+            email: cleanEmail,
+          };
+        }
       }
     }
 
@@ -343,6 +450,7 @@ export async function createOrAttachCompanyMember(
         createdNewAccount,
         alreadyExisted,
         needsEmailConfirmation,
+        roleConstraintMissing: /role_check|violates check constraint|rôle invalide/i.test(rpcErr.message),
         email: cleanEmail,
       };
     }
@@ -372,10 +480,13 @@ export async function createOrAttachCompanyMember(
       member_boutique_id: resolvedBoutiqueId,
     });
 
-    // Fallback if live DB has older 2-arg add_team_member or rejects 'collecteur'
+    // Fallback if live DB has older 2-arg add_team_member or rejects newer roles
     if (rpcErr) {
       const lowerErr = rpcErr.message.toLowerCase();
-      if (params.role === 'collecteur' && lowerErr.includes('invalide')) {
+      if (
+        (params.role === 'collecteur' || params.role === 'comptable' || params.role === 'associe') &&
+        lowerErr.includes('invalide')
+      ) {
         const retry = await supabase.rpc('add_team_member', {
           member_email: cleanEmail,
           member_role: 'commercial',
@@ -384,10 +495,20 @@ export async function createOrAttachCompanyMember(
         rpcErr = retry.error;
         rpcData = retry.data;
         if (!rpcErr && typeof rpcData === 'string') {
-          await supabase
+          const { error: updErr } = await supabase
             .from('entreprise_members')
-            .update({ role: 'collecteur' })
+            .update({ role: params.role })
             .eq('user_id', rpcData);
+          if (updErr) {
+            return {
+              error: updErr.message,
+              createdNewAccount,
+              alreadyExisted,
+              needsEmailConfirmation,
+              roleConstraintMissing: /role_check|violates check constraint|invalide/i.test(updErr.message),
+              email: cleanEmail,
+            };
+          }
         }
       } else if (lowerErr.includes('could not find the function') || rpcErr.code === 'PGRST202') {
         const retry = await supabase.rpc('add_team_member', {
@@ -405,6 +526,7 @@ export async function createOrAttachCompanyMember(
         createdNewAccount,
         alreadyExisted,
         needsEmailConfirmation,
+        roleConstraintMissing: /role_check|violates check constraint|rôle invalide/i.test(rpcErr.message),
         email: cleanEmail,
       };
     }

@@ -19,7 +19,11 @@ import {
 import type { Boutique } from '@/types';
 import { notifyCompanyDemoLicencePush } from '@/hooks/usePushNotifications';
 
-export type UserRole = 'admin' | 'gerant' | 'commercial' | 'collecteur' | null;
+export type UserRole = 'admin' | 'gerant' | 'commercial' | 'collecteur' | 'comptable' | 'associe' | null;
+
+export function isMultiBoutiqueRole(role: string | null | undefined): boolean {
+  return role === 'admin' || role === 'comptable' || role === 'associe';
+}
 
 interface AuthContextValue {
   user: User | null;

@@ -50,6 +50,8 @@ function getMonthStart(d: Date): Date {
 export default function Depenses() {
   const { t, lang } = useI18n();
   const { role } = useAuth();
+  const canManageDepenses = !role || role === 'admin' || role === 'gerant' || role === 'commercial' || role === 'comptable';
+  const canDeleteDepense = role === 'admin' || role === 'comptable';
   const [depenses, setDepenses] = useState<Depense[]>([]);
   const [categories, setCategories] = useState<DepenseCategory[]>([]);
   const [modes, setModes] = useState<ModeReglementRow[]>([]);
@@ -413,21 +415,23 @@ export default function Depenses() {
                 </p>
               </div>
             </div>
-            <button
-              onClick={() => { setShowCatManager(!showCatManager); setCatError(null); }}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                showCatManager
-                  ? 'bg-rose-500 text-white'
-                  : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
-              }`}
-            >
-              <Settings2 className="w-3.5 h-3.5" />
-              {lang === 'fr' ? 'Gérer' : 'Manage'}
-            </button>
+            {canManageDepenses && (
+              <button
+                onClick={() => { setShowCatManager(!showCatManager); setCatError(null); }}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                  showCatManager
+                    ? 'bg-rose-500 text-white'
+                    : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                <Settings2 className="w-3.5 h-3.5" />
+                {lang === 'fr' ? 'Gérer' : 'Manage'}
+              </button>
+            )}
           </div>
 
           {/* Category manager panel */}
-          {showCatManager && (
+          {canManageDepenses && showCatManager && (
             <div className="mb-4 p-4 rounded-lg bg-slate-50 border border-slate-100 space-y-3">
               {/* Add new category */}
               <div className="flex gap-2">
@@ -549,7 +553,7 @@ export default function Depenses() {
       )}
 
       {/* Add button */}
-      {!showForm && !loading && (
+      {canManageDepenses && !showForm && !loading && (
         <button
           onClick={openAdd}
           className="w-full py-2.5 rounded-lg border-2 border-dashed border-slate-200 text-sm font-medium text-slate-500 hover:border-rose-300 hover:text-rose-600 transition-colors flex items-center justify-center gap-2"
@@ -559,7 +563,7 @@ export default function Depenses() {
       )}
 
       {/* Form */}
-      {showForm && (
+      {canManageDepenses && showForm && (
         <div className="bg-white rounded-xl border border-rose-100 shadow-sm p-5 space-y-4">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold text-slate-900">
@@ -724,13 +728,15 @@ export default function Depenses() {
                       <span className="text-sm font-semibold text-rose-600 whitespace-nowrap">
                         {formatPrice(Number(d.montant))}
                       </span>
-                      <button
-                        onClick={() => openEdit(d)}
-                        className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
-                      >
-                        <Pencil className="w-3.5 h-3.5" />
-                      </button>
-                      {role === 'admin' && (
+                      {canManageDepenses && (
+                        <button
+                          onClick={() => openEdit(d)}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                      {canDeleteDepense && (
                         <button
                           onClick={() => handleDelete(d.id)}
                           className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"

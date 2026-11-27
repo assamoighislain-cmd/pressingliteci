@@ -696,8 +696,8 @@ export default function EntreprisePage() {
             </p>
             <p className="text-xs text-slate-400">
               {lang === 'fr'
-                ? "Choisissez quels rôles peuvent voir le tableau de bord dans le menu. L'administrateur y a toujours accès."
-                : 'Choose which roles can see the dashboard in the menu. The administrator always has access.'}
+                ? "Choisissez quels rôles opérationnels peuvent voir le tableau de bord dans le menu. L'administrateur, le comptable et les associés y ont toujours accès."
+                : 'Choose which operational roles can see the dashboard in the menu. Administrators, accountants, and partners always have access.'}
             </p>
           </div>
         </div>

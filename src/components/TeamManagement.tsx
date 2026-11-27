@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
-import { useAuth } from '@/lib/auth';
+import { useAuth, isMultiBoutiqueRole } from '@/lib/auth';
 import { useI18n } from '@/lib/i18n';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
-import { createOrAttachCompanyMember, generateTemporaryPassword, adminResetMemberPassword, verifyMemberLogin, buildMemberPasswordResetSql, adminDeleteMemberAccount, buildDeleteMemberSql } from '@/lib/memberCreator';
+import { createOrAttachCompanyMember, generateTemporaryPassword, adminResetMemberPassword, verifyMemberLogin, buildMemberPasswordResetSql, adminDeleteMemberAccount, buildDeleteMemberSql, ROLE_MIGRATION_SQL } from '@/lib/memberCreator';
 import { buildWhatsAppUrl } from '@/types';
-import { UserPlus, Trash2, Shield, Crown, UserCog, Mail, Loader2, X, Check, Pencil, Phone, User, UserCheck, Clock, Store, Truck, RefreshCw, Lock, Eye, EyeOff, Copy, Sparkles, MessageCircle, KeyRound, AlertTriangle } from 'lucide-react';
+import { UserPlus, Trash2, Shield, Crown, UserCog, Mail, Loader2, X, Check, Pencil, Phone, User, UserCheck, Clock, Store, Truck, RefreshCw, Lock, Eye, EyeOff, Copy, Sparkles, MessageCircle, KeyRound, AlertTriangle, Calculator } from 'lucide-react';
 
 interface Member {
   id: string;
@@ -31,6 +31,8 @@ interface JoinRequest {
 const ROLE_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   admin: Crown,
   gerant: Shield,
+  comptable: Calculator,
+  associe: Eye,
   commercial: UserCog,
   collecteur: Truck,
 };
@@ -38,6 +40,8 @@ const ROLE_ICONS: Record<string, React.ComponentType<{ className?: string }>> = 
 const ROLE_COLORS: Record<string, string> = {
   admin: 'bg-amber-100 text-amber-700 border-amber-200',
   gerant: 'bg-sky-100 text-sky-700 border-sky-200',
+  comptable: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+  associe: 'bg-indigo-100 text-indigo-700 border-indigo-200',
   commercial: 'bg-slate-100 text-slate-600 border-slate-200',
   collecteur: 'bg-orange-100 text-orange-700 border-orange-200',
 };
@@ -49,6 +53,8 @@ export default function TeamManagement() {
   const ROLE_LABELS: Record<string, string> = {
     admin: lang === 'fr' ? 'Administrateur' : 'Administrator',
     gerant: lang === 'fr' ? 'Gérant' : 'Manager',
+    comptable: lang === 'fr' ? 'Comptable' : 'Accountant',
+    associe: lang === 'fr' ? 'Associé (Consultation)' : 'Partner (Read-only)',
     commercial: lang === 'fr' ? 'Commercial' : 'Sales',
     collecteur: lang === 'fr' ? 'Collecteur' : 'Collector',
   };
@@ -82,6 +88,8 @@ export default function TeamManagement() {
   const [loginTestResult, setLoginTestResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [roleSqlNeeded, setRoleSqlNeeded] = useState(false);
+  const [copiedRoleSql, setCopiedRoleSql] = useState(false);
   const [success, setSuccess] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'members' | 'requests'>('members');
   const [requests, setRequests] = useState<JoinRequest[]>([]);
@@ -239,13 +247,20 @@ export default function TeamManagement() {
         fullName: inviteFullName,
         contact: inviteContact,
         role: inviteRole,
-        boutiqueId: inviteRole !== 'admin' ? (inviteBoutiqueId || getDefaultBoutiqueId() || null) : null,
+        boutiqueId:
+          inviteRole === 'admin'
+            ? null
+            : isMultiBoutiqueRole(inviteRole)
+              ? (inviteBoutiqueId || null)
+              : (inviteBoutiqueId || getDefaultBoutiqueId() || null),
         targetTenantId: tenantId ?? undefined,
       });
 
       if (res.error) {
         setError(res.error);
+        if (res.roleConstraintMissing) setRoleSqlNeeded(true);
       } else {
+        setRoleSqlNeeded(false);
         if (res.createdNewAccount || res.passwordUpdated) {
           setCreatedCredentials({
             email: res.email,
@@ -306,13 +321,14 @@ export default function TeamManagement() {
 
   async function handleChangeRole(memberId: string, newRole: string) {
     const member = members.find((m) => m.id === memberId);
-    if (newRole !== 'admin' && member && !member.boutique_id) {
+    if (!isMultiBoutiqueRole(newRole) && member && !member.boutique_id) {
       setError(lang === 'fr'
         ? 'Veuillez assigner une boutique à ce membre via le bouton de modification avant de changer son rôle.'
         : 'Please assign a boutique to this member via the edit button before changing their role.');
       return;
     }
     setError(null);
+    setRoleSqlNeeded(false);
     try {
       const updates: Record<string, string | null> = { role: newRole };
       if (newRole === 'admin') updates.boutique_id = null;
@@ -323,6 +339,9 @@ export default function TeamManagement() {
 
       if (error) {
         setError(error.message);
+        if (/role_check|violates check constraint|invalide/i.test(error.message)) {
+          setRoleSqlNeeded(true);
+        }
       } else {
         setMembers((prev) => prev.map((m) => (m.id === memberId ? { ...m, role: newRole, boutique_id: newRole === 'admin' ? null : m.boutique_id } : m)));
       }
@@ -497,7 +516,11 @@ export default function TeamManagement() {
 
       if (error) {
         setError(error.message);
+        if (/role_check|violates check constraint|invalide/i.test(error.message)) {
+          setRoleSqlNeeded(true);
+        }
       } else {
+        setRoleSqlNeeded(false);
         setSuccess(lang === 'fr' ? 'Profil mis à jour' : 'Profile updated');
         setMembers((prev) =>
           prev.map((m) =>
@@ -605,9 +628,33 @@ export default function TeamManagement() {
       )}
 
       {error && (
-        <div className="rounded-lg bg-red-50 border border-red-200 p-3 flex items-start gap-2">
-          <X className="w-4 h-4 text-red-500 mt-0.5 flex-shrink-0" />
-          <p className="text-sm text-red-600">{error}</p>
+        <div className="rounded-lg bg-red-50 border border-red-200 p-3 space-y-2.5">
+          <div className="flex items-start gap-2">
+            <X className="w-4 h-4 text-red-500 mt-0.5 flex-shrink-0" />
+            <p className="text-sm text-red-600">{error}</p>
+          </div>
+          {roleSqlNeeded && (
+            <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 space-y-2">
+              <p className="text-xs font-medium text-amber-900">
+                {lang === 'fr'
+                  ? "Les nouveaux rôles « Comptable » et « Associé » nécessitent d'activer la migration SQL correspondante sur votre base Supabase (SQL Editor) :"
+                  : 'The new "Accountant" and "Partner" roles require running the SQL migration in your Supabase SQL Editor:'}
+              </p>
+              <pre className="text-[11px] font-mono bg-white border border-amber-200 rounded-lg p-2.5 max-h-36 overflow-auto text-slate-800 whitespace-pre-wrap">{ROLE_MIGRATION_SQL}</pre>
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(ROLE_MIGRATION_SQL);
+                  setCopiedRoleSql(true);
+                  setTimeout(() => setCopiedRoleSql(false), 2000);
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 text-white text-xs font-medium hover:bg-amber-700"
+              >
+                {copiedRoleSql ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                {copiedRoleSql ? (lang === 'fr' ? 'SQL copié !' : 'SQL copied!') : (lang === 'fr' ? 'Copier le script SQL' : 'Copy SQL script')}
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -852,7 +899,9 @@ export default function TeamManagement() {
                 onChange={(e) => {
                   const nextRole = e.target.value;
                   setInviteRole(nextRole);
-                  if (nextRole !== 'admin' && !inviteBoutiqueId) {
+                  if (isMultiBoutiqueRole(nextRole)) {
+                    setInviteBoutiqueId('');
+                  } else if (!inviteBoutiqueId) {
                     setInviteBoutiqueId(getDefaultBoutiqueId());
                   }
                 }}
@@ -860,19 +909,28 @@ export default function TeamManagement() {
               >
                 <option value="admin">{ROLE_LABELS.admin}</option>
                 <option value="gerant">{ROLE_LABELS.gerant}</option>
+                <option value="comptable">{ROLE_LABELS.comptable}</option>
+                <option value="associe">{ROLE_LABELS.associe}</option>
                 <option value="commercial">{ROLE_LABELS.commercial}</option>
                 <option value="collecteur">{ROLE_LABELS.collecteur}</option>
               </select>
             </div>
             {inviteRole !== 'admin' && boutiques.length > 0 && (
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">{lang === 'fr' ? 'Boutique assignée' : 'Assigned boutique'} *</label>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  {lang === 'fr' ? 'Boutique assignée' : 'Assigned boutique'}
+                  {!isMultiBoutiqueRole(inviteRole) ? ' *' : (lang === 'fr' ? ' (optionnel)' : ' (optional)')}
+                </label>
                 <select
                   value={inviteBoutiqueId}
                   onChange={(e) => setInviteBoutiqueId(e.target.value)}
                   className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent bg-white"
                 >
-                  <option value="">{lang === 'fr' ? '— Choisir une boutique —' : '— Select a boutique —'}</option>
+                  <option value="">
+                    {isMultiBoutiqueRole(inviteRole)
+                      ? (lang === 'fr' ? 'Toutes les boutiques (accès global)' : 'All boutiques (company-wide)')
+                      : (lang === 'fr' ? '— Choisir une boutique —' : '— Select a boutique —')}
+                  </option>
                   {boutiques.map((b) => (
                     <option key={b.id} value={b.id}>{b.nom}</option>
                   ))}
@@ -892,7 +950,7 @@ export default function TeamManagement() {
                   submitting ||
                   !inviteEmail.trim() ||
                   (inviteMode === 'create' && invitePassword.trim().length < 6) ||
-                  (inviteRole !== 'admin' && boutiques.length > 0 && !inviteBoutiqueId)
+                  (!isMultiBoutiqueRole(inviteRole) && boutiques.length > 0 && !inviteBoutiqueId)
                 }
                 className="flex-1 px-4 py-2.5 rounded-lg bg-sky-500 text-white text-sm font-medium hover:bg-sky-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
@@ -1071,24 +1129,41 @@ export default function TeamManagement() {
               <label className="block text-sm font-medium text-slate-700 mb-1.5">{lang === 'fr' ? 'Rôle' : 'Role'}</label>
               <select
                 value={editRole}
-                onChange={(e) => { setEditRole(e.target.value); setEditBoutiqueId(''); }}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setEditRole(next);
+                  if (isMultiBoutiqueRole(next)) {
+                    setEditBoutiqueId('');
+                  } else if (!editBoutiqueId) {
+                    setEditBoutiqueId(getDefaultBoutiqueId());
+                  }
+                }}
                 className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent bg-white"
               >
                 <option value="admin">{ROLE_LABELS.admin}</option>
                 <option value="gerant">{ROLE_LABELS.gerant}</option>
+                <option value="comptable">{ROLE_LABELS.comptable}</option>
+                <option value="associe">{ROLE_LABELS.associe}</option>
                 <option value="commercial">{ROLE_LABELS.commercial}</option>
                 <option value="collecteur">{ROLE_LABELS.collecteur}</option>
               </select>
             </div>
             {editRole !== 'admin' && (
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">{lang === 'fr' ? 'Boutique assignée' : 'Assigned boutique'} *</label>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                  {lang === 'fr' ? 'Boutique assignée' : 'Assigned boutique'}
+                  {!isMultiBoutiqueRole(editRole) ? ' *' : (lang === 'fr' ? ' (optionnel)' : ' (optional)')}
+                </label>
                 <select
                   value={editBoutiqueId}
                   onChange={(e) => setEditBoutiqueId(e.target.value)}
                   className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent bg-white"
                 >
-                  <option value="">{lang === 'fr' ? '— Choisir une boutique —' : '— Select a boutique —'}</option>
+                  <option value="">
+                    {isMultiBoutiqueRole(editRole)
+                      ? (lang === 'fr' ? 'Toutes les boutiques (accès global)' : 'All boutiques (company-wide)')
+                      : (lang === 'fr' ? '— Choisir une boutique —' : '— Select a boutique —')}
+                  </option>
                   {boutiques.map((b) => (
                     <option key={b.id} value={b.id}>{b.nom}</option>
                   ))}
@@ -1104,7 +1179,7 @@ export default function TeamManagement() {
               </button>
               <button
                 onClick={handleSaveEdit}
-                disabled={submitting || (editRole !== 'admin' && !editBoutiqueId)}
+                disabled={submitting || (!isMultiBoutiqueRole(editRole) && boutiques.length > 0 && !editBoutiqueId)}
                 className="flex-1 px-4 py-2.5 rounded-lg bg-sky-500 text-white text-sm font-medium hover:bg-sky-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
                 {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
@@ -1287,6 +1362,8 @@ export default function TeamManagement() {
                         >
                           <option value="admin">{ROLE_LABELS.admin}</option>
                           <option value="gerant">{ROLE_LABELS.gerant}</option>
+                          <option value="comptable">{ROLE_LABELS.comptable}</option>
+                          <option value="associe">{ROLE_LABELS.associe}</option>
                           <option value="commercial">{ROLE_LABELS.commercial}</option>
                           <option value="collecteur">{ROLE_LABELS.collecteur}</option>
                         </select>
@@ -1402,6 +1479,28 @@ export default function TeamManagement() {
             <div>
               <p className="text-sm font-medium text-slate-900">{ROLE_LABELS.gerant}</p>
               <p className="text-xs text-slate-500">{lang === 'fr' ? 'Toutes les opérations (dépôt, retrait, clients, catalogue) sauf gestion des utilisateurs. Assigné à une seule boutique.' : 'All operations (deposit, pickup, clients, catalog) except user management. Assigned to a single boutique.'}</p>
+            </div>
+          </div>
+          <div className="flex items-start gap-3">
+            <Calculator className="w-4 h-4 text-emerald-600 mt-0.5 flex-shrink-0" />
+            <div>
+              <p className="text-sm font-medium text-slate-900">{ROLE_LABELS.comptable}</p>
+              <p className="text-xs text-slate-500">
+                {lang === 'fr'
+                  ? "Suivi financier complet (toutes les boutiques ou boutique choisie) : tableau de bord, comptabilité, journaux des dépôts et règlements, gestion des dépenses, versements des commissions apporteurs d'affaire, relevés clients et rapports imprimables."
+                  : 'Full financial oversight (all boutiques or selected store): dashboard, accounting, deposit & payment journals, expense management, referral partner commission payouts, client statements, and printable reports.'}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-start gap-3">
+            <Eye className="w-4 h-4 text-indigo-600 mt-0.5 flex-shrink-0" />
+            <div>
+              <p className="text-sm font-medium text-slate-900">{ROLE_LABELS.associe}</p>
+              <p className="text-xs text-slate-500">
+                {lang === 'fr'
+                  ? "Consultation uniquement (lecture seule sur toutes les boutiques) : visualise le tableau de bord, les finances, les journaux, les dépenses, les clients, le planning, le catalogue et les rapports sans pouvoir créer, modifier ou supprimer de données."
+                  : 'Read-only access (across all boutiques): views dashboard, finances, journals, expenses, clients, schedule, catalog, and reports without being able to create, edit, or delete records.'}
+              </p>
             </div>
           </div>
           <div className="flex items-start gap-3">

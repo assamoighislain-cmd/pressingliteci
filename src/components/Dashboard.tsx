@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useI18n } from '@/lib/i18n';
+import { useAuth } from '@/lib/auth';
 import { db } from '@/lib/db';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import {
@@ -206,6 +207,9 @@ function PercentBadge({ current, previous, lang }: { current: number; previous: 
 
 export default function Dashboard({ onNavigate }: DashboardProps) {
   const { t, lang } = useI18n();
+  const { role } = useAuth();
+  const canOperateCounter = !role || role === 'admin' || role === 'gerant' || role === 'commercial';
+  const isReadOnlyRole = role === 'associe' || role === 'comptable';
   const [stats, setStats] = useState<Stats>({ enCours: 0, retires: 0, totalJour: 0, caJour: 0, recettePrevuJour: 0 });
   const [recent, setRecent] = useState<DepotWithClient[]>([]);
   const [modesReglement, setModesReglement] = useState<ModeReglementRow[]>([]);
@@ -436,6 +440,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
   return (
     <div className="space-y-6">
       {/* Quick actions */}
+      {canOperateCounter && (
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <button
           onClick={() => onNavigate('depot')}
@@ -471,6 +476,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
           </div>
         </button>
       </div>
+      )}
 
       {/* Stats cards */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
@@ -818,7 +824,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
                       </span>
                     )}
                   </div>
-                  {c.telephone && (
+                  {c.telephone && !isReadOnlyRole && (
                     <button
                       onClick={() => handleRelance(c.id, c.telephone, 'whatsapp')}
                       className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 text-white text-xs font-bold hover:from-emerald-600 hover:to-teal-600 transition-all shadow-xs flex-shrink-0"
@@ -889,12 +895,14 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
                       {r.note && <span className="text-xs text-slate-400 truncate">{r.note}</span>}
                     </div>
                   </div>
-                  <button
-                    onClick={() => handleDeleteRelance(r.id)}
-                    className="p-1.5 rounded-lg text-slate-300 hover:text-red-500 hover:bg-red-50 transition-colors flex-shrink-0"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
+                  {!isReadOnlyRole && (
+                    <button
+                      onClick={() => handleDeleteRelance(r.id)}
+                      className="p-1.5 rounded-lg text-slate-300 hover:text-red-500 hover:bg-red-50 transition-colors flex-shrink-0"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
@@ -913,12 +921,14 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
         {recent.length === 0 ? (
           <div className="p-8 text-center">
             <p className="text-slate-400 text-sm">{t('dash.noDepots')}</p>
-            <button
-              onClick={() => onNavigate('depot')}
-              className="mt-3 px-4 py-2 rounded-xl bg-sky-500 text-white text-sm font-semibold hover:bg-sky-600 transition-colors"
-            >
-              {lang === 'fr' ? 'Créer le premier dépôt' : 'Create the first deposit'}
-            </button>
+            {canOperateCounter && (
+              <button
+                onClick={() => onNavigate('depot')}
+                className="mt-3 px-4 py-2 rounded-xl bg-sky-500 text-white text-sm font-semibold hover:bg-sky-600 transition-colors"
+              >
+                {lang === 'fr' ? 'Créer le premier dépôt' : 'Create the first deposit'}
+              </button>
+            )}
           </div>
         ) : (
           <div className="divide-y divide-sky-50">

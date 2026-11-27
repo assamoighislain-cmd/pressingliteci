@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { db, rpc } from '@/lib/db';
 import { useI18n } from '@/lib/i18n';
+import { useAuth } from '@/lib/auth';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 
 import { TypeTraitement, ArticleCatalog, ArticleVariant, formatPrice } from '@/types';
@@ -25,6 +26,8 @@ type Tab = 'articles' | 'traitements';
 
 export default function Catalogue() {
   const { t, lang } = useI18n();
+  const { role } = useAuth();
+  const canEdit = !role || role === 'admin' || role === 'gerant' || role === 'commercial';
   const [tab, setTab] = useState<Tab>('articles');
 
   return (
@@ -55,14 +58,14 @@ export default function Catalogue() {
         </button>
       </div>
 
-      {tab === 'articles' ? <ArticlesTab /> : <TraitementsTab />}
+      {tab === 'articles' ? <ArticlesTab canEdit={canEdit} /> : <TraitementsTab canEdit={canEdit} />}
     </div>
   );
 }
 
 // ─── Articles Tab ─────────────────────────────────────────────
 
-function ArticlesTab() {
+function ArticlesTab({ canEdit }: { canEdit: boolean }) {
   const { t, lang } = useI18n();
   const [articles, setArticles] = useState<ArticleCatalog[]>([]);
   const [loading, setLoading] = useState(true);
@@ -240,17 +243,19 @@ function ArticlesTab() {
         >
           <Printer className="w-3.5 h-3.5" /> {lang === 'fr' ? 'Imprimer le catalogue' : 'Print catalog'}
         </button>
-        <ImportExcel
-          config={{
-            entityType: 'articles',
-            columns: [
-              { key: 'designation', label: 'Désignation', required: true, type: 'string', aliases: ['Designation', 'Désignation article', 'Article'] },
-              { key: 'prix_unitaire', label: 'Prix unitaire', required: true, type: 'number', aliases: ['Prix', 'Prix F CFA', 'Prix (F CFA)', 'Prix de vente', 'Montant'] },
-              { key: 'nb_pieces', label: 'Nb pièces', required: false, type: 'number', aliases: ['Nombre de pièce', 'Nombre de pieces', 'Nombre de pièces', 'Pièces'] },
-            ],
-            onImport: handleImportArticles,
-          }}
-        />
+        {canEdit && (
+          <ImportExcel
+            config={{
+              entityType: 'articles',
+              columns: [
+                { key: 'designation', label: 'Désignation', required: true, type: 'string', aliases: ['Designation', 'Désignation article', 'Article'] },
+                { key: 'prix_unitaire', label: 'Prix unitaire', required: true, type: 'number', aliases: ['Prix', 'Prix F CFA', 'Prix (F CFA)', 'Prix de vente', 'Montant'] },
+                { key: 'nb_pieces', label: 'Nb pièces', required: false, type: 'number', aliases: ['Nombre de pièce', 'Nombre de pieces', 'Nombre de pièces', 'Pièces'] },
+              ],
+              onImport: handleImportArticles,
+            }}
+          />
+        )}
       </div>
     <div className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
       {error && (
@@ -357,24 +362,28 @@ function ArticlesTab() {
                       >
                         <Tags className="w-4 h-4" />
                       </button>
-                      <button
-                        onClick={() => startEdit(article)}
-                        className="p-2 rounded-lg text-slate-400 hover:text-sky-500 hover:bg-sky-50 transition-all"
-                      >
-                        <Pencil className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => handleDelete(article.id)}
-                        className="p-2 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      {canEdit && (
+                        <>
+                          <button
+                            onClick={() => startEdit(article)}
+                            className="p-2 rounded-lg text-slate-400 hover:text-sky-500 hover:bg-sky-50 transition-all"
+                          >
+                            <Pencil className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => handleDelete(article.id)}
+                            className="p-2 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </>
+                      )}
                     </div>
                   </>
                 )}
               </div>
               {expandedId === article.id && editingId !== article.id && (
-                <VariantsPanel articleId={article.id} />
+                <VariantsPanel articleId={article.id} canEdit={canEdit} />
               )}
             </div>
           ))}
@@ -382,7 +391,7 @@ function ArticlesTab() {
       )}
 
       {/* Add new article */}
-      {showAdd ? (
+      {canEdit && (showAdd ? (
         <div className="px-5 py-4 border-t border-slate-100 bg-slate-50/50 space-y-3">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             <div>
@@ -439,7 +448,7 @@ function ArticlesTab() {
         >
           <Plus className="w-4 h-4" /> {lang === 'fr' ? 'Ajouter un article' : 'Add an item'}
         </button>
-      )}
+      ))}
     </div>
     <PrintableReport data={reportData} />
     </div>
@@ -448,7 +457,7 @@ function ArticlesTab() {
 
 // ─── Variants Panel (per article) ─────────────────────────────
 
-function VariantsPanel({ articleId }: { articleId: string }) {
+function VariantsPanel({ articleId, canEdit }: { articleId: string; canEdit: boolean }) {
   const { t, lang } = useI18n();
   const [variants, setVariants] = useState<ArticleVariant[]>([]);
   const [loading, setLoading] = useState(true);
@@ -591,24 +600,26 @@ function VariantsPanel({ articleId }: { articleId: string }) {
                       {formatPrice(Number(v.prix_traitement))}
                     </span>
                   </div>
-                  <div className="flex items-center gap-0.5">
-                    <button
-                      onClick={() => {
-                        setEditingId(v.id);
-                        setEditDesignation(v.designation);
-                        setEditPrix(String(v.prix_traitement));
-                      }}
-                      className="p-1.5 rounded-md text-slate-400 hover:text-sky-500 hover:bg-sky-50 transition-all"
-                    >
-                      <Pencil className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(v.id)}
-                      className="p-1.5 rounded-md text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
+                  {canEdit && (
+                    <div className="flex items-center gap-0.5">
+                      <button
+                        onClick={() => {
+                          setEditingId(v.id);
+                          setEditDesignation(v.designation);
+                          setEditPrix(String(v.prix_traitement));
+                        }}
+                        className="p-1.5 rounded-md text-slate-400 hover:text-sky-500 hover:bg-sky-50 transition-all"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => handleDelete(v.id)}
+                        className="p-1.5 rounded-md text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
                 </>
               )}
             </div>
@@ -616,7 +627,7 @@ function VariantsPanel({ articleId }: { articleId: string }) {
         </div>
       )}
 
-      {showAdd ? (
+      {canEdit && (showAdd ? (
         <div className="flex items-center gap-2 rounded-lg bg-sky-50 px-3 py-2.5 border border-sky-100">
           <input
             type="text"
@@ -653,14 +664,14 @@ function VariantsPanel({ articleId }: { articleId: string }) {
         >
           <Plus className="w-3.5 h-3.5" /> {lang === 'fr' ? 'Ajouter une variante' : 'Add a variant'}
         </button>
-      )}
+      ))}
     </div>
   );
 }
 
 // ─── Traitements Tab ──────────────────────────────────────────
 
-function TraitementsTab() {
+function TraitementsTab({ canEdit }: { canEdit: boolean }) {
   const { t, lang } = useI18n();
   const [types, setTypes] = useState<TypeTraitement[]>([]);
   const [loading, setLoading] = useState(true);
@@ -791,19 +802,21 @@ function TraitementsTab() {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
-        <ImportExcel
-          config={{
-            entityType: 'traitements',
-            columns: [
-              { key: 'libelle', label: 'Libellé', required: true, type: 'string' },
-              { key: 'coefficient', label: 'Coefficient', required: true, type: 'number' },
-              { key: 'nb_jours', label: 'Nb jours', required: true, type: 'number' },
-            ],
-            onImport: handleImportTraitements,
-          }}
-        />
-      </div>
+      {canEdit && (
+        <div className="flex justify-end">
+          <ImportExcel
+            config={{
+              entityType: 'traitements',
+              columns: [
+                { key: 'libelle', label: 'Libellé', required: true, type: 'string' },
+                { key: 'coefficient', label: 'Coefficient', required: true, type: 'number' },
+                { key: 'nb_jours', label: 'Nb jours', required: true, type: 'number' },
+              ],
+              onImport: handleImportTraitements,
+            }}
+          />
+        </div>
+      )}
       <div className="rounded-xl bg-sky-50 border border-sky-100 p-4">
         <p className="text-sm text-sky-700">
           {lang === 'fr' ? (
@@ -883,20 +896,22 @@ function TraitementsTab() {
                         </p>
                       </div>
                     </div>
-                    <div className="flex items-center gap-1">
-                      <button
-                        onClick={() => startEdit(t)}
-                        className="p-2 rounded-lg text-slate-400 hover:text-sky-500 hover:bg-sky-50 transition-all"
-                      >
-                        <Pencil className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => handleDelete(t.id)}
-                        className="p-2 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
+                    {canEdit && (
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => startEdit(t)}
+                          className="p-2 rounded-lg text-slate-400 hover:text-sky-500 hover:bg-sky-50 transition-all"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDelete(t.id)}
+                          className="p-2 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -904,7 +919,7 @@ function TraitementsTab() {
           </div>
         )}
 
-        {showAdd ? (
+        {canEdit && (showAdd ? (
           <div className="px-5 py-4 border-t border-slate-100 bg-slate-50/50 space-y-3">
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               <div>
@@ -964,7 +979,7 @@ function TraitementsTab() {
           >
             <Plus className="w-4 h-4" /> {lang === 'fr' ? 'Ajouter un type de traitement' : 'Add a treatment type'}
           </button>
-        )}
+        ))}
       </div>
     </div>
   );

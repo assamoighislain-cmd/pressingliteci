@@ -8,7 +8,7 @@ import { usePushNotifications, playApprovalSound, notifyCompanyDemoLicencePush }
 import { notifyRealtimeMutation } from '@/lib/realtimeSync';
 import { buildWhatsAppUrl } from '@/types';
 import { createOrAttachCompanyMember, generateTemporaryPassword, adminResetMemberPassword, verifyMemberLogin, buildMemberPasswordResetSql, adminDeleteMemberAccount } from '@/lib/memberCreator';
-import { Building2, UserPlus, Crown, Loader2, X, Check, Shield, Mail, Users, ChevronDown, ChevronRight, Trash2, UserCog, Pencil, Phone, User, KeyRound, Calendar, Plus, Ban, Copy, TrendingUp, AlertTriangle, Clock, BarChart3, UserCheck, Search, Filter, ArrowUpDown, MapPin, Navigation, Activity, ShoppingBag, Package, Store, DollarSign, ArrowDownUp, MessageCircle, Send, ExternalLink, BellRing, BellOff, Volume2, Truck, ArrowRightLeft, Lock, Eye, EyeOff, Sparkles } from 'lucide-react';
+import { Building2, UserPlus, Crown, Loader2, X, Check, Shield, Mail, Users, ChevronDown, ChevronRight, Trash2, UserCog, Pencil, Phone, User, KeyRound, Calendar, Plus, Ban, Copy, TrendingUp, AlertTriangle, Clock, BarChart3, UserCheck, Search, Filter, ArrowUpDown, MapPin, Navigation, Activity, ShoppingBag, Package, Store, DollarSign, ArrowDownUp, MessageCircle, Send, ExternalLink, BellRing, BellOff, Volume2, Truck, ArrowRightLeft, Lock, Eye, EyeOff, Sparkles, Calculator } from 'lucide-react';
 
 type WhatsAppTemplateType = 'approval' | 'licence' | 'reminder' | 'custom';
 
@@ -81,6 +81,8 @@ interface JoinRequest {
 const ROLE_COLORS: Record<string, string> = {
   admin: 'bg-amber-100 text-amber-700 border-amber-200',
   gerant: 'bg-sky-100 text-sky-700 border-sky-200',
+  comptable: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+  associe: 'bg-indigo-100 text-indigo-700 border-indigo-200',
   commercial: 'bg-slate-100 text-slate-600 border-slate-200',
   collecteur: 'bg-orange-100 text-orange-700 border-orange-200',
 };
@@ -88,6 +90,8 @@ const ROLE_COLORS: Record<string, string> = {
 const ROLE_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   admin: Crown,
   gerant: Shield,
+  comptable: Calculator,
+  associe: Eye,
   commercial: UserCog,
   collecteur: Truck,
 };
@@ -101,6 +105,8 @@ export default function SuperAdminPage() {
   const ROLE_LABELS: Record<string, string> = {
     admin: lang === 'fr' ? 'Administrateur' : 'Administrator',
     gerant: lang === 'fr' ? 'Gérant' : 'Manager',
+    comptable: lang === 'fr' ? 'Comptable' : 'Accountant',
+    associe: lang === 'fr' ? 'Associé (Consultation)' : 'Partner (Read-only)',
     commercial: lang === 'fr' ? 'Commercial' : 'Sales',
     collecteur: lang === 'fr' ? 'Collecteur' : 'Collector',
   };
@@ -1939,6 +1945,8 @@ export default function SuperAdminPage() {
               >
                 <option value="admin">{ROLE_LABELS.admin}</option>
                 <option value="gerant">{ROLE_LABELS.gerant}</option>
+                <option value="comptable">{ROLE_LABELS.comptable}</option>
+                <option value="associe">{ROLE_LABELS.associe}</option>
                 <option value="commercial">{ROLE_LABELS.commercial}</option>
                 <option value="collecteur">{ROLE_LABELS.collecteur}</option>
               </select>
@@ -2041,6 +2049,8 @@ export default function SuperAdminPage() {
               >
                 <option value="admin">{ROLE_LABELS.admin}</option>
                 <option value="gerant">{ROLE_LABELS.gerant}</option>
+                <option value="comptable">{ROLE_LABELS.comptable}</option>
+                <option value="associe">{ROLE_LABELS.associe}</option>
                 <option value="commercial">{ROLE_LABELS.commercial}</option>
                 <option value="collecteur">{ROLE_LABELS.collecteur}</option>
               </select>
@@ -3100,6 +3110,8 @@ export default function SuperAdminPage() {
                               >
                                 <option value="admin">{ROLE_LABELS.admin}</option>
                                 <option value="gerant">{ROLE_LABELS.gerant}</option>
+                                <option value="comptable">{ROLE_LABELS.comptable}</option>
+                                <option value="associe">{ROLE_LABELS.associe}</option>
                                 <option value="commercial">{ROLE_LABELS.commercial}</option>
                                 <option value="collecteur">{ROLE_LABELS.collecteur}</option>
                               </select>

@@ -307,14 +307,14 @@ CREATE POLICY "select_tenant_commission_versements" ON public.commission_verseme
   USING (public.is_super_admin() OR EXISTS (SELECT 1 FROM public.entreprise_members em WHERE em.user_id = auth.uid() AND em.tenant_id = commission_versements.tenant_id));
 DROP POLICY IF EXISTS "insert_tenant_commission_versements" ON public.commission_versements;
 CREATE POLICY "insert_tenant_commission_versements" ON public.commission_versements FOR INSERT TO authenticated
-  WITH CHECK (public.is_super_admin() OR EXISTS (SELECT 1 FROM public.entreprise_members em WHERE em.user_id = auth.uid() AND em.tenant_id = commission_versements.tenant_id AND em.role IN ('admin', 'gerant')));
+  WITH CHECK (public.is_super_admin() OR EXISTS (SELECT 1 FROM public.entreprise_members em WHERE em.user_id = auth.uid() AND em.tenant_id = commission_versements.tenant_id AND em.role IN ('admin', 'gerant', 'comptable')));
 DROP POLICY IF EXISTS "update_tenant_commission_versements" ON public.commission_versements;
 CREATE POLICY "update_tenant_commission_versements" ON public.commission_versements FOR UPDATE TO authenticated
-  USING (public.is_super_admin() OR EXISTS (SELECT 1 FROM public.entreprise_members em WHERE em.user_id = auth.uid() AND em.tenant_id = commission_versements.tenant_id AND em.role IN ('admin', 'gerant')))
-  WITH CHECK (public.is_super_admin() OR EXISTS (SELECT 1 FROM public.entreprise_members em WHERE em.user_id = auth.uid() AND em.tenant_id = commission_versements.tenant_id AND em.role IN ('admin', 'gerant')));
+  USING (public.is_super_admin() OR EXISTS (SELECT 1 FROM public.entreprise_members em WHERE em.user_id = auth.uid() AND em.tenant_id = commission_versements.tenant_id AND em.role IN ('admin', 'gerant', 'comptable')))
+  WITH CHECK (public.is_super_admin() OR EXISTS (SELECT 1 FROM public.entreprise_members em WHERE em.user_id = auth.uid() AND em.tenant_id = commission_versements.tenant_id AND em.role IN ('admin', 'gerant', 'comptable')));
 DROP POLICY IF EXISTS "delete_tenant_commission_versements" ON public.commission_versements;
 CREATE POLICY "delete_tenant_commission_versements" ON public.commission_versements FOR DELETE TO authenticated
-  USING (public.is_super_admin() OR EXISTS (SELECT 1 FROM public.entreprise_members em WHERE em.user_id = auth.uid() AND em.tenant_id = commission_versements.tenant_id AND em.role IN ('admin', 'gerant')));
+  USING (public.is_super_admin() OR EXISTS (SELECT 1 FROM public.entreprise_members em WHERE em.user_id = auth.uid() AND em.tenant_id = commission_versements.tenant_id AND em.role IN ('admin', 'gerant', 'comptable')));
 
 ${COMMERCIAL_CLIENTS_PORTAL_SQL}`;
 
@@ -394,6 +394,7 @@ export default function CommerciauxPage() {
   const { role } = useAuth();
   const { lang } = useI18n();
   const canManage = !role || role === 'admin' || role === 'gerant';
+  const canRecordVersement = canManage || role === 'comptable';
 
   const [tab, setTab] = useState<TabId>('overview');
   const [loading, setLoading] = useState(true);
@@ -1110,7 +1111,7 @@ export default function CommerciauxPage() {
                 {lang === 'fr' ? 'Lier des clients' : 'Link clients'}
               </button>
             )}
-            {canManage && commerciaux.length > 0 && (
+            {canRecordVersement && commerciaux.length > 0 && (
               <button
                 type="button"
                 onClick={() => openPayoutModal()}
@@ -1590,16 +1591,18 @@ export default function CommerciauxPage() {
                                     <Users className="w-4 h-4" />
                                   </button>
                                 )}
+                                {canRecordVersement && (
+                                  <button
+                                    type="button"
+                                    onClick={() => openPayoutModal(c.id)}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-semibold hover:bg-emerald-100 transition-colors whitespace-nowrap"
+                                  >
+                                    <Wallet className="w-3.5 h-3.5" />
+                                    {lang === 'fr' ? 'Verser' : 'Pay'}
+                                  </button>
+                                )}
                                 {canManage && (
                                   <>
-                                    <button
-                                      type="button"
-                                      onClick={() => openPayoutModal(c.id)}
-                                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-semibold hover:bg-emerald-100 transition-colors whitespace-nowrap"
-                                    >
-                                      <Wallet className="w-3.5 h-3.5" />
-                                      {lang === 'fr' ? 'Verser' : 'Pay'}
-                                    </button>
                                     <button
                                       type="button"
                                       onClick={() => openEditCommercial(c)}
@@ -1773,7 +1776,7 @@ export default function CommerciauxPage() {
                   <p className="text-sm font-medium text-slate-700">
                     {lang === 'fr' ? 'Aucun versement de commission enregistré.' : 'No commission payouts recorded yet.'}
                   </p>
-                  {canManage && commerciaux.length > 0 && (
+                  {canRecordVersement && commerciaux.length > 0 && (
                     <button
                       type="button"
                       onClick={() => openPayoutModal(selectedCommercialFilter !== 'all' ? selectedCommercialFilter : undefined)}
@@ -1794,7 +1797,7 @@ export default function CommerciauxPage() {
                         <th className="py-3 px-4">{lang === 'fr' ? 'Période couverte' : 'Period'}</th>
                         <th className="py-3 px-4">{lang === 'fr' ? 'Mode & Référence' : 'Method & Ref'}</th>
                         <th className="py-3 px-4 text-right">{lang === 'fr' ? 'Montant versé' : 'Amount paid'}</th>
-                        {canManage && <th className="py-3 px-4 text-right">{lang === 'fr' ? 'Action' : 'Action'}</th>}
+                        {canRecordVersement && <th className="py-3 px-4 text-right">{lang === 'fr' ? 'Action' : 'Action'}</th>}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
@@ -1822,7 +1825,7 @@ export default function CommerciauxPage() {
                             <td className="py-3 px-4 text-right font-bold text-emerald-700 tabular-nums whitespace-nowrap">
                               {formatPrice(v.montant)}
                             </td>
-                            {canManage && (
+                            {canRecordVersement && (
                               <td className="py-3 px-4 text-right">
                                 <button
                                   type="button"
@@ -1852,7 +1855,7 @@ export default function CommerciauxPage() {
                         <td className="py-3 px-4 text-right tabular-nums text-emerald-700 whitespace-nowrap">
                           {formatPrice(filteredVersements.reduce((sum, v) => sum + Number(v.montant ?? 0), 0))}
                         </td>
-                        {canManage && <td />}
+                        {canRecordVersement && <td />}
                       </tr>
                     </tfoot>
                   </table>

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import Layout, { View } from '@/components/Layout';
+import Layout, { View, isViewAllowedForRole } from '@/components/Layout';
 import Dashboard from '@/components/Dashboard';
 import DepotForm from '@/components/DepotForm';
 import RetraitView from '@/components/RetraitView';
@@ -93,7 +93,7 @@ function updateMetaTags(entreprise: { nom?: string; logo_url?: string | null } |
 }
 
 function WorkspaceApp() {
-  const { user, loading, membershipLoading, tenantId, isSuperAdmin, signOut, currentBoutique, refreshMembership, requestJoinEntreprise } = useAuth();
+  const { user, loading, membershipLoading, role, tenantId, isSuperAdmin, signOut, currentBoutique, refreshMembership, requestJoinEntreprise } = useAuth();
   const { isOnline } = useOfflineStatus();
   const { t, lang } = useI18n();
   const [view, setViewRaw] = useState<View>(() => getInitialViewFromShortcut());
@@ -106,12 +106,26 @@ function WorkspaceApp() {
     tenantId ? readCachedLicence(tenantId) : undefined,
   );
   const [entrepriseStatut, setEntrepriseStatut] = useState<string | null | undefined>(undefined);
+  const [dashboardVisibleRoles, setDashboardVisibleRoles] = useState<string[] | null>(null);
 
   useEffect(() => {
     if (isSuperAdmin && (view === 'dashboard' || window.location.hash === '#/super-admin')) {
       setView('superadmin');
     }
   }, [isSuperAdmin]);
+
+  useEffect(() => {
+    if (!role || isSuperAdmin) return;
+    if (!isViewAllowedForRole(view, role, isSuperAdmin, dashboardVisibleRoles)) {
+      const fallback: View =
+        role === 'collecteur'
+          ? (dashboardVisibleRoles?.includes('collecteur') ? 'dashboard' : 'collecte')
+          : isViewAllowedForRole('dashboard', role, isSuperAdmin, dashboardVisibleRoles)
+            ? 'dashboard'
+            : 'depot';
+      setViewRaw(fallback);
+    }
+  }, [role, isSuperAdmin, view, dashboardVisibleRoles]);
 
   useEffect(() => {
     const onHashChange = () => {
@@ -129,6 +143,7 @@ function WorkspaceApp() {
       .then((ent) => {
         updateMetaTags(ent);
         if (ent?.statut) setEntrepriseStatut(ent.statut);
+        setDashboardVisibleRoles(ent?.dashboard_visible_roles ?? null);
       })
       .catch(() => {});
 
@@ -161,11 +176,13 @@ function WorkspaceApp() {
         .then((ent) => {
           updateMetaTags(ent);
           setEntrepriseStatut(ent?.statut ?? null);
+          setDashboardVisibleRoles(ent?.dashboard_visible_roles ?? null);
         })
         .catch(() => {});
     } else {
       updateMetaTags(null);
       setEntrepriseStatut(undefined);
+      setDashboardVisibleRoles(null);
     }
   }, [user, tenantId, isSuperAdmin]);
 
@@ -355,7 +372,7 @@ function AwaitingTeamScreen({
   const [companyName, setCompanyName] = useState(defaultTargetCompany);
   const [fullName, setFullName] = useState(defaultFullName);
   const [contact, setContact] = useState(defaultContact);
-  const [requestedRole, setRequestedRole] = useState<'commercial' | 'collecteur' | 'gerant'>('commercial');
+  const [requestedRole, setRequestedRole] = useState<'commercial' | 'collecteur' | 'gerant' | 'comptable' | 'associe'>('commercial');
   const [submitting, setSubmitting] = useState(false);
   const [checking, setChecking] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -545,12 +562,14 @@ function AwaitingTeamScreen({
               </label>
               <select
                 value={requestedRole}
-                onChange={(e) => setRequestedRole(e.target.value as 'commercial' | 'collecteur' | 'gerant')}
+                onChange={(e) => setRequestedRole(e.target.value as 'commercial' | 'collecteur' | 'gerant' | 'comptable' | 'associe')}
                 className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent"
               >
                 <option value="commercial">{lang === 'fr' ? 'Commercial / Caissier' : 'Sales / Cashier'}</option>
                 <option value="collecteur">{lang === 'fr' ? 'Collecteur / Livreur' : 'Collector / Delivery'}</option>
                 <option value="gerant">{lang === 'fr' ? 'Gérant' : 'Manager'}</option>
+                <option value="comptable">{lang === 'fr' ? 'Comptable' : 'Accountant'}</option>
+                <option value="associe">{lang === 'fr' ? 'Associé (Consultation)' : 'Partner (Read-only)'}</option>
               </select>
             </div>
 

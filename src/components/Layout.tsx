@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { db } from '@/lib/db';
 import { supabase } from '@/lib/supabase';
 import { useI18n, type Lang } from '@/lib/i18n';
-import { Package, ArrowDownToLine, ArrowUpFromLine, LayoutDashboard, BookOpen, Receipt, Building2, CalendarDays, Menu, X, Phone, Users, Download, History, Wallet, LogOut, UserCog, ShieldCheck, Calculator, Receipt as ReceiptIcon, Presentation as PresentationIcon, CreditCard, KeyRound, Lock, Loader2, Globe, Store, ChevronDown, Check, Truck, BellRing, ShoppingBag, WifiOff, Wifi, Share, Smartphone, Monitor, CheckCircle2, Ticket, PackageOpen, PackageSearch, Plus, RefreshCw, AlertTriangle, Trash2, Database, Clock, ClipboardList, Briefcase } from 'lucide-react';
+import { Package, ArrowDownToLine, ArrowUpFromLine, LayoutDashboard, BookOpen, Receipt, Building2, CalendarDays, Menu, X, Phone, Users, Download, History, Wallet, LogOut, UserCog, ShieldCheck, Calculator, Receipt as ReceiptIcon, Presentation as PresentationIcon, CreditCard, KeyRound, Lock, Loader2, Globe, Store, ChevronDown, Check, Truck, BellRing, ShoppingBag, WifiOff, Wifi, Share, Smartphone, Monitor, CheckCircle2, Ticket, PackageOpen, PackageSearch, Plus, RefreshCw, AlertTriangle, Trash2, Database, Clock, ClipboardList, Briefcase, Eye } from 'lucide-react';
 import { Entreprise } from '@/types';
 import { usePwaInstall } from '@/hooks/usePwaInstall';
 import { usePushNotifications, notifyCompanyDemoLicencePush, playApprovalSound } from '@/hooks/usePushNotifications';
@@ -10,7 +10,7 @@ import { useOfflineStatus } from '@/hooks/useOfflineStatus';
 import { enableAutoSync } from '@/lib/offlineQueue';
 import { getLastCacheRefreshAt } from '@/lib/readCache';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
-import { useAuth } from '@/lib/auth';
+import { useAuth, type UserRole } from '@/lib/auth';
 
 function playPickupSound() {
   try {
@@ -61,6 +61,75 @@ function playOrderSound() {
 }
 
 export type View = 'dashboard' | 'depot' | 'retrait' | 'planning' | 'historique' | 'journal_depots' | 'journal' | 'comptabilite' | 'depenses' | 'commerciaux' | 'clients' | 'catalogue' | 'releve' | 'entreprise' | 'utilisateurs' | 'superadmin' | 'presentation' | 'modes_reglement' | 'boutiques' | 'commande' | 'collecte' | 'livraison' | 'bons_reduction' | 'consommables' | 'inventaire';
+
+const COMPTABLE_ALLOWED_VIEWS: ReadonlySet<View> = new Set([
+  'dashboard',
+  'historique',
+  'journal_depots',
+  'journal',
+  'comptabilite',
+  'depenses',
+  'commerciaux',
+  'releve',
+  'clients',
+  'inventaire',
+  'consommables',
+  'presentation',
+]);
+
+const ASSOCIE_ALLOWED_VIEWS: ReadonlySet<View> = new Set([
+  'dashboard',
+  'planning',
+  'historique',
+  'journal_depots',
+  'journal',
+  'comptabilite',
+  'depenses',
+  'commerciaux',
+  'releve',
+  'clients',
+  'catalogue',
+  'inventaire',
+  'consommables',
+  'boutiques',
+  'presentation',
+]);
+
+export function isViewAllowedForRole(
+  view: View,
+  role: UserRole,
+  isSuperAdmin: boolean,
+  dashboardVisibleRoles?: string[] | null,
+): boolean {
+  if (view === 'superadmin') return isSuperAdmin;
+  if (isSuperAdmin) return true;
+  if (!role) return true;
+
+  if (role === 'comptable') {
+    return COMPTABLE_ALLOWED_VIEWS.has(view);
+  }
+  if (role === 'associe') {
+    return ASSOCIE_ALLOWED_VIEWS.has(view);
+  }
+  if (role === 'collecteur') {
+    if (view === 'dashboard') {
+      return Boolean(dashboardVisibleRoles?.includes('collecteur'));
+    }
+    return view === 'collecte' || view === 'livraison';
+  }
+
+  if (view === 'boutiques' && role !== 'admin') return false;
+  if (view === 'utilisateurs' && role !== 'admin') return false;
+  if (view === 'bons_reduction' && role !== 'admin') return false;
+  if (view === 'commerciaux' && role !== 'admin' && role !== 'gerant') return false;
+  if (view === 'entreprise' && role !== 'admin' && role !== 'gerant') return false;
+  if (view === 'consommables' && role !== 'admin' && role !== 'gerant' && role !== 'commercial') return false;
+  if (view === 'collecte' && role !== 'admin' && role !== 'gerant' && role !== 'commercial') return false;
+  if (view === 'livraison' && role !== 'admin' && role !== 'gerant' && role !== 'commercial') return false;
+  if (view === 'dashboard' && role !== 'admin' && !dashboardVisibleRoles?.includes(role)) return false;
+
+  return true;
+}
 
 interface LayoutProps {
   currentView: View;
@@ -355,21 +424,9 @@ export default function Layout({ currentView, onNavigate, children }: LayoutProp
     setMobileOpen(false);
   }
 
-  const visibleNavItems = NAV_ITEMS.filter((item) => {
-    if (item.id === 'boutiques' && role !== 'admin') return false;
-    if (item.id === 'utilisateurs' && role !== 'admin') return false;
-    if (item.id === 'bons_reduction' && role !== 'admin') return false;
-    if (item.id === 'commerciaux' && role && role !== 'admin' && role !== 'gerant') return false;
-    if (item.id === 'entreprise' && role && role !== 'admin' && role !== 'gerant') return false;
-    if (item.id === 'consommables' && role && role !== 'admin' && role !== 'gerant' && role !== 'commercial') return false;
-    if (item.id === 'superadmin' && !isSuperAdmin) return false;
-    if (item.id === 'commande' && role === 'collecteur') return false;
-    if (item.id === 'collecte' && role && role !== 'collecteur' && role !== 'admin' && role !== 'gerant' && role !== 'commercial') return false;
-    if (item.id === 'livraison' && role && role !== 'collecteur' && role !== 'admin' && role !== 'gerant' && role !== 'commercial') return false;
-    if (item.id === 'dashboard' && role && role !== 'admin' && !entreprise?.dashboard_visible_roles?.includes(role)) return false;
-    if (role === 'collecteur' && !['commande', 'collecte', 'livraison', 'dashboard'].includes(item.id) && item.id !== 'superadmin') return false;
-    return true;
-  });
+  const visibleNavItems = NAV_ITEMS.filter((item) =>
+    isViewAllowedForRole(item.id, role, isSuperAdmin, entreprise?.dashboard_visible_roles),
+  );
 
   const activeNavItem = NAV_ITEMS.find((i) => i.id === currentView);
   const canQuickDepot = visibleNavItems.some((i) => i.id === 'depot') && currentView !== 'depot';
@@ -398,9 +455,16 @@ export default function Layout({ currentView, onNavigate, children }: LayoutProp
               </span>
             ) : role && (
               <span className="inline-flex items-center gap-1 mt-1.5 px-2 py-0.5 rounded-md text-[0.65rem] font-bold bg-white/20 text-white border border-white/25">
-                {role === 'admin' ? <ShieldCheck className="w-3 h-3" /> : role === 'gerant' ? <UserCog className="w-3 h-3" /> : role === 'collecteur' ? <Truck className="w-3 h-3" /> : <Users className="w-3 h-3" />}
+                {role === 'admin' ? <ShieldCheck className="w-3 h-3" /> :
+                 role === 'gerant' ? <UserCog className="w-3 h-3" /> :
+                 role === 'comptable' ? <Calculator className="w-3 h-3" /> :
+                 role === 'associe' ? <Eye className="w-3 h-3" /> :
+                 role === 'collecteur' ? <Truck className="w-3 h-3" /> :
+                 <Users className="w-3 h-3" />}
                 {role === 'admin' ? (lang === 'fr' ? 'Administrateur' : 'Administrator') :
                  role === 'gerant' ? (lang === 'fr' ? 'Gérant' : 'Manager') :
+                 role === 'comptable' ? (lang === 'fr' ? 'Comptable' : 'Accountant') :
+                 role === 'associe' ? (lang === 'fr' ? 'Associé · Consultation' : 'Partner · Read-only') :
                  role === 'collecteur' ? (lang === 'fr' ? 'Collecteur' : 'Collector') :
                  (lang === 'fr' ? 'Commercial' : 'Sales')}
               </span>
@@ -763,6 +827,12 @@ export default function Layout({ currentView, onNavigate, children }: LayoutProp
             </div>
           </div>
           <div className="flex items-center gap-2.5">
+            {role === 'associe' && !isSuperAdmin && (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-50 text-indigo-700 border border-indigo-200/80 text-xs font-semibold">
+                <Eye className="w-3.5 h-3.5 text-indigo-600" />
+                {lang === 'fr' ? 'Mode consultation' : 'Read-only mode'}
+              </span>
+            )}
             {canQuickDepot && (
               <button
                 onClick={() => handleNavigate('depot')}

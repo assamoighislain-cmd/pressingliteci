@@ -18,7 +18,8 @@ interface DateGroup {
 
 export default function Planning() {
   const { t, lang } = useI18n();
-  const { boutiques, currentBoutique } = useAuth();
+  const { role, boutiques, currentBoutique } = useAuth();
+  const canChangeStatut = !role || role === 'admin' || role === 'gerant' || role === 'commercial';
   const [depots, setDepots] = useState<DepotWithClient[]>([]);
   const [typesTraitement, setTypesTraitement] = useState<TypeTraitement[]>([]);
   const [modesReglement, setModesReglement] = useState<ModeReglementRow[]>([]);
@@ -390,7 +391,7 @@ export default function Planning() {
                                 )}
                               </span>
 
-                              {isUpdating ? (
+                              {canChangeStatut && (isUpdating ? (
                                 <div className="w-8 h-8 flex items-center justify-center">
                                   <div className="w-4 h-4 border-2 border-slate-200 border-t-sky-500 rounded-full animate-spin" />
                                 </div>
@@ -410,7 +411,7 @@ export default function Planning() {
                                 >
                                   <RotateCcw className="w-4 h-4" />
                                 </button>
-                              )}
+                              ))}
                             </div>
                           </div>
 

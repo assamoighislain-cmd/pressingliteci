@@ -403,7 +403,7 @@ export default function Historique() {
     { id: 'custom', label: t('hist.custom') },
   ];
 
-  const filterButtons = role === 'admin'
+  const filterButtons = role === 'admin' || role === 'comptable' || role === 'associe'
     ? allFilters
     : (() => {
         const allowed = role === 'commercial'

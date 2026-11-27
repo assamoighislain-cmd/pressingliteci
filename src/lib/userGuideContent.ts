@@ -122,7 +122,7 @@ export function getPresentationModules(lang: Lang): PresentationModule[] {
           'Operate multiple storefronts with independent receipt headers, starting counters, strict role-based permissions, and company-level data isolation.',
         highlights: [
           'Per-store receipt header, geolocation, and independent annual numbering (D-001-2026)',
-          'Four operational roles: Admin, Manager, Sales/Cashier, and Collector/Driver',
+          'Six roles: Admin, Manager, Sales/Cashier, Collector/Driver, Accountant, and Associate (Read-only)',
           'Row-Level Security (RLS) isolation per company with license governance',
         ],
       },
@@ -224,7 +224,7 @@ export function getPresentationModules(lang: Lang): PresentationModule[] {
         'Pilotez plusieurs agences depuis un même compte avec en-têtes de reçus propres, compteurs indépendants, droits par rôle et isolation complète des données.',
       highlights: [
         'En-tête de reçu, géolocalisation et numérotation annuelle (D-001-2026) propres à chaque boutique',
-        'Quatre rôles opérationnels : Administrateur, Gérant, Commercial/Caissier, Collecteur/Livreur',
+        'Six rôles dédiés : Administrateur, Gérant, Commercial/Caissier, Collecteur/Livreur, Comptable et Associé (Consultation)',
         'Sécurité par entreprise (RLS Supabase) et suivi de licence intégré',
       ],
     },
@@ -328,6 +328,18 @@ export function getRoleMatrix(lang: Lang): RolePermissionRow[] {
         keyActions:
           'Geolocated pickup and delivery runs, map routing, order collection confirmation, and customer handover updates.',
       },
+      {
+        role: 'Accountant',
+        scope: 'All stores (or assigned store)',
+        keyActions:
+          'Dashboard, deposit & payment journals, accounting reports, client statements, full expense & category management, referral partner commission payouts, and read-only view of clients, workshop inventory, and consumables.',
+      },
+      {
+        role: 'Associate (Read-only)',
+        scope: 'All stores (or assigned store)',
+        keyActions:
+          'Strictly read-only access and printing across Dashboard, schedule, history, journals, accounting, expenses, referral partners, statements, clients, catalog, inventory, consumables, and stores — no create, edit, or delete actions.',
+      },
     ];
   }
 
@@ -355,6 +367,18 @@ export function getRoleMatrix(lang: Lang): RolePermissionRow[] {
       scope: 'Tournées terrain',
       keyActions:
         'Consultation des demandes de collecte et de livraison, localisation sur carte Google Maps, confirmation de collecte et suivi des livraisons.',
+    },
+    {
+      role: 'Comptable',
+      scope: 'Toutes les boutiques (ou 1 boutique)',
+      keyActions:
+        "Tableau de bord, comptabilité, journaux des dépôts et règlements, relevés clients, gestion complète des dépenses et catégories, versements de commissions aux apporteurs d'affaire, et consultation des clients, de l'inventaire et des consommables.",
+    },
+    {
+      role: 'Associé (Consultation)',
+      scope: 'Toutes les boutiques (ou 1 boutique)',
+      keyActions:
+        "Consultation et impression uniquement : tableau de bord, planning, historique, journaux, comptabilité, dépenses, apporteurs d'affaire, relevés, clients, catalogue, inventaire, consommables et boutiques — aucune création, modification ou suppression.",
     },
   ];
 }
@@ -628,7 +652,7 @@ export function getUserGuideChapters(lang: Lang): GuideChapter[] {
           {
             heading: 'Managing users & accountability',
             steps: [
-              'Open "Team" (Admin only) to create team members, assign their role (Admin, Manager, Sales/Cashier, Collector), and assign them to a specific store.',
+              'Open "Team" (Admin only) to create team members, assign their role (Admin, Manager, Sales/Cashier, Collector, Accountant, or Associate read-only), and assign them to a specific store (or all stores for Accountant and Associate).',
               'Approve or reject pending join requests directly from the Team page.',
               'The logged-in user\'s full name is printed automatically in the footer of every receipt for clear cash-desk traceability.',
             ],
@@ -909,7 +933,7 @@ export function getUserGuideChapters(lang: Lang): GuideChapter[] {
         {
           heading: 'Utilisateurs, rôles et traçabilité',
           steps: [
-            'Ouvrez « Équipe » (réservé à l\'Administrateur) pour créer les comptes de votre équipe, définir leur rôle et les affecter à une boutique.',
+            'Ouvrez « Équipe » (réservé à l\'Administrateur) pour créer les comptes de votre équipe, définir leur rôle (Administrateur, Gérant, Commercial/Caissier, Collecteur, Comptable ou Associé en consultation) et les affecter à une boutique (ou à toutes les boutiques pour le Comptable et l\'Associé).',
             'Validez ou refusez en un clic les demandes d\'adhésion reçues.',
             'Le nom complet de l\'utilisateur connecté s\'affiche automatiquement en pied de chaque reçu imprimé pour une traçabilité claire de la caisse.',
           ],

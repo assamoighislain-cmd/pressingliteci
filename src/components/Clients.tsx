@@ -51,6 +51,7 @@ export default function Clients() {
   const { role, currentBoutique } = useAuth();
   const isAdmin = !role || role === 'admin';
   const canNormalizeCodes = !role || role === 'admin' || role === 'gerant';
+  const canEditClients = !role || role === 'admin' || role === 'gerant' || role === 'commercial';
   const [clients, setClients] = useState<ClientWithLastDepot[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -437,28 +438,32 @@ export default function Clients() {
             className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent"
           />
         </div>
-        <button
-          onClick={() => setShowAdd(true)}
-          className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-sky-500 text-white text-sm font-medium hover:bg-sky-600 transition-colors flex-shrink-0"
-        >
-          <UserPlus className="w-4 h-4" /> <span className="hidden sm:inline">{lang === 'fr' ? 'Nouveau' : 'New'}</span>
-        </button>
-        <ImportExcel
-          config={{
-            entityType: 'clients',
-            columns: [
-              { key: 'nom', label: 'Nom', required: true, type: 'string' },
-              { key: 'telephone', label: 'Téléphone', required: false, type: 'string' },
-              { key: 'taux_remise', label: 'Taux remise %', required: false, type: 'number' },
-              { key: 'condition_remise', label: 'Condition remise', required: false, type: 'number' },
-            ],
-            onImport: handleImportClients,
-          }}
-        />
+        {canEditClients && (
+          <>
+            <button
+              onClick={() => setShowAdd(true)}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-sky-500 text-white text-sm font-medium hover:bg-sky-600 transition-colors flex-shrink-0"
+            >
+              <UserPlus className="w-4 h-4" /> <span className="hidden sm:inline">{lang === 'fr' ? 'Nouveau' : 'New'}</span>
+            </button>
+            <ImportExcel
+              config={{
+                entityType: 'clients',
+                columns: [
+                  { key: 'nom', label: 'Nom', required: true, type: 'string' },
+                  { key: 'telephone', label: 'Téléphone', required: false, type: 'string' },
+                  { key: 'taux_remise', label: 'Taux remise %', required: false, type: 'number' },
+                  { key: 'condition_remise', label: 'Condition remise', required: false, type: 'number' },
+                ],
+                onImport: handleImportClients,
+              }}
+            />
+          </>
+        )}
       </div>
 
       {/* Add form */}
-      {showAdd && (
+      {canEditClients && showAdd && (
         <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-5 space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 className="text-sm font-semibold text-slate-900">{lang === 'fr' ? 'Nouveau client' : 'New client'}</h3>
@@ -786,7 +791,7 @@ export default function Clients() {
                       </div>
                     </div>
                     <div className="flex items-center gap-1 ml-3 flex-shrink-0">
-                      {confirmDeleteId === client.id ? (
+                      {canEditClients && confirmDeleteId === client.id ? (
                         <div className="flex items-center gap-1.5">
                           <button
                             onClick={() => handleDelete(client.id)}
@@ -810,18 +815,22 @@ export default function Clients() {
                           >
                             {copiedId === client.id ? <Check className="w-4 h-4 text-emerald-500" /> : <Share2 className="w-4 h-4" />}
                           </button>
-                          <button
-                            onClick={() => startEdit(client)}
-                            className="p-2 rounded-lg text-slate-400 hover:text-sky-500 hover:bg-sky-50 transition-all"
-                          >
-                            <Pencil className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={() => setConfirmDeleteId(client.id)}
-                            className="p-2 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          {canEditClients && (
+                            <>
+                              <button
+                                onClick={() => startEdit(client)}
+                                className="p-2 rounded-lg text-slate-400 hover:text-sky-500 hover:bg-sky-50 transition-all"
+                              >
+                                <Pencil className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={() => setConfirmDeleteId(client.id)}
+                                className="p-2 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </>
+                          )}
                         </>
                       )}
                     </div>
