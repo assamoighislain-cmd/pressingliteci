@@ -1292,7 +1292,15 @@ export default function EntreprisePage() {
         <div className="print-flyer fixed inset-0 bg-white z-50 p-0 m-0 hidden print:block">
           <div className="flex flex-col items-center justify-center min-h-screen px-8 py-12">
             {entreprise.logo_url && (
-              <img src={entreprise.logo_url} alt="" className="w-20 h-20 object-contain mb-4 rounded-lg" />
+              <img
+                src={entreprise.logo_url}
+                alt={entreprise.nom ?? ''}
+                referrerPolicy="no-referrer"
+                onError={(e) => {
+                  e.currentTarget.style.display = 'none';
+                }}
+                className="w-20 h-20 object-contain mb-4 rounded-lg"
+              />
             )}
             <h1 className="text-3xl font-bold text-slate-900 text-center">{entreprise.nom}</h1>
             {entreprise.slogan && (

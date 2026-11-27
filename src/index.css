@@ -93,6 +93,15 @@
   text-align: center;
   margin-bottom: 3px;
 }
+.print-format-a5 .receipt-logo-a5 {
+  display: block;
+  margin: 0 auto 2px auto;
+  max-height: 14mm;
+  max-width: 44mm;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+}
 .print-format-a5 .receipt-header p {
   font-weight: 600;
   line-height: 1.15;
@@ -130,6 +139,15 @@
   text-align: center;
   margin-bottom: 0;
   padding-bottom: 0;
+}
+.print-format-ticket .receipt-logo-ticket {
+  display: block;
+  margin: 0 auto 2mm auto;
+  max-height: 18mm;
+  max-width: 52mm;
+  width: auto;
+  height: auto;
+  object-fit: contain;
 }
 .print-format-ticket .receipt-header p {
   font-weight: 800;
@@ -189,7 +207,21 @@
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
+  gap: 4mm;
   margin-bottom: 3mm;
+}
+.print-report-business-wrap {
+  display: flex;
+  align-items: center;
+  gap: 3.5mm;
+}
+.print-report-logo {
+  max-height: 15mm;
+  max-width: 28mm;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  flex-shrink: 0;
 }
 .print-report-business {
   font-size: 10px;
@@ -419,6 +451,14 @@
     page-break-inside: avoid;
     break-inside: avoid;
   }
+  .label-logo {
+    max-height: 7.5mm;
+    max-width: 12mm;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    flex-shrink: 0;
+  }
   .label-date {
     font-size: 7px;
     font-weight: 600;
@@ -525,6 +565,15 @@
     text-align: center;
     margin-bottom: 3px;
   }
+  .print-format-a5 .receipt-logo-a5 {
+    display: block;
+    margin: 0 auto 2px auto;
+    max-height: 14mm;
+    max-width: 44mm;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+  }
   .print-format-a5 .receipt-header p {
     font-weight: 600;
     line-height: 1.15;
@@ -559,6 +608,15 @@
   .print-format-ticket .receipt-header {
     text-align: center;
     margin-bottom: 0;
+  }
+  .print-format-ticket .receipt-logo-ticket {
+    display: block;
+    margin: 0 auto 2mm auto;
+    max-height: 18mm;
+    max-width: 52mm;
+    width: auto;
+    height: auto;
+    object-fit: contain;
   }
   .print-format-ticket .receipt-header p {
     font-weight: 800;

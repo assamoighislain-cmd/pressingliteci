@@ -1,3 +1,5 @@
+import { useState, useEffect } from 'react';
+import { db } from '@/lib/db';
 import { useAuth } from '@/lib/auth';
 import { mergeBoutiqueHeaderIntoEntreprise, type Entreprise } from '@/types';
 
@@ -24,7 +26,33 @@ const ROWS_PER_PAGE = 25;
 export function PrintableReport({ data }: { data: ReportData }) {
   const { currentBoutique } = useAuth();
   const { title, subtitle, entreprise: rawEntreprise, columns, rows, summaryRows, periodLabel } = data;
-  const entreprise = mergeBoutiqueHeaderIntoEntreprise(rawEntreprise, currentBoutique);
+  const [fallbackEntreprise, setFallbackEntreprise] = useState<Entreprise | null>(null);
+  const [logoFailed, setLogoFailed] = useState(false);
+
+  useEffect(() => {
+    if (rawEntreprise) return;
+    let active = true;
+    db.getEntreprise()
+      .then((ent) => {
+        if (active && ent) setFallbackEntreprise(ent);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [rawEntreprise]);
+
+  const entreprise = mergeBoutiqueHeaderIntoEntreprise(rawEntreprise ?? fallbackEntreprise, currentBoutique);
+  const logoSrc = entreprise?.logo_url?.trim() || null;
+
+  useEffect(() => {
+    setLogoFailed(false);
+    if (!logoSrc) return;
+    const img = new Image();
+    img.referrerPolicy = 'no-referrer';
+    img.src = logoSrc;
+  }, [logoSrc]);
+
   const totalPages = Math.max(1, Math.ceil(rows.length / ROWS_PER_PAGE));
 
   const pages: Record<string, unknown>[][] = [];
@@ -40,13 +68,24 @@ export function PrintableReport({ data }: { data: ReportData }) {
           {/* Header */}
           <div className="print-report-header">
             {entreprise && (
-              <div className="print-report-business">
-                <p className="print-report-business-name">{entreprise.nom}</p>
-                {entreprise.telephone && <p>Tél: {entreprise.telephone}</p>}
-                {(entreprise.adresse || entreprise.ville) && (
-                  <p>{[entreprise.adresse, entreprise.ville].filter(Boolean).join(', ')}</p>
+              <div className="print-report-business-wrap">
+                {logoSrc && !logoFailed && (
+                  <img
+                    src={logoSrc}
+                    alt={entreprise.nom ?? ''}
+                    className="print-report-logo"
+                    referrerPolicy="no-referrer"
+                    onError={() => setLogoFailed(true)}
+                  />
                 )}
-                {entreprise.slogan && <p className="print-report-slogan">{entreprise.slogan}</p>}
+                <div className="print-report-business">
+                  <p className="print-report-business-name">{entreprise.nom}</p>
+                  {entreprise.telephone && <p>Tél: {entreprise.telephone}</p>}
+                  {(entreprise.adresse || entreprise.ville) && (
+                    <p>{[entreprise.adresse, entreprise.ville].filter(Boolean).join(', ')}</p>
+                  )}
+                  {entreprise.slogan && <p className="print-report-slogan">{entreprise.slogan}</p>}
+                </div>
               </div>
             )}
             <div className="print-report-title-block">

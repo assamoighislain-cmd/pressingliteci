@@ -93,11 +93,15 @@ function TicketReceipt({
   entreprise,
   modesReglement,
   operatorName,
+  logoUrl,
+  onLogoError,
 }: {
   data: ReceiptData;
   entreprise: Entreprise | null;
   modesReglement: ModeReglementRow[];
   operatorName: string | null;
+  logoUrl: string | null;
+  onLogoError: () => void;
 }) {
   const { t, lang } = useI18n();
   const footerMessage = entreprise?.message_pied?.trim() || null;
@@ -113,6 +117,15 @@ function TicketReceipt({
     <div>
       {/* ── Header: Business info ── */}
       <div className="receipt-header">
+        {logoUrl && (
+          <img
+            src={logoUrl}
+            alt={entreprise?.nom ?? ''}
+            className="receipt-logo-ticket"
+            referrerPolicy="no-referrer"
+            onError={onLogoError}
+          />
+        )}
         <p className="receipt-title">{entreprise?.nom ?? ''}</p>
         {entreprise?.telephone && (
           <p style={{ fontSize: '17px', fontWeight: 800, margin: 0 }}>
@@ -312,11 +325,15 @@ function A5Receipt({
   entreprise,
   modesReglement,
   operatorName,
+  logoUrl,
+  onLogoError,
 }: {
   data: ReceiptData;
   entreprise: Entreprise | null;
   modesReglement: ModeReglementRow[];
   operatorName: string | null;
+  logoUrl: string | null;
+  onLogoError: () => void;
 }) {
   const { t, lang } = useI18n();
   const footerMessage = entreprise?.message_pied?.trim() || null;
@@ -328,6 +345,15 @@ function A5Receipt({
     <div className="a5-inner">
       {/* Header */}
       <div className="receipt-header border-b border-dashed border-slate-300 pb-1 mb-1">
+        {logoUrl && (
+          <img
+            src={logoUrl}
+            alt={entreprise?.nom ?? ''}
+            className="receipt-logo-a5"
+            referrerPolicy="no-referrer"
+            onError={onLogoError}
+          />
+        )}
         <p className="receipt-title font-bold">{entreprise?.nom ?? ''}</p>
         {entreprise?.telephone && (
           <p className="text-[1em] text-slate-700 font-semibold">{lang === 'fr' ? 'Tél' : 'Tel'}: {entreprise.telephone}</p>
@@ -526,14 +552,27 @@ export default function PrintableReceipt({
     };
   }, [user, operatorNameProp]);
 
+  const [logoFailed, setLogoFailed] = useState(false);
+
   const rawEntreprise = entrepriseProp ?? entrepriseState;
   const activeBoutique = boutiqueProp !== undefined ? boutiqueProp : currentBoutique;
   const effectiveEntreprise = mergeBoutiqueHeaderIntoEntreprise(rawEntreprise, activeBoutique);
+  const logoSrc = effectiveEntreprise?.logo_url?.trim() || null;
+
+  useEffect(() => {
+    setLogoFailed(false);
+    if (!logoSrc) return;
+    const img = new Image();
+    img.referrerPolicy = 'no-referrer';
+    img.src = logoSrc;
+  }, [logoSrc]);
+
   const effectiveOperatorName =
     (operatorNameProp !== undefined ? operatorNameProp : resolvedOperatorName ?? getCachedOperatorName(user))
       ?.trim() || null;
   const isTicket = format === 'ticket';
   const formatClass = isTicket ? 'print-format-ticket' : 'print-format-a5';
+  const visibleLogoUrl = logoSrc && !logoFailed ? logoSrc : null;
 
   return (
     <div className="print-receipt">
@@ -544,6 +583,8 @@ export default function PrintableReceipt({
             entreprise={effectiveEntreprise}
             modesReglement={modesReglement}
             operatorName={effectiveOperatorName}
+            logoUrl={visibleLogoUrl}
+            onLogoError={() => setLogoFailed(true)}
           />
         ) : (
           <A5Receipt
@@ -551,6 +592,8 @@ export default function PrintableReceipt({
             entreprise={effectiveEntreprise}
             modesReglement={modesReglement}
             operatorName={effectiveOperatorName}
+            logoUrl={visibleLogoUrl}
+            onLogoError={() => setLogoFailed(true)}
           />
         )}
       </div>

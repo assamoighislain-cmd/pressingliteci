@@ -43,6 +43,17 @@ export default function ReleveClient() {
   const [modesReglement, setModesReglement] = useState<ModeReglementRow[]>([]);
   const [loadingReleve, setLoadingReleve] = useState(false);
   const [entreprise, setEntreprise] = useState<Entreprise | null>(null);
+  const [logoFailed, setLogoFailed] = useState(false);
+
+  const logoSrc = entreprise?.logo_url?.trim() || null;
+
+  useEffect(() => {
+    setLogoFailed(false);
+    if (!logoSrc) return;
+    const img = new Image();
+    img.referrerPolicy = 'no-referrer';
+    img.src = logoSrc;
+  }, [logoSrc]);
 
   useEffect(() => {
     (async () => {
@@ -138,6 +149,15 @@ export default function ReleveClient() {
           const releveHeader = resolveReceiptHeader(entreprise, currentBoutique);
           return (
             <div className="hidden print:block text-center mb-4 pb-2 border-b border-slate-300">
+              {logoSrc && !logoFailed && (
+                <img
+                  src={logoSrc}
+                  alt={releveHeader.nom}
+                  className="mx-auto mb-2 max-h-14 max-w-[45mm] w-auto h-auto object-contain"
+                  referrerPolicy="no-referrer"
+                  onError={() => setLogoFailed(true)}
+                />
+              )}
               <p className="text-lg font-bold">{releveHeader.nom}</p>
               {releveHeader.telephone && <p className="text-sm text-slate-500">{lang === 'fr' ? 'Tél' : 'Tel'}: {releveHeader.telephone}</p>}
               {(releveHeader.adresse || releveHeader.ville) && (

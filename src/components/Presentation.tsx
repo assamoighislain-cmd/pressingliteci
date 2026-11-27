@@ -107,40 +107,36 @@ export default function Presentation() {
     });
   }, [chapters, guideSearch]);
 
-  function handleDownloadGuidePdf() {
+  async function handleDownloadGuidePdf() {
     if (exportingType) return;
     setExportingType('guide');
     setExportNotice(null);
-    setTimeout(() => {
-      try {
-        downloadUserGuidePdf(entreprise, lang);
-        setExportNotice(
-          lang === 'fr'
-            ? 'Le guide d\'utilisation complet (PDF) a été téléchargé.'
-            : 'The complete User Guide PDF has been downloaded.',
-        );
-      } finally {
-        setExportingType(null);
-      }
-    }, 40);
+    try {
+      await downloadUserGuidePdf(entreprise, lang);
+      setExportNotice(
+        lang === 'fr'
+          ? 'Le guide d\'utilisation complet (PDF) a été téléchargé.'
+          : 'The complete User Guide PDF has been downloaded.',
+      );
+    } finally {
+      setExportingType(null);
+    }
   }
 
-  function handleDownloadPresentationPdf() {
+  async function handleDownloadPresentationPdf() {
     if (exportingType) return;
     setExportingType('presentation');
     setExportNotice(null);
-    setTimeout(() => {
-      try {
-        downloadPresentationPdf(entreprise, lang);
-        setExportNotice(
-          lang === 'fr'
-            ? 'La brochure de présentation (PDF) a été téléchargée.'
-            : 'The Software Presentation PDF has been downloaded.',
-        );
-      } finally {
-        setExportingType(null);
-      }
-    }, 40);
+    try {
+      await downloadPresentationPdf(entreprise, lang);
+      setExportNotice(
+        lang === 'fr'
+          ? 'La brochure de présentation (PDF) a été téléchargée.'
+          : 'The Software Presentation PDF has been downloaded.',
+      );
+    } finally {
+      setExportingType(null);
+    }
   }
 
   function scrollToChapter(id: string) {

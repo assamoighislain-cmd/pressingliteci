@@ -69,6 +69,64 @@ function formatDocDate(lang: Lang): string {
   }
 }
 
+interface PdfLogoAsset {
+  dataUrl: string;
+  aspect: number;
+}
+
+/**
+ * Loads an external or data-URI logo image into a normalized PNG data URL
+ * suitable for jsPDF, with a short timeout and silent fallback on CORS/network errors.
+ */
+function loadPdfLogo(url?: string | null): Promise<PdfLogoAsset | null> {
+  const cleanUrl = url?.trim();
+  if (!cleanUrl || typeof window === 'undefined') {
+    return Promise.resolve(null);
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (val: PdfLogoAsset | null) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      resolve(val);
+    };
+    const timer = window.setTimeout(() => finish(null), 3500);
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.referrerPolicy = 'no-referrer';
+    img.onload = () => {
+      try {
+        const w = img.naturalWidth || img.width;
+        const h = img.naturalHeight || img.height;
+        if (!w || !h) {
+          finish(null);
+          return;
+        }
+        const maxDim = 512;
+        const scale = Math.min(1, maxDim / Math.max(w, h));
+        const cw = Math.max(1, Math.round(w * scale));
+        const ch = Math.max(1, Math.round(h * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = cw;
+        canvas.height = ch;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          finish(null);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, cw, ch);
+        const dataUrl = canvas.toDataURL('image/png');
+        finish({ dataUrl, aspect: w / h });
+      } catch {
+        finish(null);
+      }
+    };
+    img.onerror = () => finish(null);
+    img.src = cleanUrl;
+  });
+}
+
 class EditorialPdfBuilder {
   doc: jsPDF;
   y = TOP_Y;
@@ -262,7 +320,7 @@ class EditorialPdfBuilder {
     this.y += 4;
   }
 
-  applyRunningHeadersAndFooters(skipPages: number[] = [1]) {
+  applyRunningHeadersAndFooters(skipPages: number[] = [1], logo: PdfLogoAsset | null = null) {
     const totalPages = this.doc.getNumberOfPages();
     const skipSet = new Set(skipPages);
     for (let p = 1; p <= totalPages; p++) {
@@ -270,10 +328,28 @@ class EditorialPdfBuilder {
       this.doc.setPage(p);
 
       // Running header
+      let headerTextX = MARGIN_X;
+      if (logo) {
+        const maxH = 5.5;
+        const maxW = 14;
+        let drawW = maxH * logo.aspect;
+        let drawH = maxH;
+        if (drawW > maxW) {
+          drawW = maxW;
+          drawH = drawW / logo.aspect;
+        }
+        const drawY = 12 - drawH / 2;
+        try {
+          this.doc.addImage(logo.dataUrl, 'PNG', MARGIN_X, drawY, drawW, drawH);
+          headerTextX = MARGIN_X + drawW + 2.5;
+        } catch {
+          headerTextX = MARGIN_X;
+        }
+      }
       this.doc.setFont('helvetica', 'normal');
       this.doc.setFontSize(8);
       this.doc.setTextColor(...COLORS.muted);
-      this.doc.text(this.headerTitle, MARGIN_X, 13.5);
+      this.doc.text(this.headerTitle, headerTextX, 13.5);
       this.doc.setDrawColor(...COLORS.hairline);
       this.doc.setLineWidth(0.25);
       this.doc.line(MARGIN_X, 16, PAGE_W - MARGIN_X, 16);
@@ -302,6 +378,7 @@ function drawCoverPage(
     docTitle: string;
     docDescription: string;
     entreprise: Entreprise | null;
+    logo: PdfLogoAsset | null;
     highlights: string[];
     lang: Lang;
   },
@@ -317,23 +394,57 @@ function drawCoverPage(
   doc.setFillColor(...COLORS.accent);
   doc.rect(0, 112, PAGE_W, 2.5, 'F');
 
-  // Brand emblem square
-  doc.setFillColor(...COLORS.accent);
-  doc.roundedRect(MARGIN_X, 24, 13, 13, 2.5, 2.5, 'F');
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(14);
-  doc.setTextColor(...COLORS.white);
-  doc.text('P', MARGIN_X + 6.5, 32.8, { align: 'center' });
+  // Brand emblem or company logo
+  let brandTextX = MARGIN_X + 18;
+  let renderedLogo = false;
+  if (opts.logo) {
+    const boxH = 15;
+    const pad = 1.6;
+    const innerH = boxH - pad * 2;
+    const maxInnerW = 24;
+    let drawW = innerH * opts.logo.aspect;
+    let drawH = innerH;
+    if (drawW > maxInnerW) {
+      drawW = maxInnerW;
+      drawH = drawW / opts.logo.aspect;
+    }
+    const boxW = Math.max(15, drawW + pad * 2);
+    const boxY = 23;
+    try {
+      doc.setFillColor(...COLORS.white);
+      doc.roundedRect(MARGIN_X, boxY, boxW, boxH, 2.5, 2.5, 'F');
+      doc.addImage(
+        opts.logo.dataUrl,
+        'PNG',
+        MARGIN_X + (boxW - drawW) / 2,
+        boxY + (boxH - drawH) / 2,
+        drawW,
+        drawH,
+      );
+      brandTextX = MARGIN_X + boxW + 5;
+      renderedLogo = true;
+    } catch {
+      renderedLogo = false;
+    }
+  }
+  if (!renderedLogo) {
+    doc.setFillColor(...COLORS.accent);
+    doc.roundedRect(MARGIN_X, 24, 13, 13, 2.5, 2.5, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(14);
+    doc.setTextColor(...COLORS.white);
+    doc.text('P', MARGIN_X + 6.5, 32.8, { align: 'center' });
+  }
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(14);
   doc.setTextColor(...COLORS.white);
-  doc.text(sanitizePdfText(opts.companyName), MARGIN_X + 18, 30);
+  doc.text(sanitizePdfText(opts.companyName), brandTextX, 30);
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9.5);
   doc.setTextColor(186, 230, 253);
-  doc.text(sanitizePdfText(opts.subtitle), MARGIN_X + 18, 35.8);
+  doc.text(sanitizePdfText(opts.subtitle), brandTextX, 35.8);
 
   // Main Cover Title
   doc.setFont('helvetica', 'bold');
@@ -413,11 +524,12 @@ function drawCoverPage(
 /**
  * Generates and immediately downloads the complete, multi-page A4 User Guide PDF.
  */
-export function downloadUserGuidePdf(entreprise: Entreprise | null, lang: Lang): void {
+export async function downloadUserGuidePdf(entreprise: Entreprise | null, lang: Lang): Promise<void> {
   const companyName = entreprise?.nom?.trim() || 'PressingLite';
   const chapters = getUserGuideChapters(lang);
   const roles = getRoleMatrix(lang);
   const specs = getTechnicalSpecs(lang);
+  const logo = await loadPdfLogo(entreprise?.logo_url);
 
   const headerTitle =
     lang === 'fr'
@@ -441,6 +553,7 @@ export function downloadUserGuidePdf(entreprise: Entreprise | null, lang: Lang):
         ? "Manuel opérationnel pas à pas pour les équipes de comptoir, gérants, administrateurs, collecteurs et apporteurs d'affaire."
         : 'Step-by-step operational manual for front-desk staff, managers, administrators, drivers, and referral partners.',
     entreprise,
+    logo,
     highlights:
       lang === 'fr'
         ? [
@@ -561,7 +674,7 @@ export function downloadUserGuidePdf(entreprise: Entreprise | null, lang: Lang):
     builder.y += rowH;
   }
 
-  builder.applyRunningHeadersAndFooters([1]);
+  builder.applyRunningHeadersAndFooters([1], logo);
 
   const slug = slugifyFilename(companyName);
   const fileName =
@@ -574,12 +687,13 @@ export function downloadUserGuidePdf(entreprise: Entreprise | null, lang: Lang):
 /**
  * Generates and downloads an executive A4 Software Presentation PDF brochure.
  */
-export function downloadPresentationPdf(entreprise: Entreprise | null, lang: Lang): void {
+export async function downloadPresentationPdf(entreprise: Entreprise | null, lang: Lang): Promise<void> {
   const companyName = entreprise?.nom?.trim() || 'PressingLite';
   const modules = getPresentationModules(lang);
   const steps = getWorkflowSteps(lang);
   const roles = getRoleMatrix(lang);
   const specs = getTechnicalSpecs(lang);
+  const logo = await loadPdfLogo(entreprise?.logo_url);
 
   const headerTitle =
     lang === 'fr'
@@ -605,6 +719,7 @@ export function downloadPresentationPdf(entreprise: Entreprise | null, lang: Lan
         ? "Une plateforme moderne en ligne et hors-ligne pour piloter vos dépôts, retraits, clients, apporteurs d'affaire, tournées de livraison et finances."
         : 'A modern online and offline platform to run your deposits, pickups, customers, referral partners, delivery routes, and finances.',
     entreprise,
+    logo,
     highlights:
       lang === 'fr'
         ? [
@@ -662,7 +777,7 @@ export function downloadPresentationPdf(entreprise: Entreprise | null, lang: Lan
   );
   builder.drawKeyValueTable(specs);
 
-  builder.applyRunningHeadersAndFooters([1]);
+  builder.applyRunningHeadersAndFooters([1], logo);
 
   const slug = slugifyFilename(companyName);
   const fileName =

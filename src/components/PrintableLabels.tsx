@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import { DepotWithArticles, formatDateShort } from '@/types';
 
 export type LabelField = 'date_depot' | 'numero' | 'client_nom' | 'date_retrait' | 'piece_number' | 'designation';
@@ -8,7 +9,7 @@ export const DEFAULT_LABEL_FIELDS: LabelField[] = ['date_depot', 'numero', 'clie
 
 interface PrintableLabelsProps {
   depot: DepotWithArticles;
-  entreprise?: { label_fields?: string[] | null } | null;
+  entreprise?: { label_fields?: string[] | null; logo_url?: string | null } | null;
   labelFields?: LabelField[];
 }
 
@@ -19,6 +20,17 @@ interface LabelItem {
 }
 
 export default function PrintableLabels({ depot, entreprise, labelFields }: PrintableLabelsProps) {
+  const [logoFailed, setLogoFailed] = useState(false);
+  const logoSrc = entreprise?.logo_url?.trim() || null;
+
+  useEffect(() => {
+    setLogoFailed(false);
+    if (!logoSrc) return;
+    const img = new Image();
+    img.referrerPolicy = 'no-referrer';
+    img.src = logoSrc;
+  }, [logoSrc]);
+
   const fields: LabelField[] = labelFields
     ?? (entreprise?.label_fields as LabelField[] | undefined)
     ?? DEFAULT_LABEL_FIELDS;
@@ -48,6 +60,15 @@ export default function PrintableLabels({ depot, entreprise, labelFields }: Prin
     <div className="print-labels">
       {labels.map((label, idx) => (
         <div key={idx} className="label-card">
+          {logoSrc && !logoFailed && (
+            <img
+              src={logoSrc}
+              alt=""
+              className="label-logo"
+              referrerPolicy="no-referrer"
+              onError={() => setLogoFailed(true)}
+            />
+          )}
           {show('date_depot') && <span className="label-date">{dateStr}</span>}
           {show('numero') && <span className="label-numero">{numero}</span>}
           {show('client_nom') && <span className="label-client">{clientNom}</span>}
