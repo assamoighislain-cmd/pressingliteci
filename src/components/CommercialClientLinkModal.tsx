@@ -88,6 +88,7 @@ export default function CommercialClientLinkModal({
   }, [clients, selectedClientIds]);
 
   function toggleClient(id: string) {
+    setError(null);
     setSelectedClientIds((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
     );
@@ -99,6 +100,11 @@ export default function CommercialClientLinkModal({
 
     if (!commercialId) {
       setError(lang === 'fr' ? 'Veuillez choisir un commercial.' : 'Please select a sales agent.');
+      return;
+    }
+
+    if (!dateDebut || !/^\d{4}-\d{2}-\d{2}/.test(dateDebut)) {
+      setError(lang === 'fr' ? 'Veuillez choisir une date de début valide.' : 'Please select a valid start date.');
       return;
     }
 
@@ -120,6 +126,15 @@ export default function CommercialClientLinkModal({
         return;
       }
       parsedCustomTaux = n;
+    }
+
+    if (!isEdit && selectedClientIds.length === 0) {
+      setError(
+        lang === 'fr'
+          ? 'Sélectionnez au moins un client à rattacher.'
+          : 'Please select at least one client to link.',
+      );
+      return;
     }
 
     setSaving(true);
@@ -148,15 +163,6 @@ export default function CommercialClientLinkModal({
         return;
       }
 
-      if (selectedClientIds.length === 0) {
-        setError(
-          lang === 'fr'
-            ? 'Sélectionnez au moins un client à rattacher.'
-            : 'Please select at least one client to link.',
-        );
-        return;
-      }
-
       const res = await db.insertCommercialClientsBulk(
         selectedClientIds.map((cid) => ({
           commercial_id: commercialId,
@@ -179,6 +185,12 @@ export default function CommercialClientLinkModal({
           : `${res.count} client(s) linked to ${selectedCommercial?.nom ?? ''} for ${days} days (until ${formatDateShort(dateFin)}).`,
       );
       onClose();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : (lang === 'fr' ? 'Erreur lors de la liaison des clients.' : 'Failed to link clients.'),
+      );
     } finally {
       setSaving(false);
     }
@@ -192,6 +204,7 @@ export default function CommercialClientLinkModal({
       />
       <form
         onSubmit={handleSubmit}
+        noValidate
         className="relative bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden"
       >
         <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between gap-3">
@@ -217,11 +230,6 @@ export default function CommercialClientLinkModal({
         </div>
 
         <div className="p-6 overflow-y-auto space-y-4">
-          {error && (
-            <div className="rounded-lg bg-red-50 border border-red-200 px-3.5 py-2.5 text-sm text-red-700">
-              {error}
-            </div>
-          )}
 
           {/* Commercial selector */}
           <div>
@@ -456,6 +464,23 @@ export default function CommercialClientLinkModal({
             </label>
           )}
         </div>
+
+        {error && (
+          <div
+            role="alert"
+            className="mx-6 mb-3 rounded-lg bg-red-50 border border-red-200 px-3.5 py-2.5 text-sm text-red-700 flex items-start justify-between gap-2"
+          >
+            <span>{error}</span>
+            <button
+              type="button"
+              onClick={() => setError(null)}
+              className="text-red-400 hover:text-red-600 flex-shrink-0"
+              aria-label={lang === 'fr' ? 'Fermer' : 'Dismiss'}
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
 
         <div className="px-6 py-4 border-t border-slate-200 bg-slate-50/70 flex gap-3">
           <button

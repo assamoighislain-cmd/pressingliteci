@@ -281,7 +281,7 @@ const TENANT_TABLES = new Set<TableName>([
   'depenses', 'depense_categories',
   'article_variants', 'fidelite_points', 'fidelite_history', 'bons_reduction',
   'consommables', 'consommable_mouvements', 'relances',
-  'commerciaux', 'commission_versements',
+  'commerciaux', 'commission_versements', 'commercial_clients',
 ]);
 
 // Tenant-scoped tables whose PostgreSQL schema uses tenant_id (+ boutique_id) without a user_id column.
@@ -293,6 +293,7 @@ const TABLES_WITHOUT_USER_ID = new Set<TableName>([
   'relances',
   'commerciaux',
   'commission_versements',
+  'commercial_clients',
 ]);
 
 function isMissingTableError(error: { code?: string; message?: string } | null | undefined): boolean {
@@ -364,7 +365,7 @@ const QUEUEABLE_TABLES = new Set<TableName>([
   'depot_articles', 'depot_avances', 'depenses', 'depense_categories',
   'article_variants', 'bons_reduction', 'consommables', 'consommable_mouvements',
   'modes_reglement', 'fidelite_points', 'fidelite_history', 'relances',
-  'commerciaux', 'commission_versements',
+  'commerciaux', 'commission_versements', 'commercial_clients',
 ]);
 
 export function isOffline(): boolean {
@@ -3224,11 +3225,19 @@ export const db = {
     notes?: string | null;
   }>): Promise<{ count: number; error: string | null }> {
     if (rows.length === 0) return { count: 0, error: null };
+    const tId = await getTenantId();
+    if (!tId) {
+      return {
+        count: 0,
+        error: 'Session entreprise introuvable. Veuillez actualiser la page et réessayer.',
+      };
+    }
     const payload = rows.map((r) => {
       const duree = Math.max(1, Math.min(3650, Math.round(r.duree_jours)));
       const debut = r.date_debut.slice(0, 10);
       const fin = r.date_fin ? r.date_fin.slice(0, 10) : computeDateFinFromDays(debut, duree);
       return {
+        tenant_id: tId,
         commercial_id: r.commercial_id,
         client_id: r.client_id,
         duree_jours: duree,
