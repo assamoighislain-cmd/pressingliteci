@@ -3,7 +3,7 @@ import { registerSW } from 'virtual:pwa-register';
 export type PwaUpdateStatus =
   | { status: 'idle' }
   | { status: 'updating'; buildId?: string }
-  | { status: 'pending'; buildId?: string };
+  | { status: 'pending'; buildId?: string; deferredByDeposit?: boolean };
 
 const UPDATE_EVENT = 'pressinglite:pwa-update-status';
 const LAST_RELOAD_BUILD_KEY = 'pressinglite_last_auto_reload_build';
@@ -11,16 +11,84 @@ const LAST_RELOAD_AT_KEY = 'pressinglite_last_auto_reload_at';
 const RELOAD_COOLDOWN_MS = 20_000;
 const CHECK_THROTTLE_MS = 15_000;
 const POLL_INTERVAL_MS = 2 * 60 * 1000;
+const DEFERRED_APPLY_DELAY_MS = 900;
 
 let swRegistration: ServiceWorkerRegistration | null = null;
 let reloadInProgress = false;
+let pendingUpdate = false;
 let pendingBuildId: string | null = null;
+let pendingClearCaches = false;
 let lastCheckAt = 0;
 let initialized = false;
+let currentStatus: PwaUpdateStatus = { status: 'idle' };
+let deferredApplyTimer: ReturnType<typeof setTimeout> | null = null;
+
+// Named update locks (e.g. 'depot-in-progress') that strictly defer SW activation,
+// cache cleanup, and page reloads until the critical workflow has completed.
+const activeUpdateBlocks = new Set<string>();
 
 function dispatchStatus(detail: PwaUpdateStatus) {
+  currentStatus = detail;
   if (typeof window === 'undefined') return;
   window.dispatchEvent(new CustomEvent<PwaUpdateStatus>(UPDATE_EVENT, { detail }));
+}
+
+export function getPwaUpdateStatus(): PwaUpdateStatus {
+  return currentStatus;
+}
+
+export function isPwaUpdateBlocked(): boolean {
+  return activeUpdateBlocks.size > 0;
+}
+
+function scheduleDeferredUpdateCheck() {
+  if (deferredApplyTimer) {
+    clearTimeout(deferredApplyTimer);
+    deferredApplyTimer = null;
+  }
+  if (!pendingUpdate || reloadInProgress || isPwaUpdateBlocked()) return;
+
+  deferredApplyTimer = setTimeout(() => {
+    deferredApplyTimer = null;
+    if (!pendingUpdate || reloadInProgress || isPwaUpdateBlocked()) return;
+    if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+
+    if (isUserTypingInForm()) {
+      dispatchStatus({
+        status: 'pending',
+        buildId: pendingBuildId ?? undefined,
+        deferredByDeposit: false,
+      });
+      return;
+    }
+
+    if (canAutoReload(pendingBuildId)) {
+      void applyPendingPwaUpdateNow(pendingClearCaches, false);
+    }
+  }, DEFERRED_APPLY_DELAY_MS);
+}
+
+export function setPwaUpdateBlock(key: string, blocked: boolean): void {
+  const wasBlocked = activeUpdateBlocks.size > 0;
+  if (blocked) {
+    activeUpdateBlocks.add(key);
+    if (deferredApplyTimer) {
+      clearTimeout(deferredApplyTimer);
+      deferredApplyTimer = null;
+    }
+    if (pendingUpdate && !reloadInProgress && !currentStatus.status.startsWith('updating')) {
+      dispatchStatus({
+        status: 'pending',
+        buildId: pendingBuildId ?? undefined,
+        deferredByDeposit: true,
+      });
+    }
+  } else {
+    activeUpdateBlocks.delete(key);
+    if (wasBlocked && activeUpdateBlocks.size === 0 && pendingUpdate && !reloadInProgress) {
+      scheduleDeferredUpdateCheck();
+    }
+  }
 }
 
 function isUserTypingInForm(): boolean {
@@ -80,11 +148,24 @@ async function clearStaleAssetCachesOnly(): Promise<void> {
   }
 }
 
-export async function applyPendingPwaUpdateNow(clearCaches = false): Promise<void> {
+export async function applyPendingPwaUpdateNow(clearCaches = false, force = false): Promise<void> {
   if (reloadInProgress) return;
   if (typeof navigator !== 'undefined' && !navigator.onLine) return;
 
+  // Hard guard: never disrupt an active deposit unless explicitly forced.
+  if (!force && isPwaUpdateBlocked()) {
+    pendingUpdate = true;
+    pendingClearCaches = pendingClearCaches || clearCaches;
+    dispatchStatus({
+      status: 'pending',
+      buildId: pendingBuildId ?? undefined,
+      deferredByDeposit: true,
+    });
+    return;
+  }
+
   reloadInProgress = true;
+  pendingUpdate = false;
   const targetBuild = pendingBuildId;
   markReloaded(targetBuild);
   dispatchStatus({ status: 'updating', buildId: targetBuild ?? undefined });
@@ -93,7 +174,7 @@ export async function applyPendingPwaUpdateNow(clearCaches = false): Promise<voi
     if (swRegistration?.waiting) {
       swRegistration.waiting.postMessage({ type: 'SKIP_WAITING' });
     }
-    if (clearCaches) {
+    if (clearCaches || pendingClearCaches) {
       await clearStaleAssetCachesOnly();
     }
   } catch {
@@ -107,16 +188,32 @@ export async function applyPendingPwaUpdateNow(clearCaches = false): Promise<voi
 
 function triggerUpdateIfReady(targetBuildId?: string | null, clearCaches = false) {
   if (!canAutoReload(targetBuildId)) return;
+  pendingUpdate = true;
   pendingBuildId = targetBuildId ?? pendingBuildId;
+  pendingClearCaches = pendingClearCaches || clearCaches;
 
-  // If the user is actively typing in a form field, show a clean update banner
-  // instead of abruptly clearing their unsaved input; otherwise auto-apply seamlessly.
-  if (isUserTypingInForm()) {
-    dispatchStatus({ status: 'pending', buildId: pendingBuildId ?? undefined });
+  // Strict protection: never reload, clear caches, or skipWaiting while a deposit is in progress.
+  if (isPwaUpdateBlocked()) {
+    dispatchStatus({
+      status: 'pending',
+      buildId: pendingBuildId ?? undefined,
+      deferredByDeposit: true,
+    });
     return;
   }
 
-  void applyPendingPwaUpdateNow(clearCaches);
+  // If the user is actively typing in another form field, show a clean update banner
+  // instead of abruptly clearing their unsaved input; otherwise auto-apply seamlessly.
+  if (isUserTypingInForm()) {
+    dispatchStatus({
+      status: 'pending',
+      buildId: pendingBuildId ?? undefined,
+      deferredByDeposit: false,
+    });
+    return;
+  }
+
+  void applyPendingPwaUpdateNow(pendingClearCaches, false);
 }
 
 async function fetchRemoteBuildId(): Promise<string | null> {
@@ -147,19 +244,20 @@ export async function checkForAppUpdate(force = false): Promise<void> {
   if (!force && now - lastCheckAt < CHECK_THROTTLE_MS) return;
   lastCheckAt = now;
 
-  // 1. Ask the browser to check Vercel for a newer Service Worker
+  // 1. Ask the browser to download any newer Service Worker quietly in the background
+  //    (NEVER call SKIP_WAITING while a deposit is in progress).
   if (swRegistration) {
     try {
       await swRegistration.update();
       if (swRegistration.waiting) {
-        swRegistration.waiting.postMessage({ type: 'SKIP_WAITING' });
+        triggerUpdateIfReady(pendingBuildId ?? 'sw-waiting-update', false);
       }
     } catch {
       // Non-blocking
     }
   }
 
-  // 2. Compare running bundle buildId against fresh /version.json from Vercel
+  // 2. Compare running bundle buildId against fresh /version.json from server
   const currentBuild = typeof __APP_BUILD_ID__ === 'string' ? __APP_BUILD_ID__ : '';
   if (!currentBuild) return;
 
@@ -167,10 +265,21 @@ export async function checkForAppUpdate(force = false): Promise<void> {
   if (!remoteBuild || remoteBuild === currentBuild) return;
 
   pendingBuildId = remoteBuild;
+  pendingUpdate = true;
+  pendingClearCaches = true;
 
-  // Give the newly fetched Service Worker ~1.5s to take control via controllerchange;
-  // if the browser (e.g. iOS Safari standalone PWA) kept the old SW cache, clear static
-  // asset caches and reload cleanly once for this buildId.
+  // If a deposit is currently in progress, immediately mark as deferred and stop here
+  // without touching caches or scheduling any reload.
+  if (isPwaUpdateBlocked()) {
+    dispatchStatus({
+      status: 'pending',
+      buildId: remoteBuild,
+      deferredByDeposit: true,
+    });
+    return;
+  }
+
+  // Give the newly fetched Service Worker ~1.5s to settle, then apply if still safe.
   setTimeout(() => {
     if (!reloadInProgress) {
       triggerUpdateIfReady(remoteBuild, true);
@@ -199,32 +308,39 @@ export async function initPwaAutoUpdate(): Promise<void> {
   }
 
   // Track whether this page already had an active SW before registering,
-  // so the very first install doesn't cause an unnecessary reload,
-  // while every subsequent Vercel deploy reloads installed PWAs automatically.
+  // so the very first install doesn't cause an unnecessary reload.
   const hadController = Boolean('serviceWorker' in navigator && navigator.serviceWorker.controller);
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.addEventListener('controllerchange', () => {
       if (!hadController) return;
+      if (reloadInProgress) return;
       triggerUpdateIfReady(pendingBuildId ?? 'sw-controller-update', false);
     });
   }
 
-  // Recover automatically when an installed PWA requests an outdated lazy JS chunk
-  // that was replaced by a newer Vercel deployment.
+  // Recover automatically when an installed PWA requests an outdated lazy JS chunk,
+  // while still respecting any in-progress deposit lock.
   window.addEventListener('vite:preloadError', (event) => {
     event.preventDefault();
+    if (isPwaUpdateBlocked()) {
+      pendingUpdate = true;
+      pendingClearCaches = true;
+      dispatchStatus({
+        status: 'pending',
+        buildId: pendingBuildId ?? 'preload-error',
+        deferredByDeposit: true,
+      });
+      return;
+    }
     if (canAutoReload('preload-error')) {
-      void applyPendingPwaUpdateNow(true);
+      void applyPendingPwaUpdateNow(true, false);
     }
   });
 
   registerSW({
     immediate: true,
     onNeedRefresh() {
-      if (swRegistration?.waiting) {
-        swRegistration.waiting.postMessage({ type: 'SKIP_WAITING' });
-      }
       triggerUpdateIfReady(pendingBuildId ?? 'sw-need-refresh', false);
     },
     onRegisteredSW(_swUrl, registration) {
@@ -232,7 +348,7 @@ export async function initPwaAutoUpdate(): Promise<void> {
       swRegistration = registration;
 
       if (registration.waiting) {
-        registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+        triggerUpdateIfReady(pendingBuildId ?? 'sw-waiting-initial', false);
       }
 
       registration.addEventListener('updatefound', () => {
@@ -240,7 +356,7 @@ export async function initPwaAutoUpdate(): Promise<void> {
         if (!installing) return;
         installing.addEventListener('statechange', () => {
           if (installing.state === 'installed' && navigator.serviceWorker.controller) {
-            installing.postMessage({ type: 'SKIP_WAITING' });
+            triggerUpdateIfReady(pendingBuildId ?? 'sw-installed-update', false);
           }
         });
       });
@@ -249,11 +365,18 @@ export async function initPwaAutoUpdate(): Promise<void> {
     },
   });
 
-  // Check for Vercel updates whenever the installed PWA comes back to foreground,
-  // regains focus, reconnects to the internet, or periodically every 2 minutes.
+  // Check for updates whenever the PWA comes back to foreground, regains focus,
+  // reconnects to the internet, or periodically every 2 minutes.
   const onWake = () => {
-    if (pendingBuildId && !isUserTypingInForm()) {
-      triggerUpdateIfReady(pendingBuildId, true);
+    if (isPwaUpdateBlocked()) {
+      // Check passively so any new SW downloads silently, without interrupting the deposit.
+      if (!pendingUpdate) {
+        void checkForAppUpdate(false);
+      }
+      return;
+    }
+    if (pendingUpdate && !isUserTypingInForm()) {
+      triggerUpdateIfReady(pendingBuildId, pendingClearCaches);
       return;
     }
     void checkForAppUpdate(false);

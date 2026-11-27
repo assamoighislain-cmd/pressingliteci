@@ -4,6 +4,7 @@ import { useAuth } from '@/lib/auth';
 import { db, rpc } from '@/lib/db';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import { searchClientsIndexed } from '@/lib/clientSearchIndex';
+import { setPwaUpdateBlock } from '@/lib/pwaAutoUpdate';
 import {
   Client,
   TypeTraitement,
@@ -122,11 +123,91 @@ function getDefaultTypeTraitementId(types: TypeTraitement[]): string {
   return types[0].id;
 }
 
+interface DepotDraftStorage {
+  step: 'client' | 'articles' | 'paiement';
+  selectedClient: Client | null;
+  articles: ArticleDraft[];
+  typeTraitementId: string;
+  paymentLines: PaymentLineDraft[];
+  selectedCommercialId: string;
+  commercialManualOverride: boolean;
+  notes: string;
+  dateDepotOverride: string;
+  dateRetraitOverride: string;
+  couponCode: string;
+  appliedCoupon: BonReduction | null;
+  savedAt: number;
+}
+
+const DEPOT_DRAFT_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+
+function getDepotDraftKey(boutiqueId: string | null | undefined): string {
+  return `pressinglite_depot_draft_${boutiqueId ?? 'default'}`;
+}
+
+function readDepotDraft(storageKey: string): DepotDraftStorage | null {
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<DepotDraftStorage>;
+    if (!parsed || typeof parsed.savedAt !== 'number') return null;
+    if (Date.now() - parsed.savedAt > DEPOT_DRAFT_MAX_AGE_MS) {
+      localStorage.removeItem(storageKey);
+      return null;
+    }
+    const validStep =
+      parsed.step === 'client' || parsed.step === 'articles' || parsed.step === 'paiement'
+        ? parsed.step
+        : 'client';
+    const validArticles =
+      Array.isArray(parsed.articles) && parsed.articles.length > 0
+        ? parsed.articles
+        : [makeDefaultArticle()];
+    const validPayments =
+      Array.isArray(parsed.paymentLines) && parsed.paymentLines.length > 0
+        ? parsed.paymentLines
+        : [makeDefaultPaymentLine()];
+    return {
+      step: validStep,
+      selectedClient: parsed.selectedClient ?? null,
+      articles: validArticles,
+      typeTraitementId: typeof parsed.typeTraitementId === 'string' ? parsed.typeTraitementId : '',
+      paymentLines: validPayments,
+      selectedCommercialId: typeof parsed.selectedCommercialId === 'string' ? parsed.selectedCommercialId : '',
+      commercialManualOverride: Boolean(parsed.commercialManualOverride),
+      notes: typeof parsed.notes === 'string' ? parsed.notes : '',
+      dateDepotOverride: typeof parsed.dateDepotOverride === 'string' ? parsed.dateDepotOverride : '',
+      dateRetraitOverride: typeof parsed.dateRetraitOverride === 'string' ? parsed.dateRetraitOverride : '',
+      couponCode: typeof parsed.couponCode === 'string' ? parsed.couponCode : '',
+      appliedCoupon: parsed.appliedCoupon ?? null,
+      savedAt: parsed.savedAt,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function clearDepotDraft(storageKey: string): void {
+  try {
+    localStorage.removeItem(storageKey);
+  } catch {
+    // Ignore storage errors
+  }
+}
+
 export default function DepotForm({ onDone }: { onDone: () => void }) {
   const { t, lang } = useI18n();
   const { role, currentBoutique, reloadBoutiques } = useAuth();
   const canManageCounter = !role || role === 'admin' || role === 'gerant';
-  const [step, setStep] = useState<'client' | 'articles' | 'paiement'>('client');
+  const draftStorageKey = getDepotDraftKey(currentBoutique?.id);
+  const initialDraftRef = useRef<DepotDraftStorage | null | undefined>(undefined);
+  if (initialDraftRef.current === undefined) {
+    initialDraftRef.current = readDepotDraft(draftStorageKey);
+  }
+  const initialDraft = initialDraftRef.current;
+
+  const [draftRestored, setDraftRestored] = useState<boolean>(() => Boolean(initialDraft));
+  const [step, setStep] = useState<'client' | 'articles' | 'paiement'>(() => initialDraft?.step ?? 'client');
 
   const [typesTraitement, setTypesTraitement] = useState<TypeTraitement[]>([]);
   const [catalogArticles, setCatalogArticles] = useState<ArticleCatalog[]>([]);
@@ -134,15 +215,15 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
   const [modesReglement, setModesReglement] = useState<ModeReglementRow[]>([]);
   const [commerciaux, setCommerciaux] = useState<Commercial[]>([]);
   const [commercialClients, setCommercialClients] = useState<CommercialClientWithDetails[]>([]);
-  const [selectedCommercialId, setSelectedCommercialId] = useState<string>('');
-  const [commercialManualOverride, setCommercialManualOverride] = useState(false);
+  const [selectedCommercialId, setSelectedCommercialId] = useState<string>(() => initialDraft?.selectedCommercialId ?? '');
+  const [commercialManualOverride, setCommercialManualOverride] = useState<boolean>(() => initialDraft?.commercialManualOverride ?? false);
   const [fieldHistory, setFieldHistory] = useState<{ couleur: string[]; signe_particulier: string[]; griffe: string[] }>({ couleur: [], signe_particulier: [], griffe: [] });
 
   // Client state
   const [searchTerm, setSearchTerm] = useState('');
   const [allClientsIndex, setAllClientsIndex] = useState<Client[] | null>(() => db.getCachedClientsSync());
   const [clients, setClients] = useState<Client[]>([]);
-  const [selectedClient, setSelectedClient] = useState<Client | null>(null);
+  const [selectedClient, setSelectedClient] = useState<Client | null>(() => initialDraft?.selectedClient ?? null);
   const [showNewClient, setShowNewClient] = useState(false);
   const [newClientNom, setNewClientNom] = useState('');
   const [newClientTel, setNewClientTel] = useState('');
@@ -150,7 +231,7 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
   const searchReqIdRef = useRef(0);
 
   // Articles state
-  const [articles, setArticles] = useState<ArticleDraft[]>([makeDefaultArticle()]);
+  const [articles, setArticles] = useState<ArticleDraft[]>(() => initialDraft?.articles ?? [makeDefaultArticle()]);
   const [articleSearch, setArticleSearch] = useState<Record<string, string>>({});
   const [activeSearchId, setActiveSearchId] = useState<string | null>(null);
   const [catalogSearch, setCatalogSearch] = useState('');
@@ -164,7 +245,7 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
   const [creatingArticle, setCreatingArticle] = useState(false);
 
   // Treatment state (depot-level) — stores the type_traitement ID
-  const [typeTraitementId, setTypeTraitementId] = useState<string>('');
+  const [typeTraitementId, setTypeTraitementId] = useState<string>(() => initialDraft?.typeTraitementId ?? '');
 
   function handleTypeTraitementChange(newId: string) {
     const oldCoef = getCoefficientById(typeTraitementId, typesTraitement);
@@ -182,13 +263,13 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
   }
 
   // Paiement state (supports multiple payment methods per deposit)
-  const [paymentLines, setPaymentLines] = useState<PaymentLineDraft[]>([makeDefaultPaymentLine()]);
-  const [notes, setNotes] = useState('');
+  const [paymentLines, setPaymentLines] = useState<PaymentLineDraft[]>(() => initialDraft?.paymentLines ?? [makeDefaultPaymentLine()]);
+  const [notes, setNotes] = useState<string>(() => initialDraft?.notes ?? '');
 
   // Coupon state
-  const [couponCode, setCouponCode] = useState('');
+  const [couponCode, setCouponCode] = useState<string>(() => initialDraft?.couponCode ?? '');
   const [couponLoading, setCouponLoading] = useState(false);
-  const [appliedCoupon, setAppliedCoupon] = useState<BonReduction | null>(null);
+  const [appliedCoupon, setAppliedCoupon] = useState<BonReduction | null>(() => initialDraft?.appliedCoupon ?? null);
   const [couponError, setCouponError] = useState<string | null>(null);
 
   // Success
@@ -251,7 +332,13 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
         db.getDistinctFieldValues('griffe'),
       ]);
       setTypesTraitement(typesData);
-      if (typesData.length > 0) setTypeTraitementId(getDefaultTypeTraitementId(typesData));
+      if (typesData.length > 0) {
+        setTypeTraitementId((prev) =>
+          prev && typesData.some((item) => item.id === prev)
+            ? prev
+            : getDefaultTypeTraitementId(typesData),
+        );
+      }
       setCatalogArticles(articlesData);
       setAllVariants(variantsData);
       setModesReglement(modesData);
@@ -283,8 +370,13 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
     );
   })();
 
+  const prevSelectedClientIdRef = useRef<string | null>(selectedClient?.id ?? null);
   useEffect(() => {
-    setCommercialManualOverride(false);
+    const currentId = selectedClient?.id ?? null;
+    if (prevSelectedClientIdRef.current !== currentId) {
+      prevSelectedClientIdRef.current = currentId;
+      setCommercialManualOverride(false);
+    }
   }, [selectedClient?.id]);
 
   useEffect(() => {
@@ -560,8 +652,8 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
     typeTraitementId || null,
     typesTraitement,
   );
-  const [dateRetraitOverride, setDateRetraitOverride] = useState<string>('');
-  const [dateDepotOverride, setDateDepotOverride] = useState<string>('');
+  const [dateRetraitOverride, setDateRetraitOverride] = useState<string>(() => initialDraft?.dateRetraitOverride ?? '');
+  const [dateDepotOverride, setDateDepotOverride] = useState<string>(() => initialDraft?.dateDepotOverride ?? '');
   const dateRetraitPrevue = dateRetraitOverride
     ? new Date(dateRetraitOverride + 'T18:00:00')
     : autoDateRetraitPrevue;
@@ -569,6 +661,102 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
     ? new Date(dateDepotOverride + 'T12:00:00')
     : new Date();
   const effectiveYear = dateDepotEffective.getFullYear();
+
+  // Detect any active/in-progress deposit so PWA updates NEVER reload or disrupt the session
+  const hasArticleDraftContent =
+    articles.length > 1 ||
+    articles.some(
+      (a) =>
+        a.designation.trim() !== '' ||
+        a.article_id !== null ||
+        a.prix_unitaire.trim() !== '' ||
+        a.couleur.trim() !== '' ||
+        a.signe_particulier.trim() !== '' ||
+        a.griffe.trim() !== '' ||
+        a.quantite !== '1',
+    );
+  const hasPaymentDraftContent =
+    paymentLines.length > 1 ||
+    paymentLines.some((p) => p.montant.trim() !== '' || p.modeReglement !== '');
+  const hasUnsavedDepotDraft =
+    !success &&
+    (step !== 'client' ||
+      selectedClient !== null ||
+      hasArticleDraftContent ||
+      hasPaymentDraftContent ||
+      notes.trim() !== '' ||
+      couponCode.trim() !== '' ||
+      appliedCoupon !== null ||
+      dateDepotOverride !== '' ||
+      dateRetraitOverride !== '');
+
+  const isDepotInProgress =
+    hasUnsavedDepotDraft ||
+    submitting ||
+    creatingClient ||
+    creatingArticle ||
+    showNewClient ||
+    showNewArticle !== null ||
+    success !== null ||
+    searchTerm.trim() !== '';
+
+  useEffect(() => {
+    setPwaUpdateBlock('depot-in-progress', isDepotInProgress);
+  }, [isDepotInProgress]);
+
+  useEffect(() => {
+    return () => {
+      setPwaUpdateBlock('depot-in-progress', false);
+    };
+  }, []);
+
+  // Auto-persist in-progress deposit draft locally so even an unexpected refresh never loses data
+  useEffect(() => {
+    if (success) {
+      clearDepotDraft(draftStorageKey);
+      return;
+    }
+    if (!hasUnsavedDepotDraft) {
+      clearDepotDraft(draftStorageKey);
+      return;
+    }
+    try {
+      const snapshot: DepotDraftStorage = {
+        step,
+        selectedClient,
+        articles,
+        typeTraitementId,
+        paymentLines,
+        selectedCommercialId,
+        commercialManualOverride,
+        notes,
+        dateDepotOverride,
+        dateRetraitOverride,
+        couponCode,
+        appliedCoupon,
+        savedAt: Date.now(),
+      };
+      localStorage.setItem(draftStorageKey, JSON.stringify(snapshot));
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, [
+    draftStorageKey,
+    success,
+    hasUnsavedDepotDraft,
+    step,
+    selectedClient,
+    articles,
+    typeTraitementId,
+    paymentLines,
+    selectedCommercialId,
+    commercialManualOverride,
+    notes,
+    dateDepotOverride,
+    dateRetraitOverride,
+    couponCode,
+    appliedCoupon,
+  ]);
 
   const refreshNextPreview = useCallback(() => {
     const d = dateDepotOverride ? new Date(dateDepotOverride + 'T12:00:00') : new Date();
@@ -836,6 +1024,8 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
         datePaiement: dateDepotEffective.toISOString(),
       }));
 
+      clearDepotDraft(draftStorageKey);
+      setDraftRestored(false);
       setSuccess({
         numero,
         total: totalFinal,
@@ -875,6 +1065,8 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
   }
 
   function resetForm() {
+    clearDepotDraft(draftStorageKey);
+    setDraftRestored(false);
     setStep('client');
     setSelectedClient(null);
     setSearchTerm('');
@@ -1250,6 +1442,33 @@ export default function DepotForm({ onDone }: { onDone: () => void }) {
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
+      {draftRestored && (
+        <div className="rounded-xl bg-sky-50 border border-sky-200 px-4 py-2.5 flex items-center justify-between gap-3 text-xs sm:text-sm text-sky-900">
+          <span>
+            {lang === 'fr'
+              ? 'Votre dépôt en cours a été restauré automatiquement.'
+              : 'Your in-progress deposit was restored automatically.'}
+          </span>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={resetForm}
+              className="px-2.5 py-1 rounded-lg bg-white border border-sky-200 text-xs font-medium text-sky-800 hover:bg-sky-100 transition-colors"
+            >
+              {lang === 'fr' ? 'Repartir à zéro' : 'Start fresh'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setDraftRestored(false)}
+              className="text-sky-500 hover:text-sky-700"
+              aria-label={lang === 'fr' ? 'Fermer' : 'Dismiss'}
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Stepper */}
       <div className="flex items-center justify-center gap-2">
         {(['client', 'articles', 'paiement'] as const).map((s, i) => {

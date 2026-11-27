@@ -52,7 +52,7 @@ export default defineConfig(({ mode }) => {
       tailwindcss(),
       buildVersionPlugin(BUILD_ID),
       VitePWA({
-        registerType: 'autoUpdate',
+        registerType: 'prompt',
         includeAssets: [
           'favicon.ico',
           'apple-touch-icon.png',
@@ -123,8 +123,8 @@ export default defineConfig(({ mode }) => {
           globIgnores: ['**/version.json'],
           maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
           cleanupOutdatedCaches: true,
-          clientsClaim: true,
-          skipWaiting: true,
+          clientsClaim: false,
+          skipWaiting: false,
           navigateFallback: '/index.html',
           navigateFallbackDenylist: [/^\/version\.json$/, /^\/api\//],
           importScripts: ['/bg-sync-sw.js'],
