@@ -21,6 +21,11 @@ import {
 } from 'lucide-react';
 import { PrintableReport, printReport, type ReportData } from '@/components/PrintableReport';
 import type { Entreprise } from '@/types';
+import {
+  SYSCOHADA_EXPENSE_ACCOUNTS,
+  getSyscohadaAccount,
+  inferExpenseSyscohadaCode,
+} from '@/lib/syscohada';
 
 type PeriodFilter = 'today' | 'week' | 'month' | 'all' | 'custom';
 
@@ -67,6 +72,7 @@ export default function Depenses() {
   // Form state
   const [fLibelle, setFLibelle] = useState('');
   const [fCategorie, setFCategorie] = useState('');
+  const [fCompteSyscohada, setFCompteSyscohada] = useState('');
   const [fMontant, setFMontant] = useState('');
   const [fDate, setFDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [fMode, setFMode] = useState('');
@@ -76,9 +82,17 @@ export default function Depenses() {
 
   // Category manager state
   const [newCatName, setNewCatName] = useState('');
+  const [newCatCompte, setNewCatCompte] = useState('');
   const [editingCatId, setEditingCatId] = useState<string | null>(null);
   const [editingCatName, setEditingCatName] = useState('');
+  const [editingCatCompte, setEditingCatCompte] = useState('');
   const [catError, setCatError] = useState<string | null>(null);
+
+  const categoryAccountMap = useMemo(() => {
+    const m = new Map<string, string | null | undefined>();
+    for (const c of categories) m.set(c.libelle.toLowerCase().trim(), c.compte_syscohada);
+    return m;
+  }, [categories]);
 
   const loadDepenses = useCallback(async () => {
     const [depensesData, catData, modesData, entData] = await Promise.all([
@@ -164,6 +178,7 @@ export default function Depenses() {
     setEditing(null);
     setFLibelle('');
     setFCategorie('');
+    setFCompteSyscohada('');
     setFMontant('');
     setFDate(new Date().toISOString().slice(0, 10));
     setFMode('');
@@ -176,6 +191,7 @@ export default function Depenses() {
     setEditing(d);
     setFLibelle(d.libelle);
     setFCategorie(d.categorie ?? '');
+    setFCompteSyscohada(d.compte_syscohada ?? '');
     setFMontant(String(d.montant));
     setFDate(d.date_depense.slice(0, 10));
     setFMode(d.mode_reglement ?? '');
@@ -193,10 +209,15 @@ export default function Depenses() {
 
     setSaving(true);
     try {
+      const resolvedAccount =
+        fCompteSyscohada.trim() ||
+        inferExpenseSyscohadaCode(fCategorie || null, libelle, null, categoryAccountMap);
+
       const payload = {
         date_depense: new Date(fDate + 'T12:00:00').toISOString(),
         libelle,
         categorie: fCategorie || null,
+        compte_syscohada: resolvedAccount || null,
         montant,
         mode_reglement: fMode.trim() || null,
         notes: fNotes.trim() || null,
@@ -243,9 +264,11 @@ export default function Depenses() {
       return;
     }
     try {
-      const result = await db.insertDepenseCategory(name);
+      const accountCode = newCatCompte.trim() || inferExpenseSyscohadaCode(name, null);
+      const result = await db.insertDepenseCategory(name, accountCode);
       if (!result.data) { setCatError(result.error ?? (lang === 'fr' ? 'Erreur lors de l\'ajout.' : 'Error during addition.')); return; }
       setNewCatName('');
+      setNewCatCompte('');
       await refreshCategories();
     } catch (err) {
       setCatError(err instanceof Error ? err.message : (lang === 'fr' ? 'Erreur lors de l\'ajout' : 'Error during addition'));
@@ -261,10 +284,12 @@ export default function Depenses() {
       return;
     }
     try {
-      const err = await db.updateDepenseCategory(id, name);
+      const accountCode = editingCatCompte.trim() || inferExpenseSyscohadaCode(name, null);
+      const err = await db.updateDepenseCategory(id, name, accountCode);
       if (err) { setCatError(err); return; }
       setEditingCatId(null);
       setEditingCatName('');
+      setEditingCatCompte('');
       await refreshCategories();
     } catch (err) {
       setCatError(err instanceof Error ? err.message : (lang === 'fr' ? 'Erreur lors de la modification' : 'Error during modification'));
@@ -434,7 +459,7 @@ export default function Depenses() {
           {canManageDepenses && showCatManager && (
             <div className="mb-4 p-4 rounded-lg bg-slate-50 border border-slate-100 space-y-3">
               {/* Add new category */}
-              <div className="flex gap-2">
+              <div className="flex flex-col sm:flex-row gap-2">
                 <input
                   type="text"
                   value={newCatName}
@@ -443,9 +468,25 @@ export default function Depenses() {
                   placeholder={lang === 'fr' ? 'Nouvelle catégorie…' : 'New category…'}
                   className="flex-1 px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500 focus:border-transparent bg-white"
                 />
+                <select
+                  value={newCatCompte}
+                  onChange={(e) => setNewCatCompte(e.target.value)}
+                  className="sm:w-56 px-2.5 py-2 rounded-lg border border-slate-200 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-rose-500"
+                >
+                  <option value="">
+                    {lang === 'fr'
+                      ? `Auto (${inferExpenseSyscohadaCode(newCatName, null)})`
+                      : `Auto (${inferExpenseSyscohadaCode(newCatName, null)})`}
+                  </option>
+                  {SYSCOHADA_EXPENSE_ACCOUNTS.map((acc) => (
+                    <option key={acc.code} value={acc.code}>
+                      {acc.code} — {lang === 'fr' ? acc.intitule : acc.intituleEn}
+                    </option>
+                  ))}
+                </select>
                 <button
                   onClick={handleAddCategory}
-                  className="px-3 py-2 rounded-lg bg-rose-500 text-white text-sm font-medium hover:bg-rose-600 transition-colors flex items-center gap-1.5"
+                  className="px-3 py-2 rounded-lg bg-rose-500 text-white text-sm font-medium hover:bg-rose-600 transition-colors flex items-center justify-center gap-1.5 shrink-0"
                 >
                   <Plus className="w-4 h-4" /> {lang === 'fr' ? 'Ajouter' : 'Add'}
                 </button>
@@ -454,57 +495,81 @@ export default function Depenses() {
               {/* Existing categories list */}
               {categories.length > 0 && (
                 <div className="space-y-1.5">
-                  {categories.map((c) => (
-                    <div
-                      key={c.id}
-                      className="flex items-center justify-between px-3 py-2 rounded-lg bg-white border border-slate-100"
-                    >
-                      {editingCatId === c.id ? (
-                        <>
-                          <input
-                            type="text"
-                            value={editingCatName}
-                            onChange={(e) => setEditingCatName(e.target.value)}
-                            onKeyDown={(e) => { if (e.key === 'Enter') handleUpdateCategory(c.id); }}
-                            className="flex-1 px-2 py-1 rounded border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500 focus:border-transparent"
-                            autoFocus
-                          />
-                          <div className="flex items-center gap-1 ml-2">
-                            <button
-                              onClick={() => handleUpdateCategory(c.id)}
-                              className="p-1.5 rounded-lg text-emerald-600 hover:bg-emerald-50 transition-colors"
-                            >
-                              <Check className="w-4 h-4" />
-                            </button>
-                            <button
-                              onClick={() => { setEditingCatId(null); setEditingCatName(''); }}
-                              className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 transition-colors"
-                            >
-                              <X className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </>
-                      ) : (
-                        <>
-                          <span className="text-sm font-medium text-slate-700">{c.libelle}</span>
-                          <div className="flex items-center gap-1">
-                            <button
-                              onClick={() => { setEditingCatId(c.id); setEditingCatName(c.libelle); }}
-                              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
-                            >
-                              <Pencil className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              onClick={() => handleDeleteCategory(c.id, c.libelle)}
-                              className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  ))}
+                  {categories.map((c) => {
+                    const effectiveCode = c.compte_syscohada || inferExpenseSyscohadaCode(c.libelle, null);
+                    return (
+                      <div
+                        key={c.id}
+                        className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-white border border-slate-100"
+                      >
+                        {editingCatId === c.id ? (
+                          <>
+                            <div className="flex-1 flex flex-col sm:flex-row gap-2">
+                              <input
+                                type="text"
+                                value={editingCatName}
+                                onChange={(e) => setEditingCatName(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') handleUpdateCategory(c.id); }}
+                                className="flex-1 px-2 py-1 rounded border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500 focus:border-transparent"
+                                autoFocus
+                              />
+                              <select
+                                value={editingCatCompte}
+                                onChange={(e) => setEditingCatCompte(e.target.value)}
+                                className="sm:w-52 px-2 py-1 rounded border border-slate-200 text-xs bg-white"
+                              >
+                                <option value="">Auto ({inferExpenseSyscohadaCode(editingCatName, null)})</option>
+                                {SYSCOHADA_EXPENSE_ACCOUNTS.map((acc) => (
+                                  <option key={acc.code} value={acc.code}>
+                                    {acc.code} — {lang === 'fr' ? acc.intitule : acc.intituleEn}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <div className="flex items-center gap-1 ml-2">
+                              <button
+                                onClick={() => handleUpdateCategory(c.id)}
+                                className="p-1.5 rounded-lg text-emerald-600 hover:bg-emerald-50 transition-colors"
+                              >
+                                <Check className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={() => { setEditingCatId(null); setEditingCatName(''); setEditingCatCompte(''); }}
+                                className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 transition-colors"
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="min-w-0 flex items-center gap-2">
+                              <span className="font-mono text-xs text-slate-500">{effectiveCode}</span>
+                              <span className="text-sm font-medium text-slate-700 truncate">{c.libelle}</span>
+                            </div>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                onClick={() => {
+                                  setEditingCatId(c.id);
+                                  setEditingCatName(c.libelle);
+                                  setEditingCatCompte(c.compte_syscohada ?? '');
+                                }}
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                              >
+                                <Pencil className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteCategory(c.id, c.libelle)}
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
 
@@ -642,15 +707,43 @@ export default function Depenses() {
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1.5">{t('retrait.notes')}</label>
-              <input
-                type="text"
-                value={fNotes}
-                onChange={(e) => setFNotes(e.target.value)}
-                placeholder={lang === 'fr' ? 'Notes optionnelles' : 'Optional notes'}
-                className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500 focus:border-transparent"
-              />
+              <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                {lang === 'fr' ? 'Compte SYSCOHADA (Classe 6)' : 'SYSCOHADA Account (Class 6)'}
+              </label>
+              <select
+                value={fCompteSyscohada}
+                onChange={(e) => setFCompteSyscohada(e.target.value)}
+                className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500 focus:border-transparent bg-white"
+              >
+                {(() => {
+                  const suggestedCode = inferExpenseSyscohadaCode(fCategorie || null, fLibelle || null, null, categoryAccountMap);
+                  const suggestedAcc = getSyscohadaAccount(suggestedCode);
+                  return (
+                    <option value="">
+                      {lang === 'fr'
+                        ? `Auto : ${suggestedAcc.code} — ${suggestedAcc.intitule}`
+                        : `Auto: ${suggestedAcc.code} — ${suggestedAcc.intituleEn}`}
+                    </option>
+                  );
+                })()}
+                {SYSCOHADA_EXPENSE_ACCOUNTS.map((acc) => (
+                  <option key={acc.code} value={acc.code}>
+                    {acc.code} — {lang === 'fr' ? acc.intitule : acc.intituleEn}
+                  </option>
+                ))}
+              </select>
             </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">{t('retrait.notes')}</label>
+            <input
+              type="text"
+              value={fNotes}
+              onChange={(e) => setFNotes(e.target.value)}
+              placeholder={lang === 'fr' ? 'Notes optionnelles' : 'Optional notes'}
+              className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500 focus:border-transparent"
+            />
           </div>
 
           {error && (
@@ -718,6 +811,10 @@ export default function Depenses() {
                       <div className="min-w-0">
                         <p className="text-sm font-medium text-slate-900 truncate">{d.libelle}</p>
                         <p className="text-xs text-slate-400 mt-0.5">
+                          <span className="font-mono text-slate-600">
+                            {inferExpenseSyscohadaCode(d.categorie, d.libelle, d.compte_syscohada, categoryAccountMap)}
+                          </span>
+                          {' · '}
                           {d.categorie ?? (lang === 'fr' ? 'Non classé' : 'Uncategorized')}
                           {d.mode_reglement ? ` · ${d.mode_reglement}` : ''}
                           {d.notes ? ` · ${d.notes}` : ''}

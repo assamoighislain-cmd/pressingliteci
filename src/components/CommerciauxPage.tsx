@@ -872,6 +872,7 @@ export default function CommerciauxPage() {
           date_depense: payoutDate || new Date().toISOString().slice(0, 10),
           libelle: `Commission apporteur d'affaire — ${comNom}`,
           categorie: 'Commissions',
+          compte_syscohada: '6324',
           montant,
           mode_reglement: payoutMode || null,
           notes: [payoutRef ? `Réf: ${payoutRef}` : null, payoutNotes.trim() || null].filter(Boolean).join(' · ') || null,

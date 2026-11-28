@@ -91,6 +91,9 @@ import type {
   CommercialPortalBranding,
   CommercialPortalData,
   CommissionVersement,
+  EcritureComptableRecord,
+  SyscohadaJournalCode,
+  SyscohadaLigneInput,
 } from '@/types';
 import { computeDateFinFromDays } from '@/types';
 
@@ -2270,7 +2273,7 @@ export const db = {
     }, []);
   },
 
-  async insertDepense(row: { date_depense: string; libelle: string; categorie: string | null; montant: number; mode_reglement: string | null; notes: string | null }): Promise<{ data: Depense | null; error: string | null }> {
+  async insertDepense(row: { date_depense: string; libelle: string; categorie: string | null; compte_syscohada?: string | null; montant: number; mode_reglement: string | null; notes: string | null }): Promise<{ data: Depense | null; error: string | null }> {
     const result = await insert<Depense>({ table: 'depenses', rows: row, select: '*' });
     if (result.data) {
       const d = result.data as unknown as Record<string, unknown>;
@@ -2281,7 +2284,7 @@ export const db = {
     return { data: null, error: result.error };
   },
 
-  async updateDepense(id: string, values: { date_depense: string; libelle: string; categorie: string | null; montant: number; mode_reglement: string | null; notes: string | null }): Promise<string | null> {
+  async updateDepense(id: string, values: { date_depense: string; libelle: string; categorie: string | null; compte_syscohada?: string | null; montant: number; mode_reglement: string | null; notes: string | null }): Promise<string | null> {
     const result = await update({ table: 'depenses', values, filters: [{ column: 'id', operator: 'eq', value: id }] });
     if (!result.error) optimisticPatchDepense(id, values, currentBoutiqueId);
     return result.error;
@@ -2309,13 +2312,17 @@ export const db = {
     }, []);
   },
 
-  async insertDepenseCategory(libelle: string): Promise<{ data: DepenseCategory | null; error: string | null }> {
-    const result = await insert<DepenseCategory>({ table: 'depense_categories', rows: { libelle }, select: '*' });
+  async insertDepenseCategory(libelle: string, compte_syscohada?: string | null): Promise<{ data: DepenseCategory | null; error: string | null }> {
+    const row: Record<string, unknown> = { libelle };
+    if (compte_syscohada !== undefined) row.compte_syscohada = compte_syscohada || null;
+    const result = await insert<DepenseCategory>({ table: 'depense_categories', rows: row, select: '*' });
     return { data: result.data, error: result.error };
   },
 
-  async updateDepenseCategory(id: string, libelle: string): Promise<string | null> {
-    const result = await update({ table: 'depense_categories', values: { libelle }, filters: [{ column: 'id', operator: 'eq', value: id }] });
+  async updateDepenseCategory(id: string, libelle: string, compte_syscohada?: string | null): Promise<string | null> {
+    const values: Record<string, unknown> = { libelle };
+    if (compte_syscohada !== undefined) values.compte_syscohada = compte_syscohada || null;
+    const result = await update({ table: 'depense_categories', values, filters: [{ column: 'id', operator: 'eq', value: id }] });
     return result.error;
   },
 
@@ -3529,6 +3536,187 @@ export const db = {
     }, []);
   },
 
+  // ─── SYSCOHADA Manual Journal Entries (OD) & Fiscal Settings ───
+  async getEcrituresComptables(): Promise<{ data: EcritureComptableRecord[]; missingTable: boolean }> {
+    const bid = currentBoutiqueId;
+    const cacheKey = bKey('ecritures_comptables', bid);
+    const localKey = `syscohada_od_local_${bid ?? 'default'}`;
+
+    const readLocalFallback = (): EcritureComptableRecord[] => {
+      try {
+        const raw = localStorage.getItem(localKey);
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? (parsed as EcritureComptableRecord[]) : [];
+      } catch {
+        return [];
+      }
+    };
+
+    if (isOffline()) {
+      const cached = getCached<EcritureComptableRecord[]>(cacheKey);
+      return { data: cached ?? readLocalFallback(), missingTable: false };
+    }
+
+    try {
+      const tId = await getTenantId();
+      let q = supabase
+        .from('ecritures_comptables')
+        .select('*')
+        .order('date_ecriture', { ascending: false })
+        .order('created_at', { ascending: false });
+      if (tId) q = q.eq('tenant_id', tId);
+      if (bid) q = q.eq('boutique_id', bid);
+      const { data, error } = await q;
+      if (error) {
+        if (isMissingTableError(error)) {
+          return { data: readLocalFallback(), missingTable: true };
+        }
+        if (isLikelyNetworkError(error)) {
+          return { data: getCached<EcritureComptableRecord[]>(cacheKey) ?? readLocalFallback(), missingTable: false };
+        }
+        return { data: getCached<EcritureComptableRecord[]>(cacheKey) ?? [], missingTable: false };
+      }
+      const mapped = ((data as Record<string, unknown>[]) ?? []).map((r) => ({
+        ...r,
+        lignes: Array.isArray(r.lignes) ? (r.lignes as SyscohadaLigneInput[]) : [],
+        total_debit: Number(r.total_debit ?? 0),
+        total_credit: Number(r.total_credit ?? 0),
+      })) as EcritureComptableRecord[];
+      setCached(cacheKey, mapped);
+      return { data: mapped, missingTable: false };
+    } catch {
+      return { data: getCached<EcritureComptableRecord[]>(cacheKey) ?? readLocalFallback(), missingTable: false };
+    }
+  },
+
+  async insertEcritureComptable(row: {
+    date_ecriture: string;
+    journal: SyscohadaJournalCode;
+    numero_piece: string;
+    libelle: string;
+    lignes: SyscohadaLigneInput[];
+    notes?: string | null;
+  }): Promise<{ data: EcritureComptableRecord | null; storedLocally?: boolean; error: string | null }> {
+    const totalDebit = Math.round(row.lignes.reduce((s, l) => s + Number(l.debit || 0), 0) * 100) / 100;
+    const totalCredit = Math.round(row.lignes.reduce((s, l) => s + Number(l.credit || 0), 0) * 100) / 100;
+    if (totalDebit <= 0 || Math.abs(totalDebit - totalCredit) > 0.01) {
+      return { data: null, error: 'Écriture déséquilibrée : le total Débit doit être strictement égal au total Crédit.' };
+    }
+
+    const bid = currentBoutiqueId;
+    const localKey = `syscohada_od_local_${bid ?? 'default'}`;
+
+    const saveLocal = (): EcritureComptableRecord => {
+      const rec: EcritureComptableRecord = {
+        id: generateUuid(),
+        boutique_id: bid,
+        date_ecriture: row.date_ecriture,
+        journal: row.journal,
+        numero_piece: row.numero_piece.trim(),
+        libelle: row.libelle.trim(),
+        lignes: row.lignes,
+        total_debit: totalDebit,
+        total_credit: totalCredit,
+        notes: row.notes?.trim() || null,
+        created_at: new Date().toISOString(),
+      };
+      try {
+        const raw = localStorage.getItem(localKey);
+        const list: EcritureComptableRecord[] = raw ? JSON.parse(raw) : [];
+        localStorage.setItem(localKey, JSON.stringify([rec, ...list]));
+      } catch {
+        // Ignore storage quota errors
+      }
+      return rec;
+    };
+
+    try {
+      const tId = await getTenantId();
+      const { data: userRes } = await supabase.auth.getUser();
+      const payload: Record<string, unknown> = {
+        date_ecriture: row.date_ecriture,
+        journal: row.journal,
+        numero_piece: row.numero_piece.trim(),
+        libelle: row.libelle.trim(),
+        lignes: row.lignes,
+        total_debit: totalDebit,
+        total_credit: totalCredit,
+        notes: row.notes?.trim() || null,
+        created_by: userRes?.user?.id ?? null,
+      };
+      if (tId) payload.tenant_id = tId;
+      if (bid) payload.boutique_id = bid;
+
+      const { data, error } = await supabase
+        .from('ecritures_comptables')
+        .insert(payload)
+        .select('*')
+        .single();
+
+      if (error) {
+        if (isMissingTableError(error)) {
+          const rec = saveLocal();
+          return { data: rec, storedLocally: true, error: null };
+        }
+        return { data: null, error: error.message };
+      }
+
+      const mapped: EcritureComptableRecord = {
+        ...(data as Record<string, unknown>),
+        lignes: Array.isArray((data as Record<string, unknown>).lignes)
+          ? ((data as Record<string, unknown>).lignes as SyscohadaLigneInput[])
+          : row.lignes,
+        total_debit: Number((data as Record<string, unknown>).total_debit ?? totalDebit),
+        total_credit: Number((data as Record<string, unknown>).total_credit ?? totalCredit),
+      } as EcritureComptableRecord;
+      notifyRealtimeMutation('ecritures_comptables');
+      return { data: mapped, storedLocally: false, error: null };
+    } catch (err) {
+      if (isOffline() || isLikelyNetworkError(err)) {
+        const rec = saveLocal();
+        return { data: rec, storedLocally: true, error: null };
+      }
+      return { data: null, error: err instanceof Error ? err.message : 'Erreur lors de la création' };
+    }
+  },
+
+  async deleteEcritureComptable(id: string): Promise<string | null> {
+    const bid = currentBoutiqueId;
+    const localKey = `syscohada_od_local_${bid ?? 'default'}`;
+    try {
+      const raw = localStorage.getItem(localKey);
+      if (raw) {
+        const list: EcritureComptableRecord[] = JSON.parse(raw);
+        const filtered = list.filter((e) => e.id !== id);
+        if (filtered.length !== list.length) {
+          localStorage.setItem(localKey, JSON.stringify(filtered));
+          return null;
+        }
+      }
+    } catch {
+      // Ignore
+    }
+
+    const { error } = await supabase.from('ecritures_comptables').delete().eq('id', id);
+    if (error && !isMissingTableError(error)) return error.message;
+    notifyRealtimeMutation('ecritures_comptables');
+    return null;
+  },
+
+  async updateEntrepriseFiscalSettings(
+    entrepriseId: string,
+    regime_fiscal: 'SMT' | 'NORMAL',
+    taux_tva: number,
+  ): Promise<string | null> {
+    const result = await update({
+      table: 'entreprise',
+      values: { regime_fiscal, taux_tva },
+      filters: [{ column: 'id', operator: 'eq', value: entrepriseId }],
+    });
+    return result.error;
+  },
+
   // ─── Offline Cache Warmup / Post-Sync Refresh ─────────────
   async prefetchOfflineData(): Promise<void> {
     if (isOffline()) return;
@@ -3552,6 +3740,7 @@ export const db = {
       db.getCommerciaux(),
       db.getCommercialClients(),
       db.getCommissionVersements(),
+      db.getEcrituresComptables(),
     ]);
     markCacheRefreshedNow();
   },

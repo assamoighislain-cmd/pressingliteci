@@ -80,6 +80,8 @@ export interface Entreprise {
   label_printer_name?: string | null;
   depot_start_number?: number | null;
   depot_start_year?: number | null;
+  regime_fiscal?: 'SMT' | 'NORMAL' | null;
+  taux_tva?: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -152,6 +154,7 @@ export interface Depense {
   date_depense: string;
   libelle: string;
   categorie: string | null;
+  compte_syscohada?: string | null;
   montant: number;
   mode_reglement: string | null;
   notes: string | null;
@@ -162,7 +165,35 @@ export interface Depense {
 export interface DepenseCategory {
   id: string;
   libelle: string;
+  compte_syscohada?: string | null;
   user_id?: string | null;
+  created_at: string;
+}
+
+export type SyscohadaJournalCode = 'VE' | 'CA' | 'BQ' | 'AC' | 'OD';
+
+export interface SyscohadaLigneInput {
+  compte: string;
+  intitule: string;
+  libelle?: string;
+  debit: number;
+  credit: number;
+  tiers?: string | null;
+}
+
+export interface EcritureComptableRecord {
+  id: string;
+  tenant_id?: string | null;
+  boutique_id?: string | null;
+  date_ecriture: string;
+  journal: SyscohadaJournalCode;
+  numero_piece: string;
+  libelle: string;
+  lignes: SyscohadaLigneInput[];
+  total_debit: number;
+  total_credit: number;
+  notes: string | null;
+  created_by?: string | null;
   created_at: string;
 }
 
